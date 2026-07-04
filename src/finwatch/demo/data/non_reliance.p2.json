@@ -1,0 +1,26 @@
+{
+  "accession_number": "0001866550-24-000006",
+  "records_affected": [
+    {
+      "ticker": "TWKS",
+      "owned": false,
+      "impact_class": "direct",
+      "channels": {
+        "C2": {"direction": "unclear", "magnitude": "qualitative", "horizon": "quarters", "confidence": "medium"},
+        "C6": {"direction": "negative", "magnitude": "moderate", "horizon": "quarters", "confidence": "medium"},
+        "C8_driver_type": "idiosyncratic"
+      },
+      "guidance_direction": "none_stated",
+      "liquidity_read": "unclear",
+      "net_direction": "negative",
+      "thesis_check": {"verdict": "not_assessable", "judgment_claim_id": null},
+      "net_read": {
+        "text": "Management has stated that previously issued financial statements should no longer be relied upon, so the historical figures underpinning any view of this company are in question until it restates. As a watch-only name this is a monitoring flag, not a position decision.",
+        "judgment_claim_id": null
+      },
+      "confidence": "medium"
+    }
+  ],
+  "claims": [],
+  "portfolio_level_notes": null
+}

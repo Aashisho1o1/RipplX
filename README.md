@@ -8,9 +8,25 @@ every number deterministically, and shows *why it matters* — with citations.
 > "I own 12 stocks. I do not read every 8-K, 10-Q, and 10-K. I want to know when something
 > actually important changed."
 
+## 60-second demo (no API key, no setup)
+
+```bash
+uv sync
+uv run finwatch demo            # runs the full pipeline on bundled filings, prints a digest
+uv run finwatch demo --signals  # also show the (unvalidated) shadow-signal block
+```
+
+`finwatch demo` runs the **real** pipeline (P0 → P1 → metrics → P2 → verify → P3) over five
+bundled SEC filings with a recorded LLM — no network, no keys — and prints a full markdown
+digest in under a second. A committed copy is at [`docs/sample_digest.md`](docs/sample_digest.md).
+It covers every section: a going-concern **critical red flag** with a claim-backed EDGAR quote,
+a watch-only non-reliance filing, a **verified-numbers** table (each value computed
+deterministically from XBRL facts, formula-versioned, and traceable — never from the LLM), a
+broken thesis, and — behind `--signals` — the shadow signal engine.
+
 ## Status
 
-🚧 **Under construction (v0.2).** Building backend-first, phase by phase. See
+**v0.2 backend complete.** Built backend-first, phase by phase. See
 [`CLAUDE.md`](CLAUDE.md) for the full build specification and
 [`SYSTEM_DESIGN.md`](SYSTEM_DESIGN.md) for the module map.
 
@@ -32,8 +48,14 @@ every number deterministically, and shows *why it matters* — with citations.
       P0→P1→metrics→P2→verify orchestrator, and the golden-set eval harness + `finwatch eval`
       (recorded run meets the DoD: critical recall 100%, verifier pass). Live bake-off is
       operator-run with keys.
-- [ ] Phase 6 — Signal engine + shadow log
-- [ ] Phase 7 — Digest + demo + release polish
+- [x] **Phase 6** — Signal engine + shadow log: the deterministic decision matrix (Tier 1)
+      wired into the pipeline via adapters; P3 writes rationale only while the engine decides
+      the posture/signal (so V3 re-derivation is always an exact match); one-notch escalation
+      toward caution; watch records → `NOT_APPLICABLE_WATCHLIST`; every owned evaluation logged
+      to the shadow table; `finwatch shadow report`.
+- [x] **Phase 7** — Digest + demo + release polish: deterministic markdown renderer
+      (reproducible from the DB, no LLM at render time), `finwatch demo` (zero-key, bundled
+      fixtures), `finwatch digest [--since] [--until] [--signals] [--out]`, and this README.
 
 ## Quickstart (development)
 
@@ -80,6 +102,34 @@ finwatch is an **open-source research tool**. It does **not** provide investment
   experimental, unvalidated output, logged to build an auditable track record. They are
   visible only behind an explicit `--signals` flag and are OFF by default.
 - **You are responsible for your own decisions.**
+
+### Shadow-signal promotion policy
+
+Shadow signals are trade-action *vocabulary* (e.g. `STRONG_REVIEW_SELL`) evaluated by the
+deterministic matrix and logged to `signal_shadow_log` on every owned evaluation — with the
+rules that fired, the rules skipped (and why), the computed inputs, and the EOD price at
+evaluation. They are **never** shown in the default digest. A hypothetical signal may become
+default-visible only after **all** of the following hold:
+
+1. **≥ 100 logged shadow evaluations**, and
+2. a **human audit of ≥ 20 sampled cases**, and
+3. the acceptance gates below pass.
+
+Until then, the product ships **review postures**, and `finwatch shadow report` /
+`finwatch digest --signals` surface the shadow record clearly labelled *unvalidated,
+educational*. Track record ≠ endorsement.
+
+## Acceptance gates (v0.2 release checklist)
+
+1. Zero V1 numeric orphans across real filings — every rendered number traces to a computation,
+   an XBRL fact, or a verbatim evidence snippet.
+2. 100% recall on critical golden-set items (a missed going-concern is disqualifying); ≥ 90% on high.
+3. 100% V3 agreement between each P3 output and a fresh matrix re-derivation.
+4. Boring-filing silence — routine filings collapse to a single line, never an alert.
+5. `finwatch demo` works on a fresh clone with no keys, in under 60 seconds.
+6. A 10-ticker weekly digest completes in minutes and well under $0.10 at bake-off pricing.
+7. The shadow log is populated for every evaluated filing; `--signals` output carries the
+   unvalidated-shadow label.
 
 ## License
 

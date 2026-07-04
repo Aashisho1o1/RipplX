@@ -19,9 +19,11 @@ coverage.xml
 # Environment / secrets (never commit real credentials)
 .env
 
-# finwatch runtime data (DB + on-disk EDGAR cache are regenerable)
-data/
-cache/
+# finwatch runtime data (DB + on-disk EDGAR cache are regenerable).
+# Root-anchored so they never swallow PACKAGED data dirs like
+# src/finwatch/demo/data/ (hatchling excludes git-ignored files from the wheel).
+/data/
+/cache/
 *.db
 *.db-journal
 *.db-wal

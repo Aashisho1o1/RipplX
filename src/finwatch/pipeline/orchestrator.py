@@ -174,7 +174,10 @@ class Orchestrator:
         )
 
         # --- metrics -------------------------------------------------------
+        # Persist to `computations` so the digest renders "Verified numbers" straight
+        # from the DB (deterministic, no LLM at render time — CLAUDE.md §15).
         metrics = self.metrics_service.compute(filing.cik, as_of=as_of)
+        self.metrics_service.persist(ticker, metrics, as_of)
 
         # --- P2: portfolio impact (material filings only) ------------------
         p2_out = None

@@ -1,0 +1,19 @@
+{
+  "ticker": "DPLS",
+  "accession_number": "0001683168-24-004848",
+  "review_posture": "critical_review",
+  "trade_action": null,
+  "hypothetical_signal": "STRONG_REVIEW_SELL",
+  "rules_fired": ["M1"],
+  "rules_skipped": [],
+  "computed_inputs": [],
+  "rationale": "A document-level critical red flag fired (rule M1): the auditor expressed substantial doubt about the company's ability to continue as a going concern, and management disclosed a material weakness in internal control over financial reporting. Under the deterministic matrix these are automatic critical-review conditions and require no financial metrics to trigger, because they speak to whether the reported numbers can be trusted at all.",
+  "counter_evidence": "A going-concern paragraph is a disclosure about risk, not a bankruptcy filing; companies do sometimes raise capital or restructure and recover. If this is held as a small position already sized for the possibility of a total loss, some of the risk may be reflected in where it trades.",
+  "what_would_change_this": [
+    "A later filing in which the auditor removes the going-concern qualification",
+    "Auditor-confirmed remediation of the disclosed material weakness",
+    "A financing or restructuring that removes near-term solvency risk"
+  ],
+  "confidence": "high",
+  "disclaimer": "Educational analysis of public information for the portfolio owner's own decision-making. Not individualized investment advice. Data may be incomplete or delayed."
+}

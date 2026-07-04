@@ -177,11 +177,40 @@ def ingest(
 def digest(
     since: str | None = typer.Option(
         None, "--since", help="Only include filings since this date (YYYY-MM-DD)."),
+    until: str | None = typer.Option(
+        None, "--until", help="Only include filings up to this date (YYYY-MM-DD)."),
     signals: bool = typer.Option(
         False, "--signals", help="Also render the (unvalidated) shadow-signal block."),
+    out: str | None = typer.Option(
+        None, "--out", help="Also write the markdown to this path."),
 ) -> None:
-    """Render the markdown digest (``--signals`` gated, OFF by default)."""
-    _stub("Phase 7")
+    """Render the markdown digest from the DB (``--signals`` gated, OFF by default)."""
+    import json as _json
+    from datetime import UTC, datetime
+
+    from finwatch.db import Digest, Repo, init_db
+    from finwatch.digest import render_digest
+
+    cfg = _config_or_exit()
+    conn = init_db(cfg.db_path)
+    try:
+        repo = Repo(conn)
+        result = render_digest(repo, since=since, until=until, include_signals=signals)
+        run_at = datetime.now(UTC).isoformat()
+        if out:
+            from pathlib import Path
+            # UTF-8 explicitly: the digest always contains non-ASCII (→, ✓, ⚠) and the
+            # platform default encoding (cp1252 on Windows, ASCII under LC_ALL=C) would crash.
+            Path(out).write_text(result.markdown, encoding="utf-8")
+            repo.insert_digest(Digest(run_at=run_at, since=since, until=until,
+                                      markdown_path=out,
+                                      filings_json=_json.dumps(result.accessions)))
+            console.print(f"[green]✓[/] Digest written to {out} "
+                          f"({len(result.accessions)} filings).")
+        else:
+            console.print(result.markdown)
+    finally:
+        conn.close()
 
 
 @app.command()
@@ -221,9 +250,24 @@ def verify(
 
 
 @app.command()
-def demo() -> None:
-    """Run on bundled cached filings with zero API keys."""
-    _stub("Phase 7")
+def demo(
+    signals: bool = typer.Option(
+        False, "--signals", help="Also render the (unvalidated) shadow-signal block."),
+) -> None:
+    """Run the full pipeline on bundled filings with ZERO API keys, then print a digest."""
+    from finwatch.db import Repo
+    from finwatch.demo import DEMO_SINCE, build_demo_db
+    from finwatch.digest import render_digest
+
+    conn = build_demo_db()
+    try:
+        result = render_digest(Repo(conn), since=DEMO_SINCE, include_signals=signals)
+    finally:
+        conn.close()
+    console.print(result.markdown)
+    if not signals:
+        console.print("\n[dim]Re-run with [bold]finwatch demo --signals[/] to see the "
+                      "unvalidated shadow-signal block.[/]")
 
 
 @shadow_app.command("report")

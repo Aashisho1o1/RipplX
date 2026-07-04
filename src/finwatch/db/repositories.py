@@ -150,6 +150,15 @@ class SignalShadowLog(BaseModel):
     outcome_reviewed_at: str | None = None
 
 
+class Digest(BaseModel):
+    id: int | None = None
+    run_at: str
+    since: str | None = None
+    until: str | None = None
+    markdown_path: str
+    filings_json: str          # JSON array of accession numbers covered
+
+
 # ------------------------------------------------------------------- repo --
 class Repo:
     """A thin typed wrapper over an open SQLite connection."""
@@ -497,6 +506,19 @@ class Repo:
             ).fetchall()
         return [Computation(**dict(r)) for r in rows]
 
+    def latest_computations(self, ticker: str) -> list[Computation]:
+        """The most recent computation per metric (`tool`) for a ticker — the pipeline
+        re-persists metrics on every run, so the digest wants the latest of each."""
+        rows = self.conn.execute(
+            """SELECT c.* FROM computations c
+                 JOIN (SELECT tool, MAX(id) AS mid FROM computations
+                        WHERE ticker = ? GROUP BY tool) latest
+                   ON c.id = latest.mid
+                ORDER BY c.tool""",
+            (ticker,),
+        ).fetchall()
+        return [Computation(**dict(r)) for r in rows]
+
     def count_computations(self, ticker: str | None = None) -> int:
         if ticker is None:
             row = self.conn.execute("SELECT COUNT(*) AS n FROM computations").fetchone()
@@ -630,3 +652,17 @@ class Repo:
     def count_shadow_log(self) -> int:
         return int(self.conn.execute(
             "SELECT COUNT(*) AS n FROM signal_shadow_log").fetchone()["n"])
+
+    # ---- digests ---------------------------------------------------------
+    def insert_digest(self, d: Digest) -> int:
+        cur = self.conn.execute(
+            """INSERT INTO digests (run_at, since, until, markdown_path, filings_json)
+               VALUES (?, ?, ?, ?, ?)""",
+            (d.run_at, d.since, d.until, d.markdown_path, d.filings_json),
+        )
+        self.conn.commit()
+        return int(cur.lastrowid)
+
+    def list_digests(self) -> list[Digest]:
+        rows = self.conn.execute("SELECT * FROM digests ORDER BY id DESC").fetchall()
+        return [Digest(**dict(r)) for r in rows]

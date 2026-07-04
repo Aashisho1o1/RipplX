@@ -1,0 +1,28 @@
+{
+  "accession_number": "0000789019-24-000070",
+  "ticker": "MSFT",
+  "form_type": "10-Q",
+  "classification": {"items_8k": [], "overall_severity": "routine"},
+  "claims": [
+    {
+      "claim_id": "c_0001",
+      "claim_type": "evidence",
+      "text": "Revenue grew year over year.",
+      "confidence": "high",
+      "provenance": {
+        "accession_number": "0000789019-24-000070",
+        "form_type": "10-Q",
+        "section_key": "mdna",
+        "char_start": 0,
+        "char_end": 250,
+        "text_sha256_prefix": "demo",
+        "snippet": "Net sales increased 5% year over year"
+      }
+    }
+  ],
+  "material_items": [],
+  "guidance_direction": {"value": "maintained", "claim_id": null},
+  "red_flags": [],
+  "extraction_confidence": "high",
+  "gaps": []
+}

@@ -1,0 +1,28 @@
+{
+  "accession_number": "0001683168-24-004848",
+  "records_affected": [
+    {
+      "ticker": "DPLS",
+      "owned": true,
+      "impact_class": "direct",
+      "channels": {
+        "C1": {"direction": "negative", "magnitude": "major", "horizon": "quarters", "confidence": "high"},
+        "C3": {"direction": "negative", "magnitude": "major", "horizon": "quarters", "confidence": "high"},
+        "C4": {"direction": "negative", "magnitude": "major", "horizon": "quarters", "confidence": "high"},
+        "C6": {"direction": "negative", "magnitude": "moderate", "horizon": "quarters", "confidence": "medium"},
+        "C8_driver_type": "idiosyncratic"
+      },
+      "guidance_direction": "none_stated",
+      "liquidity_read": "deteriorating",
+      "net_direction": "negative",
+      "thesis_check": {"verdict": "broken", "judgment_claim_id": null},
+      "net_read": {
+        "text": "The auditor's going-concern paragraph and the disclosed material weakness go to the core of the turnaround thesis: together they question whether the company can keep operating and whether its own reported figures can be relied upon. This is a load-bearing contradiction of the reason to own the stock, not a soft quarter.",
+        "judgment_claim_id": null
+      },
+      "confidence": "high"
+    }
+  ],
+  "claims": [],
+  "portfolio_level_notes": null
+}
