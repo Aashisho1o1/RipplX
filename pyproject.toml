@@ -1,0 +1,67 @@
+[project]
+name = "finwatch"
+version = "0.2.0"
+description = "Open-source filing intelligence for self-directed investors"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Apache-2.0" }
+authors = [{ name = "finwatch contributors" }]
+keywords = ["sec", "edgar", "xbrl", "filings", "investing", "portfolio"]
+dependencies = [
+    # Tier 1 trust layer requires only pydantic; CLI/config need typer + rich.
+    "pydantic>=2",
+    "typer>=0.12",
+    "rich>=13",
+    "pyyaml>=6",
+]
+
+# Heavier, phase-specific dependencies from the approved Tech Stack (CLAUDE.md §4)
+# are added at the phase that first needs them (all pre-approved, ask before others):
+#   Phase 1: httpx, tenacity, edgartools
+#   Phase 2: selectolax
+#   Phase 5: litellm
+
+[project.scripts]
+finwatch = "finwatch.cli:app"
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "pytest-cov>=5",
+    "ruff>=0.6",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/finwatch"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+markers = [
+    "live: tests that hit live network / LLM APIs (excluded by default)",
+]
+addopts = "-m 'not live'"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+# TIER 1 trust-layer files are transcribed VERBATIM from CORE_CODE.md and must NOT be
+# reformatted or modified (SYSTEM_DESIGN.md §1). Exclude them from lint entirely.
+extend-exclude = [
+    "src/finwatch/core/types.py",
+    "src/finwatch/metrics/envelope.py",
+    "src/finwatch/xbrl/normalize.py",
+    "src/finwatch/metrics/formulas.py",
+    "src/finwatch/signals/matrix.py",
+    "src/finwatch/verify/checks.py",
+    "tests/test_signals_matrix.py",
+    "tests/test_verifier_mutations.py",
+]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "UP", "B"]

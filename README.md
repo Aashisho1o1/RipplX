@@ -1,0 +1,63 @@
+# finwatch
+
+**Open-source filing intelligence for self-directed investors.**
+
+finwatch watches your holdings, reads new SEC filings, highlights material changes, checks
+every number deterministically, and shows *why it matters* — with citations.
+
+> "I own 12 stocks. I do not read every 8-K, 10-Q, and 10-K. I want to know when something
+> actually important changed."
+
+## Status
+
+🚧 **Under construction (v0.2).** Building backend-first, phase by phase. See
+[`CLAUDE.md`](CLAUDE.md) for the full build specification and
+[`SYSTEM_DESIGN.md`](SYSTEM_DESIGN.md) for the module map.
+
+- [x] **Phase 0** — Scaffold (uv project, CLI skeleton, config, CI, license). Tier 1 trust
+      layer transcribed and green.
+- [ ] Phase 1 — Data layer + EDGAR ingestion
+- [ ] Phase 2 — P0 filing preprocessor
+- [ ] Phase 3 — XBRL normalization + metrics engine *(most important)*
+- [ ] Phase 4 — Deterministic verifier *(second most important)*
+- [ ] Phase 5 — LLM layer + P1/P2 pipeline
+- [ ] Phase 6 — Signal engine + shadow log
+- [ ] Phase 7 — Digest + demo + release polish
+
+## Quickstart (development)
+
+```bash
+uv sync                     # create venv, install deps
+uv run finwatch --help      # see the CLI surface
+uv run pytest               # run the test suite
+```
+
+`finwatch` requires a SEC User-Agent for any command that hits EDGAR. Copy `.env.example` to
+`.env` and set:
+
+```
+SEC_USER_AGENT="Your Name your-email@example.com"
+```
+
+The SEC requires this header for all API access; finwatch refuses to make network calls
+without it.
+
+## What this is — and is NOT
+
+finwatch is an **open-source research tool**. It does **not** provide investment advice.
+
+- The LLM never performs arithmetic and never sources a number from its own weights. Numbers
+  enter only from (a) SEC XBRL structured data or (b) verbatim extraction with full
+  provenance. All computation happens in deterministic Python, and a deterministic verifier
+  is the compile pass: analyses that fail it do not ship.
+- The default digest ships **review postures** (critical_review / risk_review / monitor /
+  positive_support / insufficient_data), never trade instructions.
+- A signal engine exists but runs in **shadow mode** — its hypothetical signals are
+  experimental, unvalidated output, logged to build an auditable track record. They are
+  visible only behind an explicit `--signals` flag and are OFF by default.
+- **You are responsible for your own decisions.**
+
+## License
+
+Apache-2.0. See [`LICENSE`](LICENSE). Distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
+CONDITIONS OF ANY KIND, either express or implied.
