@@ -108,6 +108,7 @@ def to_extraction_summary(p1: P1Output) -> ExtractionSummary:
     return ExtractionSummary(
         red_flag_codes=[c for rf in p1.red_flags
                         if (c := critical_code(rf.flag, rf.severity)) is not None],
+        has_red_flags=bool(p1.red_flags),   # ANY flag blocks M7 (critical ones fire M1)
         extraction_confidence=p1.extraction_confidence,
         gaps=list(p1.gaps),
     )

@@ -829,9 +829,13 @@ def evaluate(record, extraction, impact, metrics) -> Decision:
         base_sig = ("HOLD", ["M8"])
 
     # M5 CONCENTRATION CAP — monotone, toward caution only, applied AFTER base.
+    # A CONCENTRATION cap fires only when OVER-weight: the rebalance term is gated on
+    # current > target so an underweight position that merely drifted below target is
+    # never capped toward caution (rebalance_check_fires triggers on |drift| either way).
     if weights_available(record) and (record.current_weight_pct > 15
         or record.current_weight_pct >= 1.5 * (record.target_weight_pct or inf)
-        or rebalance_check_fires(record)):
+        or (record.current_weight_pct > record.target_weight_pct
+            and rebalance_check_fires(record))):
         base_sig = (cap_toward_caution(base_sig[0], "TRIM"), base_sig[1] + ["M5"])
 
     return finalize(base_sig, fired, skipped, metrics_snapshot(...))

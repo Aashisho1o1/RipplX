@@ -1168,7 +1168,8 @@ class Record(BaseModel):
 
 
 class ExtractionSummary(BaseModel):
-    red_flag_codes: list[str] = Field(default_factory=list)
+    red_flag_codes: list[str] = Field(default_factory=list)  # confirmed CRITICAL_DOC_FLAGS only
+    has_red_flags: bool = False               # ANY red flag on the filing (incl. non-critical)
     extraction_confidence: str = "high"      # high|medium|low
     gaps: list[str] = Field(default_factory=list)
 
@@ -1273,7 +1274,7 @@ def evaluate(record: Record, extraction: ExtractionSummary,
     if base is None:
         vals = _computed_valuations(metrics)
         if len(vals) >= 2:
-            rich = sum(1 for v in vals if (v.value or 0) >= 90) >= 2
+            rich = sum(1 for v in vals if (v.value if v.value is not None else 0) >= 90) >= 2
             deteriorating = ((f9 is not None and f9 <= 4)
                              or impact.guidance_direction in ("lowered", "withdrawn"))
             if rich and deteriorating:
@@ -1285,7 +1286,7 @@ def evaluate(record: Record, extraction: ExtractionSummary,
 
     # ---- M7 ACCUMULATE GATE ----------------------------------------------
     if base is None:
-        m7_reason = _m7_gate_reason(record, impact, metrics, f9, zone)
+        m7_reason = _m7_gate_reason(record, extraction, impact, metrics, f9, zone)
         if m7_reason is None:
             base = "ACCUMULATE"
             fired += ["M7"]
@@ -1305,9 +1306,14 @@ def _apply_caps(record, metrics, base, fired, skipped, caps, notes) -> Decision:
     w, t = record.current_weight_pct, record.target_weight_pct
     if w is not None:
         rc = metrics.get("rebalance_check")
+        # M5 is a CONCENTRATION cap: it may only fire on OVER-weight positions. The
+        # rebalance_check flag fires on absolute drift in either direction, so it is gated
+        # on w > t here — an underweight position that merely drifted below target must
+        # never be capped toward caution.
         breach = (w > 15.0
                   or (t not in (None, 0) and w >= 1.5 * t)
-                  or bool(rc and rc.computed and rc.zone_or_flag == "fires"))
+                  or (t is not None and w > t
+                      and bool(rc and rc.computed and rc.zone_or_flag == "fires")))
         if breach:
             capped = cap_toward_caution(base, "TRIM")
             if capped != base:
@@ -1320,8 +1326,13 @@ def _apply_caps(record, metrics, base, fired, skipped, caps, notes) -> Decision:
     return _finalize(base, fired, skipped, caps, notes)
 
 
-def _m7_gate_reason(record, impact, metrics, f9, zone) -> Optional[str]:
+def _m7_gate_reason(record, extraction, impact, metrics, f9, zone) -> Optional[str]:
     """None -> M7 passes. Otherwise the skip/ineligibility reason."""
+    # No accumulation into ANY red flag (CLAUDE.md §13.1 M7 'and not extraction.red_flags').
+    # red_flag_codes is critical-only (those already fired M1 above); has_red_flags carries
+    # the non-critical flags (e.g. a HIGH covenant breach) that must still block ACCUMULATE.
+    if extraction.has_red_flags:
+        return "red_flags_present"
     if record.thesis is None:
         return "no_thesis_provided"
     if impact.thesis_verdict != "intact":
@@ -1335,7 +1346,7 @@ def _m7_gate_reason(record, impact, metrics, f9, zone) -> Optional[str]:
     vals = _computed_valuations(metrics)
     if len(vals) < 2:
         return "insufficient valuation percentiles"
-    if sum(1 for v in vals if (v.value or 100) <= 40) < 2:
+    if sum(1 for v in vals if (v.value if v.value is not None else 100) <= 40) < 2:
         return "valuation not <=40th percentile on 2 multiples"
     if record.current_weight_pct is None or record.target_weight_pct is None:
         return "weights unavailable"
@@ -1397,7 +1408,7 @@ from typing import Any, Optional
 
 from pydantic import BaseModel, Field
 
-from finwatch.core.types import DISCLAIMER, FORBIDDEN_VOCABULARY, SectorInfo
+from finwatch.core.types import DISCLAIMER, FORBIDDEN_VOCABULARY, POSTURE_MAP, SectorInfo
 from finwatch.metrics.envelope import MetricsBundle
 from finwatch.signals.matrix import (Decision, ExtractionSummary, ImpactSummary,
                                      Record, evaluate)
@@ -1449,6 +1460,8 @@ class VerificationReport(BaseModel):
 # ============================================================ V1 — numbers ==
 _NUM = re.compile(
     r"(?<![\w.])"                       # not inside identifiers/decimals
+    r"(?P<lead_neg>-)?"                 # leading minus sign (the (?<![\w.]) above keeps
+                                        # ranges like '5-10' out: the '-' after a digit fails)
     r"(?P<neg>\()?"
     r"(?P<cur>\$)?"
     r"(?P<num>\d{1,3}(?:,\d{3})+|\d+)(?P<dec>\.\d+)?"
@@ -1495,7 +1508,7 @@ def extract_number_tokens(text: str) -> list[NumberToken]:
             continue                                    # bare years
         scale = _SCALE.get((m.group("suf") or "").lower(), 1.0)
         value = num * scale
-        if m.group("neg"):
+        if m.group("neg") or m.group("lead_neg"):
             value = -value
         dec_places = len(m.group("dec")) - 1 if m.group("dec") else 0
         tol = 0.5 * (10 ** -dec_places) * scale
@@ -1619,11 +1632,20 @@ def check_v3_rederivation(bundle: VerifyBundle) -> list[CheckResult]:
                                 detail=f"invalid escalation {frm}->{to} "
                                        f"(engine base {redo.signal})")]
         expected_signal = to
+    # Full-decision re-derivation (CLAUDE.md §14 V3): posture, signal, rules_fired,
+    # rules_skipped, and caps must all match a fresh evaluate() — escalation aside.
+    expected_posture = POSTURE_MAP.get(expected_signal)
     mismatches = []
     if d.signal != expected_signal:
         mismatches.append(f"signal {d.signal} != {expected_signal}")
+    if d.posture != expected_posture:
+        mismatches.append(f"posture {d.posture} != {expected_posture}")
     if sorted(set(d.rules_fired) - {"ESC"}) != sorted(set(redo.rules_fired)):
         mismatches.append(f"rules_fired {d.rules_fired} != {redo.rules_fired}")
+    if d.rules_skipped != redo.rules_skipped:
+        mismatches.append(f"rules_skipped {d.rules_skipped} != {redo.rules_skipped}")
+    if d.caps_applied != redo.caps_applied:
+        mismatches.append(f"caps {d.caps_applied} != {redo.caps_applied}")
     if mismatches:
         return [CheckResult(check_id="V3", verdict="fail", severity="blocking",
                             detail="; ".join(mismatches))]
@@ -1668,7 +1690,7 @@ def check_v4_citations(bundle: VerifyBundle) -> list[CheckResult]:
 # ===================================================== V5 — schema/hygiene ==
 _PRICE_TARGET = re.compile(
     r"(price\s+target|target\s+price|will\s+(reach|hit)|"
-    r"\$\d+(\.\d+)?\s*(PT\b|price\s+target))", re.IGNORECASE)
+    r"\$\d+(\.\d+)?\s*(PT\b|target\b|price\s+target))", re.IGNORECASE)
 
 
 def check_v5_hygiene(bundle: VerifyBundle) -> list[CheckResult]:

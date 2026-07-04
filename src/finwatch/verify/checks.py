@@ -12,7 +12,7 @@ from typing import Any, Optional
 
 from pydantic import BaseModel, Field
 
-from finwatch.core.types import DISCLAIMER, FORBIDDEN_VOCABULARY, SectorInfo
+from finwatch.core.types import DISCLAIMER, FORBIDDEN_VOCABULARY, POSTURE_MAP, SectorInfo
 from finwatch.metrics.envelope import MetricsBundle
 from finwatch.signals.matrix import (Decision, ExtractionSummary, ImpactSummary,
                                      Record, evaluate)
@@ -64,6 +64,8 @@ class VerificationReport(BaseModel):
 # ============================================================ V1 — numbers ==
 _NUM = re.compile(
     r"(?<![\w.])"                       # not inside identifiers/decimals
+    r"(?P<lead_neg>-)?"                 # leading minus sign (the (?<![\w.]) above keeps
+                                        # ranges like '5-10' out: the '-' after a digit fails)
     r"(?P<neg>\()?"
     r"(?P<cur>\$)?"
     r"(?P<num>\d{1,3}(?:,\d{3})+|\d+)(?P<dec>\.\d+)?"
@@ -110,7 +112,7 @@ def extract_number_tokens(text: str) -> list[NumberToken]:
             continue                                    # bare years
         scale = _SCALE.get((m.group("suf") or "").lower(), 1.0)
         value = num * scale
-        if m.group("neg"):
+        if m.group("neg") or m.group("lead_neg"):
             value = -value
         dec_places = len(m.group("dec")) - 1 if m.group("dec") else 0
         tol = 0.5 * (10 ** -dec_places) * scale
@@ -234,11 +236,20 @@ def check_v3_rederivation(bundle: VerifyBundle) -> list[CheckResult]:
                                 detail=f"invalid escalation {frm}->{to} "
                                        f"(engine base {redo.signal})")]
         expected_signal = to
+    # Full-decision re-derivation (CLAUDE.md §14 V3): posture, signal, rules_fired,
+    # rules_skipped, and caps must all match a fresh evaluate() — escalation aside.
+    expected_posture = POSTURE_MAP.get(expected_signal)
     mismatches = []
     if d.signal != expected_signal:
         mismatches.append(f"signal {d.signal} != {expected_signal}")
+    if d.posture != expected_posture:
+        mismatches.append(f"posture {d.posture} != {expected_posture}")
     if sorted(set(d.rules_fired) - {"ESC"}) != sorted(set(redo.rules_fired)):
         mismatches.append(f"rules_fired {d.rules_fired} != {redo.rules_fired}")
+    if d.rules_skipped != redo.rules_skipped:
+        mismatches.append(f"rules_skipped {d.rules_skipped} != {redo.rules_skipped}")
+    if d.caps_applied != redo.caps_applied:
+        mismatches.append(f"caps {d.caps_applied} != {redo.caps_applied}")
     if mismatches:
         return [CheckResult(check_id="V3", verdict="fail", severity="blocking",
                             detail="; ".join(mismatches))]
@@ -283,7 +294,7 @@ def check_v4_citations(bundle: VerifyBundle) -> list[CheckResult]:
 # ===================================================== V5 — schema/hygiene ==
 _PRICE_TARGET = re.compile(
     r"(price\s+target|target\s+price|will\s+(reach|hit)|"
-    r"\$\d+(\.\d+)?\s*(PT\b|price\s+target))", re.IGNORECASE)
+    r"\$\d+(\.\d+)?\s*(PT\b|target\b|price\s+target))", re.IGNORECASE)
 
 
 def check_v5_hygiene(bundle: VerifyBundle) -> list[CheckResult]:
