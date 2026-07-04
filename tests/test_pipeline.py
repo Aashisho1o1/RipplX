@@ -166,6 +166,49 @@ def test_pipeline_runs_p3_v3_and_shadow_log_for_owned_record():
     assert fa.verification.verdict in ("PASS", "PASS_WITH_WARNINGS")
 
 
+def test_malicious_p3_prose_fails_verification_and_digest_withholds_it():
+    # F2: P3 rationale/counter-evidence/what-would-change now flow through the verifier;
+    # forbidden vocab / price-target prose → blocking V5 fail → digest never shows it.
+    from finwatch.db import Holding
+    from finwatch.digest import render_digest
+    from finwatch.signals.engine import SignalEngine
+
+    repo = Repo(init_db(":memory:"))
+    _seed(repo)
+    repo.upsert_holding(Holding(cik=CIK, ticker="MSFT", owned=1, shares=100, cost_basis=300.0,
+                                target_weight_pct=10.0, thesis="cloud", added_at="t"))
+    evil = json.loads(_P3_JSON)
+    evil["rationale"] = "Guaranteed profit — our price target of $999 means you should buy now."
+    evil_json = json.dumps(evil)
+
+    def responder(s, _u):
+        if "chair the investment committee" in s:
+            return evil_json
+        if "portfolio manager and risk officer" in s:
+            return P2_JSON
+        return P1_JSON
+
+    llm = FakeLLMClient(responder=responder)
+    eng = SignalEngine(repo, llm, price_provider=_FakePrice(), model_label="fake/m",
+                       now_fn=lambda: "t")
+    orch = Orchestrator(
+        repo, Preprocessor(repo, now_fn=lambda: "t"),
+        P1Extractor(llm, repo, model_label="fake/m", now_fn=lambda: "t"),
+        P2Explainer(llm, repo, model_label="fake/m", now_fn=lambda: "t"),
+        MetricsService(repo, _FakePrice(), lambda _c: MSFT_CF, now_fn=lambda: "t"),
+        companyfacts_provider=lambda _c: MSFT_CF, signal_engine=eng, now_fn=lambda: "t")
+    records = [{"ticker": "MSFT", "owned": True, "shares": 100, "cost_basis": 300.0,
+                "target_weight_pct": 10.0, "thesis": "cloud"}]
+    fa = orch.process_html(filing=repo.get_filing(ACCN), html=TENQ, as_of="2025-05-01",
+                           records=records)
+
+    assert fa.manual_review                                  # V5 caught it
+    assert any(c.check_id == "V5" and c.verdict == "fail" for c in fa.verification.results)
+    md = render_digest(repo, since="2024-01-01", include_signals=True).markdown
+    assert "Guaranteed profit" not in md and "$999" not in md
+    assert "rationale withheld" in md
+
+
 def test_cli_shadow_report(monkeypatch, tmp_path):
     from typer.testing import CliRunner
 

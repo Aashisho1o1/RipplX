@@ -13,7 +13,7 @@ from datetime import UTC, datetime
 
 from finwatch.core.types import DISCLAIMER
 from finwatch.db.repositories import Filing, Repo
-from finwatch.llm.schemas import P1Output, P2Output
+from finwatch.llm.schemas import P1Output, P2Output, P3Output
 from finwatch.llm.stages import P1Extractor, P2Explainer
 from finwatch.metrics.envelope import MetricsBundle
 from finwatch.metrics.service import MetricsService
@@ -76,11 +76,16 @@ def assemble_verify_bundle(
     record=None,
     extraction=None,
     impact=None,
+    p3: P3Output | None = None,
 ) -> VerifyBundle:
     """Build the VerifyBundle from the analysis. The rendered text is the verifiable
-    analysis summary (red flags, net reads, verbatim evidence snippets) — its numbers
-    come from evidence snippets and metrics, which are V1's candidate pool. When a P3
-    decision is supplied, V3 re-derives it from the same inputs to audit the signal."""
+    analysis summary (red flags, net reads, verbatim evidence snippets, AND the P3
+    rationale/counter-evidence prose that the digest emits under --signals) — its numbers
+    come from evidence snippets and metrics, which are V1's candidate pool. Including P3
+    prose closes the V5 gap where a malicious rationale ("guaranteed", a price target)
+    would otherwise reach the digest unscanned. When a P3 decision is supplied, V3 also
+    re-derives it from the same inputs to audit the signal."""
+    assert disclaimer is not None, "verify bundle requires disclaimer_text (V5)"
     lines: list[str] = []
     for rf in p1.red_flags:
         lines.append(f"Red flag: {rf.flag} ({rf.severity}).")
@@ -89,6 +94,11 @@ def assemble_verify_bundle(
     if p2 is not None:
         for rec in p2.records_affected:
             lines.append(rec.net_read.text)
+    if p3 is not None:
+        # Every user-visible P3 field goes through V1/V5 (see render.py _shadow_block).
+        lines.append(p3.rationale)
+        lines.append(p3.counter_evidence)
+        lines.extend(p3.what_would_change_this)
     evidence: list[EvidenceClaim] = []
     for c in p1.claims:
         if c.claim_type == "evidence" and c.provenance is not None:
@@ -215,6 +225,7 @@ class Orchestrator:
             fact_values_from_repo(self.repo, filing.cik),
             disclaimer=self.disclaimer,
             decision=decision, record=record, extraction=extraction_sum, impact=impact_sum,
+            p3=signal.p3 if signal is not None else None,
         )
         # A recorded/deterministic response cannot self-repair, so give up immediately
         # and route to manual review; a live pipeline supplies a real stage re-run here.

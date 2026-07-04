@@ -85,6 +85,52 @@ def test_p2_schema_roundtrips():
     assert p2.records_affected[0].thesis_check.verdict == "intact"
 
 
+# ---- F3: strict claim-graph + vocabulary enforcement -----------------------
+def test_out_of_vocabulary_enums_are_rejected():
+    from pydantic import ValidationError
+
+    for bad in [{"classification": {"items_8k": [], "overall_severity": "banana"}},
+                {"extraction_confidence": "LOUD"},
+                {"guidance_direction": {"value": "invented", "claim_id": None}}]:
+        with pytest.raises(ValidationError):
+            P1Output.model_validate({**VALID_P1, **bad})
+    # well-formed but differently-cased value is normalised, not rejected
+    assert P1Output.model_validate(
+        {**VALID_P1, "extraction_confidence": "HIGH"}).extraction_confidence == "high"
+
+
+def test_evidence_claim_without_provenance_is_rejected():
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        P1Output.model_validate({**VALID_P1, "claims": [
+            {"claim_id": "c_1", "claim_type": "evidence", "text": "x"}]})   # no provenance
+
+
+def test_judgment_claim_without_basis_is_rejected():
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        P1Output.model_validate({**VALID_P1, "claims": [
+            {"claim_id": "c_1", "claim_type": "judgment", "text": "x"}]})   # no basis_claim_ids
+
+
+def test_dangling_red_flag_claim_ref_is_rejected():
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        P1Output.model_validate({**VALID_P1,
+            "red_flags": [{"flag": "going_concern", "severity": "critical",
+                           "claim_ids": ["c_missing"]}]})
+
+
+def test_unknown_fields_are_forbidden():
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        P1Output.model_validate({**VALID_P1, "surprise_field": 1})
+
+
 # ---- stage runners ---------------------------------------------------------
 def test_p1_extractor_parses_persists_and_namespaces_claims():
     repo = Repo(init_db(":memory:"))

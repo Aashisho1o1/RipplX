@@ -406,7 +406,11 @@ def _shadow_block(row: SignalShadowLog, view: _FilingView | None) -> list[str]:
         fired = []
     if fired:
         out.append(f"- Rules fired: {', '.join(fired)}")
-    if view is not None and view.p3 is not None:
+    if view is not None and view.manual_review:
+        # The P3 prose failed deterministic verification (V1/V5) — never render it.
+        out.append("- ⚠ rationale withheld — automated verification failed (manual review "
+                   "required).")
+    elif view is not None and view.p3 is not None:
         p3 = view.p3
         out.append(f"- Rationale: {p3.rationale}")
         if p3.counter_evidence:
