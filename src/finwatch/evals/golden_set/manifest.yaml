@@ -1,0 +1,38 @@
+# Golden set — real filings pinned by accession (CLAUDE.md §16).
+# Do not invent accession numbers; these were located via EDGAR full-text search.
+# category: critical (must extract the flag) | boring (must NOT scream).
+# The bundled filing.html is a representative fixture for the deterministic recorded
+# run; the live bake-off (`finwatch eval`) fetches the real primary_doc.
+cases:
+  - id: going_concern_10k
+    accession: "0001683168-24-004848"
+    cik: "0000866439"
+    ticker: DPLS
+    form_type: 10-K
+    primary_doc: "https://www.sec.gov/Archives/edgar/data/866439/000168316824004848/darkpulse_i10k-123123.htm"
+    category: critical
+    expected_critical_flags: [going_concern]
+  - id: non_reliance_8k
+    accession: "0001866550-24-000006"
+    cik: "0001866550"
+    ticker: TWKS
+    form_type: 8-K
+    primary_doc: "https://www.sec.gov/Archives/edgar/data/1866550/000186655024000006/twks-20240206.htm"
+    category: critical
+    expected_critical_flags: [item_4_02_non_reliance]
+  - id: furnished_earnings_8k
+    accession: "0000320193-26-000011"
+    cik: "0000320193"
+    ticker: AAPL
+    form_type: 8-K
+    primary_doc: "https://www.sec.gov/Archives/edgar/data/320193/000032019326000011/aapl-20260430.htm"
+    category: boring
+    expected_critical_flags: []
+  - id: clean_10q
+    accession: "0000320193-24-000081"
+    cik: "0000320193"
+    ticker: AAPL
+    form_type: 10-Q
+    primary_doc: "https://www.sec.gov/Archives/edgar/data/320193/000032019324000081/aapl-20240629.htm"
+    category: boring
+    expected_critical_flags: []

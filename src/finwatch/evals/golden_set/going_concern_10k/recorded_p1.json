@@ -1,0 +1,93 @@
+{
+  "accession_number": "0001683168-24-004848",
+  "ticker": "DPLS",
+  "form_type": "10-K",
+  "classification": {
+    "items_8k": [],
+    "overall_severity": "critical"
+  },
+  "claims": [
+    {
+      "claim_id": "c_0001",
+      "claim_type": "evidence",
+      "text": "auditor going-concern qualification",
+      "confidence": "high",
+      "provenance": {
+        "accession_number": "0001683168-24-004848",
+        "form_type": "10-K",
+        "section_key": "auditor_report",
+        "char_start": 0,
+        "char_end": 400,
+        "text_sha256_prefix": "gc",
+        "snippet": "raise substantial doubt about its ability to continue as a going concern"
+      }
+    },
+    {
+      "claim_id": "c_0002",
+      "claim_type": "judgment",
+      "text": "going concern flag",
+      "confidence": "high",
+      "basis_claim_ids": [
+        "c_0001"
+      ]
+    },
+    {
+      "claim_id": "c_0003",
+      "claim_type": "evidence",
+      "text": "material weakness",
+      "confidence": "high",
+      "provenance": {
+        "accession_number": "0001683168-24-004848",
+        "form_type": "10-K",
+        "section_key": "controls",
+        "char_start": 0,
+        "char_end": 200,
+        "text_sha256_prefix": "mw",
+        "snippet": "material weakness in internal control over financial reporting"
+      }
+    }
+  ],
+  "material_items": [
+    {
+      "headline": "Going concern doubt",
+      "event_type": "going_concern",
+      "severity": "critical",
+      "claim_ids": [
+        "c_0001",
+        "c_0002"
+      ]
+    },
+    {
+      "headline": "Material weakness in controls",
+      "event_type": "material_weakness",
+      "severity": "high",
+      "claim_ids": [
+        "c_0003"
+      ]
+    }
+  ],
+  "risk_factor_findings": null,
+  "guidance_direction": {
+    "value": "none_stated",
+    "claim_id": null
+  },
+  "red_flags": [
+    {
+      "flag": "going_concern",
+      "severity": "critical",
+      "claim_ids": [
+        "c_0001",
+        "c_0002"
+      ]
+    },
+    {
+      "flag": "material_weakness_with_restatement_risk",
+      "severity": "high",
+      "claim_ids": [
+        "c_0003"
+      ]
+    }
+  ],
+  "extraction_confidence": "high",
+  "gaps": []
+}

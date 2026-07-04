@@ -186,11 +186,30 @@ def digest(
 
 @app.command()
 def eval(
-    models: str = typer.Option(
-        ..., "--models", help="Comma-separated litellm model strings to bake off."),
+    models: str | None = typer.Option(
+        None, "--models",
+        help="Comma-separated litellm model strings to bake off (live). "
+             "Omit to run the bundled recorded golden set (no API keys)."),
 ) -> None:
-    """Golden-set bake-off across candidate models."""
-    _stub("Phase 5")
+    """Golden-set bake-off across candidate models (CLAUDE.md §16)."""
+    from finwatch.evals.harness import bakeoff, render_report, run_live, run_recorded
+
+    if not models:
+        console.print(render_report(bakeoff([run_recorded()])))
+        return
+
+    cfg = _config_or_exit()
+    from pathlib import Path
+
+    from finwatch.ingest import EdgarClient
+
+    cache_dir = Path(cfg.db_path).parent / "cache" if cfg.db_path != ":memory:" else None
+    edgar = EdgarClient(cfg.sec_user_agent, cache_dir=cache_dir)
+    try:
+        reports = [run_live(m.strip(), edgar) for m in models.split(",") if m.strip()]
+    finally:
+        edgar.close()
+    console.print(render_report(bakeoff(reports)))
 
 
 @app.command()

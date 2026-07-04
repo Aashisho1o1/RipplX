@@ -1,0 +1,48 @@
+{
+  "accession_number": "0000320193-26-000011",
+  "ticker": "AAPL",
+  "form_type": "8-K",
+  "classification": {
+    "items_8k": [
+      {
+        "item": "2.02",
+        "base_severity": "variable",
+        "final_severity": "low",
+        "adjustment_rationale_claim_id": null
+      },
+      {
+        "item": "9.01",
+        "base_severity": "low-medium",
+        "final_severity": "low",
+        "adjustment_rationale_claim_id": null
+      }
+    ],
+    "overall_severity": "low"
+  },
+  "claims": [
+    {
+      "claim_id": "c_0001",
+      "claim_type": "evidence",
+      "text": "furnished earnings release",
+      "confidence": "high",
+      "provenance": {
+        "accession_number": "0000320193-26-000011",
+        "form_type": "8-K",
+        "section_key": "item_2_02",
+        "char_start": 0,
+        "char_end": 300,
+        "text_sha256_prefix": "ef",
+        "snippet": "issued a press release announcing financial results"
+      }
+    }
+  ],
+  "material_items": [],
+  "risk_factor_findings": null,
+  "guidance_direction": {
+    "value": "none_stated",
+    "claim_id": null
+  },
+  "red_flags": [],
+  "extraction_confidence": "high",
+  "gaps": []
+}

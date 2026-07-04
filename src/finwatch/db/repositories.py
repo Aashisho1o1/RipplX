@@ -110,6 +110,30 @@ class VerificationResult(BaseModel):
     created_at: str
 
 
+class Analysis(BaseModel):
+    id: int | None = None
+    accession_number: str
+    ticker: str
+    stage: str                # 'P1' | 'P2' | 'P3'
+    model: str
+    prompt_version: str
+    output_json: str
+    tokens_in: int | None = None
+    tokens_out: int | None = None
+    cost_usd: float | None = None
+    created_at: str
+
+
+class AnalysisClaim(BaseModel):
+    claim_id: str             # globally unique (namespaced by analysis id on persist)
+    analysis_id: int
+    claim_type: str           # 'evidence' | 'judgment'
+    text: str
+    provenance_json: str | None = None
+    basis_claim_ids_json: str | None = None
+    confidence: str | None = None
+
+
 # ------------------------------------------------------------------- repo --
 class Repo:
     """A thin typed wrapper over an open SQLite connection."""
@@ -499,3 +523,63 @@ class Repo:
                 (analysis_id,),
             ).fetchone()
         return int(row["n"])
+
+    # ---- analyses + claim graph ------------------------------------------
+    def insert_analysis(self, a: Analysis) -> int:
+        cur = self.conn.execute(
+            """INSERT INTO analyses
+                   (accession_number, ticker, stage, model, prompt_version, output_json,
+                    tokens_in, tokens_out, cost_usd, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (a.accession_number, a.ticker, a.stage, a.model, a.prompt_version,
+             a.output_json, a.tokens_in, a.tokens_out, a.cost_usd, a.created_at),
+        )
+        self.conn.commit()
+        return int(cur.lastrowid)
+
+    def get_analysis(self, analysis_id: int) -> Analysis | None:
+        row = self.conn.execute(
+            "SELECT * FROM analyses WHERE id = ?", (analysis_id,)
+        ).fetchone()
+        return None if row is None else Analysis(**dict(row))
+
+    def latest_analysis(self, accession_number: str, stage: str) -> Analysis | None:
+        row = self.conn.execute(
+            "SELECT * FROM analyses WHERE accession_number = ? AND stage = ? "
+            "ORDER BY id DESC LIMIT 1",
+            (accession_number, stage),
+        ).fetchone()
+        return None if row is None else Analysis(**dict(row))
+
+    def list_analyses(self, accession_number: str | None = None) -> list[Analysis]:
+        if accession_number is None:
+            rows = self.conn.execute("SELECT * FROM analyses ORDER BY id").fetchall()
+        else:
+            rows = self.conn.execute(
+                "SELECT * FROM analyses WHERE accession_number = ? ORDER BY id",
+                (accession_number,),
+            ).fetchall()
+        return [Analysis(**dict(r)) for r in rows]
+
+    def insert_analysis_claims(self, claims: Iterable[AnalysisClaim]) -> int:
+        rows = [
+            (c.claim_id, c.analysis_id, c.claim_type, c.text, c.provenance_json,
+             c.basis_claim_ids_json, c.confidence)
+            for c in claims
+        ]
+        self.conn.executemany(
+            """INSERT INTO analysis_claims
+                   (claim_id, analysis_id, claim_type, text, provenance_json,
+                    basis_claim_ids_json, confidence)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            rows,
+        )
+        self.conn.commit()
+        return len(rows)
+
+    def list_analysis_claims(self, analysis_id: int) -> list[AnalysisClaim]:
+        rows = self.conn.execute(
+            "SELECT * FROM analysis_claims WHERE analysis_id = ? ORDER BY claim_id",
+            (analysis_id,),
+        ).fetchall()
+        return [AnalysisClaim(**dict(r)) for r in rows]

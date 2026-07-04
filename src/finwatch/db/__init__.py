@@ -2,6 +2,8 @@
 
 from finwatch.db.database import apply_migrations, connect, init_db
 from finwatch.db.repositories import (
+    Analysis,
+    AnalysisClaim,
     Company,
     Computation,
     Filing,
@@ -18,6 +20,8 @@ __all__ = [
     "connect",
     "init_db",
     "Repo",
+    "Analysis",
+    "AnalysisClaim",
     "Company",
     "Computation",
     "Filing",

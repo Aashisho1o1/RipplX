@@ -1,0 +1,76 @@
+{
+  "accession_number": "0001866550-24-000006",
+  "ticker": "TWKS",
+  "form_type": "8-K",
+  "classification": {
+    "items_8k": [
+      {
+        "item": "4.02",
+        "base_severity": "critical",
+        "final_severity": "critical",
+        "adjustment_rationale_claim_id": null
+      },
+      {
+        "item": "9.01",
+        "base_severity": "low-medium",
+        "final_severity": "low",
+        "adjustment_rationale_claim_id": null
+      }
+    ],
+    "overall_severity": "critical"
+  },
+  "claims": [
+    {
+      "claim_id": "c_0001",
+      "claim_type": "evidence",
+      "text": "non-reliance conclusion",
+      "confidence": "high",
+      "provenance": {
+        "accession_number": "0001866550-24-000006",
+        "form_type": "8-K",
+        "section_key": "item_4_02",
+        "char_start": 0,
+        "char_end": 400,
+        "text_sha256_prefix": "nr",
+        "snippet": "should no longer be relied upon due to an error in revenue recognition"
+      }
+    },
+    {
+      "claim_id": "c_0002",
+      "claim_type": "judgment",
+      "text": "non-reliance / restatement",
+      "confidence": "high",
+      "basis_claim_ids": [
+        "c_0001"
+      ]
+    }
+  ],
+  "material_items": [
+    {
+      "headline": "Non-reliance on prior financials; restatement",
+      "event_type": "non_reliance",
+      "severity": "critical",
+      "claim_ids": [
+        "c_0001",
+        "c_0002"
+      ]
+    }
+  ],
+  "risk_factor_findings": null,
+  "guidance_direction": {
+    "value": "none_stated",
+    "claim_id": null
+  },
+  "red_flags": [
+    {
+      "flag": "item_4_02_non_reliance",
+      "severity": "critical",
+      "claim_ids": [
+        "c_0001",
+        "c_0002"
+      ]
+    }
+  ],
+  "extraction_confidence": "high",
+  "gaps": []
+}

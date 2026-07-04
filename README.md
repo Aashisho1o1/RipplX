@@ -27,7 +27,11 @@ every number deterministically, and shows *why it matters* — with citations.
 - [x] **Phase 4** — Deterministic verifier *(second most important)*: V1–V5 (Tier 1) plus the
       §14 regeneration policy (blocking FAIL → regenerate ≤2 → else manual-review) and
       `verification_results` persistence. Mutation battery green.
-- [ ] Phase 5 — LLM layer + P1/P2 pipeline
+- [x] **Phase 5** — LLM layer + P1/P2 pipeline: litellm router (models from env), versioned
+      verbatim prompts, pydantic stage schemas, claim-graph persistence, the
+      P0→P1→metrics→P2→verify orchestrator, and the golden-set eval harness + `finwatch eval`
+      (recorded run meets the DoD: critical recall 100%, verifier pass). Live bake-off is
+      operator-run with keys.
 - [ ] Phase 6 — Signal engine + shadow log
 - [ ] Phase 7 — Digest + demo + release polish
 
