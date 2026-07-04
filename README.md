@@ -18,7 +18,9 @@ every number deterministically, and shows *why it matters* — with citations.
       layer transcribed and green.
 - [x] **Phase 1** — Data layer + EDGAR ingestion (SQLite schema + migrations + repository;
       SEC-etiquette EDGAR client; ticker→CIK; Stooq prices; `add`/`watch`/`ingest`).
-- [ ] Phase 2 — P0 filing preprocessor
+- [x] **Phase 2** — P0 filing preprocessor (form router; canonical sections with offsets,
+      element ids, hashes; 8-K item split + furnished detection; amendment linkage;
+      risk-factor differ; FTS-synced persistence). Validated on real AAPL 10-K/10-Q/8-K.
 - [ ] Phase 3 — XBRL normalization + metrics engine *(most important)*
 - [ ] Phase 4 — Deterministic verifier *(second most important)*
 - [ ] Phase 5 — LLM layer + P1/P2 pipeline

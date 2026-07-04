@@ -16,12 +16,14 @@ dependencies = [
     # Phase 1: EDGAR/Stooq HTTP client with retry/backoff.
     "httpx>=0.27",
     "tenacity>=8",
+    # Phase 2: fast HTML section parsing for the P0 preprocessor.
+    "selectolax>=0.3",
 ]
 
 # Heavier, phase-specific dependencies from the approved Tech Stack (CLAUDE.md §4)
 # are added at the phase that first needs them (all pre-approved, ask before others):
-#   Phase 2: edgartools, selectolax  (HTML filing parsing)
-#   Phase 5: litellm
+#   Phase 5: litellm  (LLM router)
+# edgartools (approved) is available if richer filing parsing is ever needed.
 
 [project.scripts]
 finwatch = "finwatch.cli:app"

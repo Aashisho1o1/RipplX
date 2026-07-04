@@ -4,6 +4,7 @@ from finwatch.db.database import apply_migrations, connect, init_db
 from finwatch.db.repositories import (
     Company,
     Filing,
+    FilingSection,
     Holding,
     Price,
     Repo,
@@ -17,6 +18,7 @@ __all__ = [
     "Repo",
     "Company",
     "Filing",
+    "FilingSection",
     "Holding",
     "Price",
     "XbrlFact",

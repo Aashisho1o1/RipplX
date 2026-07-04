@@ -75,6 +75,19 @@ class Price(BaseModel):
     close: float
 
 
+class FilingSection(BaseModel):
+    id: int | None = None
+    accession_number: str
+    section_key: str
+    title: str | None = None
+    char_start: int | None = None
+    char_end: int | None = None
+    html_element_id: str | None = None
+    is_furnished: int = 0
+    text: str
+    text_sha256: str
+
+
 # ------------------------------------------------------------------- repo --
 class Repo:
     """A thin typed wrapper over an open SQLite connection."""
@@ -287,3 +300,109 @@ class Repo:
             "SELECT value FROM settings WHERE key = ?", (key,)
         ).fetchone()
         return None if row is None else row["value"]
+
+    # ---- filing sections (P0 output) -------------------------------------
+    def replace_filing_sections(
+        self, accession_number: str, sections: Iterable[FilingSection]
+    ) -> int:
+        """Replace a filing's sections, keeping the external-content FTS index in sync.
+
+        External-content FTS5 needs an explicit 'delete' for each old row before the
+        content row goes away, then a matching insert for each new row.
+        """
+        old = self.conn.execute(
+            "SELECT id, text FROM filing_sections WHERE accession_number = ?",
+            (accession_number,),
+        ).fetchall()
+        for r in old:
+            self.conn.execute(
+                "INSERT INTO section_fts(section_fts, rowid, text) VALUES ('delete', ?, ?)",
+                (r["id"], r["text"]),
+            )
+        self.conn.execute(
+            "DELETE FROM filing_sections WHERE accession_number = ?", (accession_number,)
+        )
+        count = 0
+        for s in sections:
+            cur = self.conn.execute(
+                """INSERT INTO filing_sections
+                       (accession_number, section_key, title, char_start, char_end,
+                        html_element_id, is_furnished, text, text_sha256)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (accession_number, s.section_key, s.title, s.char_start, s.char_end,
+                 s.html_element_id, int(s.is_furnished), s.text, s.text_sha256),
+            )
+            self.conn.execute(
+                "INSERT INTO section_fts(rowid, text) VALUES (?, ?)", (cur.lastrowid, s.text)
+            )
+            count += 1
+        self.conn.commit()
+        return count
+
+    def list_filing_sections(self, accession_number: str) -> list[FilingSection]:
+        rows = self.conn.execute(
+            "SELECT * FROM filing_sections WHERE accession_number = ? ORDER BY char_start",
+            (accession_number,),
+        ).fetchall()
+        return [FilingSection(**dict(r)) for r in rows]
+
+    def get_filing_section(
+        self, accession_number: str, section_key: str
+    ) -> FilingSection | None:
+        row = self.conn.execute(
+            "SELECT * FROM filing_sections WHERE accession_number = ? AND section_key = ? "
+            "ORDER BY char_start LIMIT 1",
+            (accession_number, section_key),
+        ).fetchone()
+        return None if row is None else FilingSection(**dict(row))
+
+    def prior_comparable_section(
+        self, cik: str, base_form: str, section_key: str, filed_before: str
+    ) -> tuple[str, str] | None:
+        """(accession, section text) of the most recent non-amendment filing of the
+        same base form with this section, filed before ``filed_before``. For the
+        risk-factor diff's prior comparable."""
+        row = self.conn.execute(
+            """SELECT f.accession_number AS accn, s.text AS text
+                 FROM filings f JOIN filing_sections s
+                   ON s.accession_number = f.accession_number
+                WHERE f.cik = ? AND f.form_type = ? AND f.is_amendment = 0
+                  AND s.section_key = ? AND f.filed_at < ?
+                ORDER BY f.filed_at DESC LIMIT 1""",
+            (cik, base_form, section_key, filed_before),
+        ).fetchone()
+        return (row["accn"], row["text"]) if row else None
+
+    # ---- filing lifecycle ------------------------------------------------
+    def set_amends_accession(self, accession_number: str, amends: str | None) -> None:
+        self.conn.execute(
+            "UPDATE filings SET amends_accession = ? WHERE accession_number = ?",
+            (amends, accession_number),
+        )
+        self.conn.commit()
+
+    def find_amended_accession(
+        self, cik: str, base_form: str, period_of_report: str | None, filed_before: str
+    ) -> str | None:
+        """Best-effort: the original filing an amendment corrects — the most recent
+        non-amendment of the same base form and period, filed earlier."""
+        if not period_of_report:
+            return None
+        row = self.conn.execute(
+            """SELECT accession_number FROM filings
+                WHERE cik = ? AND form_type = ? AND is_amendment = 0
+                  AND period_of_report = ? AND filed_at < ?
+                ORDER BY filed_at DESC LIMIT 1""",
+            (cik, base_form, period_of_report, filed_before),
+        ).fetchone()
+        return row["accession_number"] if row else None
+
+    def set_filing_status(
+        self, accession_number: str, status: str, processed_at: str | None = None
+    ) -> None:
+        self.conn.execute(
+            "UPDATE filings SET status = ?, "
+            "processed_at = COALESCE(?, processed_at) WHERE accession_number = ?",
+            (status, processed_at, accession_number),
+        )
+        self.conn.commit()
