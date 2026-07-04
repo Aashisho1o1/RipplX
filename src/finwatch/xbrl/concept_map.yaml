@@ -1,0 +1,75 @@
+# Concept map — priority-ordered us-gaap/dei tags per concept (CLAUDE.md §8).
+# GENERATED MIRROR of CONCEPT_MAP in src/finwatch/xbrl/normalize.py (the source of
+# truth, Tier 1). tests/test_concept_map.py asserts they stay identical.
+# 'dei:' prefix selects the dei taxonomy; otherwise us-gaap.
+
+revenue:
+- RevenueFromContractWithCustomerExcludingAssessedTax
+- Revenues
+- SalesRevenueNet
+- RevenueFromContractWithCustomerIncludingAssessedTax
+net_income:
+- NetIncomeLoss
+- ProfitLoss
+cfo:
+- NetCashProvidedByUsedInOperatingActivities
+- NetCashProvidedByUsedInOperatingActivitiesContinuingOperations
+total_assets:
+- Assets
+total_liabilities:
+- Liabilities
+equity:
+- StockholdersEquity
+- StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest
+cash:
+- CashAndCashEquivalentsAtCarryingValue
+- CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents
+cash_change:
+- CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalentsPeriodIncreaseDecreaseIncludingExchangeRateEffect
+- CashAndCashEquivalentsPeriodIncreaseDecrease
+current_assets:
+- AssetsCurrent
+current_liabilities:
+- LiabilitiesCurrent
+lt_debt:
+- LongTermDebtNoncurrent
+- LongTermDebt
+st_debt:
+- LongTermDebtCurrent
+- DebtCurrent
+- ShortTermBorrowings
+interest_expense:
+- InterestExpense
+- InterestExpenseDebt
+gross_profit:
+- GrossProfit
+cogs:
+- CostOfRevenue
+- CostOfGoodsAndServicesSold
+- CostOfGoodsSold
+operating_income:
+- OperatingIncomeLoss
+retained_earnings:
+- RetainedEarningsAccumulatedDeficit
+shares_outstanding:
+- dei:EntityCommonStockSharesOutstanding
+- CommonStockSharesOutstanding
+- WeightedAverageNumberOfSharesOutstandingBasic
+receivables:
+- AccountsReceivableNetCurrent
+- ReceivablesNetCurrent
+inventory:
+- InventoryNet
+capex:
+- PaymentsToAcquirePropertyPlantAndEquipment
+ppe_net:
+- PropertyPlantAndEquipmentNet
+dep_amort:
+- DepreciationDepletionAndAmortization
+- DepreciationAndAmortization
+- Depreciation
+sga:
+- SellingGeneralAndAdministrativeExpense
+fx_effect_on_cash:
+- EffectOfExchangeRateOnCashAndCashEquivalents
+- EffectOfExchangeRateOnCashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents

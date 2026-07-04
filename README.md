@@ -21,7 +21,9 @@ every number deterministically, and shows *why it matters* — with citations.
 - [x] **Phase 2** — P0 filing preprocessor (form router; canonical sections with offsets,
       element ids, hashes; 8-K item split + furnished detection; amendment linkage;
       risk-factor differ; FTS-synced persistence). Validated on real AAPL 10-K/10-Q/8-K.
-- [ ] Phase 3 — XBRL normalization + metrics engine *(most important)*
+- [x] **Phase 3** — XBRL normalization + metrics engine *(most important)*: sector-aware
+      `compute_all` wired to the DB, `computations` persistence, concept-map mirror, and a
+      five-company hand-verified suite (MSFT/GOOGL/CAT/JPM + a messy small-cap).
 - [ ] Phase 4 — Deterministic verifier *(second most important)*
 - [ ] Phase 5 — LLM layer + P1/P2 pipeline
 - [ ] Phase 6 — Signal engine + shadow log

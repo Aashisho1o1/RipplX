@@ -88,6 +88,18 @@ class FilingSection(BaseModel):
     text_sha256: str
 
 
+class Computation(BaseModel):
+    id: int | None = None
+    ticker: str
+    tool: str                 # metric name
+    args_json: str
+    result_json: str          # the MetricResult, model_dump_json()
+    status: str               # computed | unavailable | not_applicable
+    formula_version: str
+    as_of: str
+    created_at: str
+
+
 # ------------------------------------------------------------------- repo --
 class Repo:
     """A thin typed wrapper over an open SQLite connection."""
@@ -406,3 +418,40 @@ class Repo:
             (status, processed_at, accession_number),
         )
         self.conn.commit()
+
+    # ---- computations (metric results) -----------------------------------
+    def insert_computations(self, computations: Iterable[Computation]) -> int:
+        rows = [
+            (c.ticker, c.tool, c.args_json, c.result_json, c.status,
+             c.formula_version, c.as_of, c.created_at)
+            for c in computations
+        ]
+        self.conn.executemany(
+            """INSERT INTO computations
+                   (ticker, tool, args_json, result_json, status, formula_version,
+                    as_of, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            rows,
+        )
+        self.conn.commit()
+        return len(rows)
+
+    def list_computations(self, ticker: str | None = None) -> list[Computation]:
+        if ticker is None:
+            rows = self.conn.execute(
+                "SELECT * FROM computations ORDER BY id"
+            ).fetchall()
+        else:
+            rows = self.conn.execute(
+                "SELECT * FROM computations WHERE ticker = ? ORDER BY id", (ticker,)
+            ).fetchall()
+        return [Computation(**dict(r)) for r in rows]
+
+    def count_computations(self, ticker: str | None = None) -> int:
+        if ticker is None:
+            row = self.conn.execute("SELECT COUNT(*) AS n FROM computations").fetchone()
+        else:
+            row = self.conn.execute(
+                "SELECT COUNT(*) AS n FROM computations WHERE ticker = ?", (ticker,)
+            ).fetchone()
+        return int(row["n"])
