@@ -24,7 +24,9 @@ every number deterministically, and shows *why it matters* — with citations.
 - [x] **Phase 3** — XBRL normalization + metrics engine *(most important)*: sector-aware
       `compute_all` wired to the DB, `computations` persistence, concept-map mirror, and a
       five-company hand-verified suite (MSFT/GOOGL/CAT/JPM + a messy small-cap).
-- [ ] Phase 4 — Deterministic verifier *(second most important)*
+- [x] **Phase 4** — Deterministic verifier *(second most important)*: V1–V5 (Tier 1) plus the
+      §14 regeneration policy (blocking FAIL → regenerate ≤2 → else manual-review) and
+      `verification_results` persistence. Mutation battery green.
 - [ ] Phase 5 — LLM layer + P1/P2 pipeline
 - [ ] Phase 6 — Signal engine + shadow log
 - [ ] Phase 7 — Digest + demo + release polish

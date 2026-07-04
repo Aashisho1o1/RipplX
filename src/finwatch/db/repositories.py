@@ -100,6 +100,16 @@ class Computation(BaseModel):
     created_at: str
 
 
+class VerificationResult(BaseModel):
+    id: int | None = None
+    analysis_id: int
+    check_id: str             # V1..V6 sub-checks, e.g. 'V2b'
+    verdict: str              # pass | fail | warn | skipped_not_applicable
+    severity: str             # blocking | warning | info
+    detail: str | None = None
+    created_at: str
+
+
 # ------------------------------------------------------------------- repo --
 class Repo:
     """A thin typed wrapper over an open SQLite connection."""
@@ -453,5 +463,39 @@ class Repo:
         else:
             row = self.conn.execute(
                 "SELECT COUNT(*) AS n FROM computations WHERE ticker = ?", (ticker,)
+            ).fetchone()
+        return int(row["n"])
+
+    # ---- verification results --------------------------------------------
+    def insert_verification_results(self, results: Iterable[VerificationResult]) -> int:
+        rows = [
+            (r.analysis_id, r.check_id, r.verdict, r.severity, r.detail, r.created_at)
+            for r in results
+        ]
+        self.conn.executemany(
+            """INSERT INTO verification_results
+                   (analysis_id, check_id, verdict, severity, detail, created_at)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            rows,
+        )
+        self.conn.commit()
+        return len(rows)
+
+    def list_verification_results(self, analysis_id: int) -> list[VerificationResult]:
+        rows = self.conn.execute(
+            "SELECT * FROM verification_results WHERE analysis_id = ? ORDER BY id",
+            (analysis_id,),
+        ).fetchall()
+        return [VerificationResult(**dict(r)) for r in rows]
+
+    def count_verification_results(self, analysis_id: int | None = None) -> int:
+        if analysis_id is None:
+            row = self.conn.execute(
+                "SELECT COUNT(*) AS n FROM verification_results"
+            ).fetchone()
+        else:
+            row = self.conn.execute(
+                "SELECT COUNT(*) AS n FROM verification_results WHERE analysis_id = ?",
+                (analysis_id,),
             ).fetchone()
         return int(row["n"])
