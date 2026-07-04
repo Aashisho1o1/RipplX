@@ -13,12 +13,14 @@ dependencies = [
     "typer>=0.12",
     "rich>=13",
     "pyyaml>=6",
+    # Phase 1: EDGAR/Stooq HTTP client with retry/backoff.
+    "httpx>=0.27",
+    "tenacity>=8",
 ]
 
 # Heavier, phase-specific dependencies from the approved Tech Stack (CLAUDE.md §4)
 # are added at the phase that first needs them (all pre-approved, ask before others):
-#   Phase 1: httpx, tenacity, edgartools
-#   Phase 2: selectolax
+#   Phase 2: edgartools, selectolax  (HTML filing parsing)
 #   Phase 5: litellm
 
 [project.scripts]

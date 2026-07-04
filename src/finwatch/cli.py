@@ -10,9 +10,22 @@ import typer
 from rich.console import Console
 
 from finwatch import __version__
-from finwatch.config import ConfigError, load_config
+from finwatch.config import Config, ConfigError, load_config
+from finwatch.ingest import (
+    DEFAULT_BACKFILL_QUARTERS,
+    TickerNotFoundError,
+    build_service,
+)
 
 console = Console()
+
+
+def _config_or_exit() -> Config:
+    try:
+        return load_config()
+    except ConfigError as exc:
+        console.print(f"[red]Configuration error:[/] {exc}")
+        raise typer.Exit(code=1) from exc
 
 app = typer.Typer(
     name="finwatch",
@@ -49,13 +62,12 @@ def main(
 @app.command()
 def init() -> None:
     """Create the database + folders and verify SEC_USER_AGENT is set."""
-    try:
-        cfg = load_config()
-    except ConfigError as exc:
-        console.print(f"[red]Configuration error:[/] {exc}")
-        raise typer.Exit(code=1) from exc
-    console.print(f"[green]✓[/] SEC_USER_AGENT configured. Database: {cfg.db_path}")
-    _stub("Phase 1", "db + schema creation")
+    from finwatch.db import init_db
+
+    cfg = _config_or_exit()
+    conn = init_db(cfg.db_path)  # creates parent dirs + applies schema
+    conn.close()
+    console.print(f"[green]✓[/] SEC_USER_AGENT configured. Initialized database at {cfg.db_path}")
 
 
 @app.command()
@@ -71,7 +83,24 @@ def add(
         None, "--thesis", help="Investment thesis (OPTIONAL by design)."),
 ) -> None:
     """Add an owned holding (thesis optional by design)."""
-    _stub("Phase 1")
+    cfg = _config_or_exit()
+    conn, service = build_service(cfg)
+    try:
+        company = service.add_holding(
+            ticker, owned=True, shares=shares, cost_basis=cost,
+            target_weight_pct=target_weight, horizon=horizon, thesis=thesis,
+        )
+    except TickerNotFoundError as exc:
+        console.print(f"[red]{exc}[/]")
+        raise typer.Exit(code=1) from exc
+    finally:
+        service.edgar.close()
+        service.stooq.close()
+        conn.close()
+    console.print(
+        f"[green]✓[/] Added [bold]{company.ticker}[/] (CIK {company.cik}) as an owned "
+        f"holding. Run [bold]finwatch ingest[/] to pull filings, XBRL facts, and prices."
+    )
 
 
 @app.command()
@@ -79,7 +108,21 @@ def watch(
     ticker: str = typer.Argument(..., help="Ticker to track without ownership."),
 ) -> None:
     """Track a company without ownership (company-level read, no signal)."""
-    _stub("Phase 1")
+    cfg = _config_or_exit()
+    conn, service = build_service(cfg)
+    try:
+        company = service.add_holding(ticker, owned=False)
+    except TickerNotFoundError as exc:
+        console.print(f"[red]{exc}[/]")
+        raise typer.Exit(code=1) from exc
+    finally:
+        service.edgar.close()
+        service.stooq.close()
+        conn.close()
+    console.print(
+        f"[green]✓[/] Watching [bold]{company.ticker}[/] (CIK {company.cik}). "
+        f"Run [bold]finwatch ingest[/] to pull filings and financials."
+    )
 
 
 @app.command()
@@ -93,10 +136,41 @@ def analyze(
 @app.command()
 def ingest(
     backfill: int | None = typer.Option(
-        None, "--backfill", help="Quarters of history to backfill."),
+        None, "--backfill", help="Quarters of filing history to index (default 8)."),
 ) -> None:
     """Pull filings + companyfacts (and EOD prices) for tracked CIKs."""
-    _stub("Phase 1")
+    cfg = _config_or_exit()
+    conn, service = build_service(cfg)
+    quarters = backfill if backfill is not None else DEFAULT_BACKFILL_QUARTERS
+    try:
+        if not service.repo.list_tracked_ciks():
+            console.print(
+                "No tracked companies yet. Add one with "
+                "[bold]finwatch add TICKER --shares N --cost X[/] or "
+                "[bold]finwatch watch TICKER[/]."
+            )
+            return
+        summary = service.ingest_all(backfill_quarters=quarters)
+    finally:
+        service.edgar.close()
+        service.stooq.close()
+        conn.close()
+
+    for r in summary.results:
+        if r.error:
+            console.print(
+                f"[yellow]![/] {r.ticker}: {r.filings_indexed} filings, "
+                f"{r.xbrl_facts} facts, {r.prices} prices — [red]{r.error}[/]"
+            )
+        else:
+            console.print(
+                f"[green]✓[/] {r.ticker}: {r.filings_indexed} filings "
+                f"({r.filings_new} new), {r.xbrl_facts} XBRL facts, {r.prices} prices"
+            )
+    console.print(
+        f"[bold]Ingest complete:[/] {summary.companies} companies, "
+        f"{summary.filings} filings, {summary.xbrl_facts} XBRL facts, {summary.prices} prices."
+    )
 
 
 @app.command()

@@ -16,7 +16,8 @@ every number deterministically, and shows *why it matters* — with citations.
 
 - [x] **Phase 0** — Scaffold (uv project, CLI skeleton, config, CI, license). Tier 1 trust
       layer transcribed and green.
-- [ ] Phase 1 — Data layer + EDGAR ingestion
+- [x] **Phase 1** — Data layer + EDGAR ingestion (SQLite schema + migrations + repository;
+      SEC-etiquette EDGAR client; ticker→CIK; Stooq prices; `add`/`watch`/`ingest`).
 - [ ] Phase 2 — P0 filing preprocessor
 - [ ] Phase 3 — XBRL normalization + metrics engine *(most important)*
 - [ ] Phase 4 — Deterministic verifier *(second most important)*
@@ -41,6 +42,19 @@ SEC_USER_AGENT="Your Name your-email@example.com"
 
 The SEC requires this header for all API access; finwatch refuses to make network calls
 without it.
+
+Then track holdings and ingest their filings + financials:
+
+```bash
+uv run finwatch init                              # create the database
+uv run finwatch add AAPL --shares 10 --cost 150   # owned holding (thesis optional)
+uv run finwatch watch MSFT                         # track without ownership
+uv run finwatch ingest                             # pull filings, XBRL facts, EOD prices
+```
+
+> **Dev note:** if `uv run finwatch` can't import the package (a uv/`site` editable-install
+> quirk on some Python builds), reinstall it non-editable: `uv sync --no-editable`. Tests are
+> unaffected — they run against `src/` directly.
 
 ## What this is — and is NOT
 

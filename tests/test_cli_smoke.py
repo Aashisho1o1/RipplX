@@ -40,3 +40,13 @@ def test_init_succeeds_with_user_agent(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     result = runner.invoke(app, ["init"])
     assert result.exit_code == 0
+
+
+def test_init_creates_database_file(monkeypatch, tmp_path):
+    db = tmp_path / "data" / "finwatch.db"
+    monkeypatch.setenv("SEC_USER_AGENT", "Test User test@example.com")
+    monkeypatch.setenv("FINWATCH_DB", str(db))
+    monkeypatch.chdir(tmp_path)
+    result = runner.invoke(app, ["init"])
+    assert result.exit_code == 0
+    assert db.exists()
