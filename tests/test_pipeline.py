@@ -113,3 +113,75 @@ def test_p2_gate_on_severity_and_red_flags():
     assert p2_gate(p1("low", [RedFlag(flag="x", severity="high")]))  # flag overrides low severity
     assert not p2_gate(p1("low", []))
     assert not p2_gate(p1("routine", []))
+
+
+_P3_JSON = json.dumps({
+    "ticker": "MSFT", "accession_number": ACCN, "review_posture": "monitor",
+    "trade_action": None, "hypothetical_signal": "HOLD", "rules_fired": [],
+    "rules_skipped": [], "computed_inputs": [], "rationale": "No material change.",
+    "counter_evidence": "Valuation is elevated.", "what_would_change_this": ["A guidance cut."],
+    "confidence": "medium",
+    "disclaimer": ("Educational analysis of public information for the portfolio owner's "
+                   "own decision-making. Not individualized investment advice. "
+                   "Data may be incomplete or delayed."),
+})
+
+
+def test_pipeline_runs_p3_v3_and_shadow_log_for_owned_record():
+    from finwatch.db import Holding
+    from finwatch.signals.engine import SignalEngine
+
+    repo = Repo(init_db(":memory:"))
+    _seed(repo)
+    repo.upsert_holding(Holding(cik=CIK, ticker="MSFT", owned=1, shares=100, cost_basis=300.0,
+                                target_weight_pct=10.0, thesis="cloud", added_at="t"))
+
+    def responder(s, _u):
+        if "chair the investment committee" in s:
+            return _P3_JSON
+        if "portfolio manager and risk officer" in s:
+            return P2_JSON
+        return P1_JSON
+
+    llm = FakeLLMClient(responder=responder)
+    eng = SignalEngine(repo, llm, price_provider=_FakePrice(), model_label="fake/m",
+                       now_fn=lambda: "t")
+    orch = Orchestrator(
+        repo, Preprocessor(repo, now_fn=lambda: "t"),
+        P1Extractor(llm, repo, model_label="fake/m", now_fn=lambda: "t"),
+        P2Explainer(llm, repo, model_label="fake/m", now_fn=lambda: "t"),
+        MetricsService(repo, _FakePrice(), lambda _c: MSFT_CF, now_fn=lambda: "t"),
+        companyfacts_provider=lambda _c: MSFT_CF, signal_engine=eng, now_fn=lambda: "t")
+
+    records = [{"ticker": "MSFT", "owned": True, "shares": 100, "cost_basis": 300.0,
+                "target_weight_pct": 10.0, "thesis": "cloud"}]
+    fa = orch.process_html(filing=repo.get_filing(ACCN), html=TENQ, as_of="2025-05-01",
+                           records=records)
+
+    assert fa.signal is not None
+    assert {a.stage for a in repo.list_analyses(ACCN)} == {"P1", "P2", "P3"}
+    assert repo.count_shadow_log() == 1
+    v3 = next(c for c in fa.verification.results if c.check_id == "V3")
+    assert v3.verdict == "pass"                              # DoD: V3 exact-match
+    assert fa.verification.verdict in ("PASS", "PASS_WITH_WARNINGS")
+
+
+def test_cli_shadow_report(monkeypatch, tmp_path):
+    from typer.testing import CliRunner
+
+    from finwatch.cli import app
+    from finwatch.db import Repo, SignalShadowLog, init_db
+
+    db = tmp_path / "fw.db"
+    conn = init_db(str(db))
+    Repo(conn).insert_shadow_log(SignalShadowLog(
+        accession_number="a-1", ticker="MSFT", review_posture="risk_review",
+        hypothetical_signal="TRIM", rules_fired_json="[]", rules_skipped_json="[]",
+        computed_inputs_json="[]", created_at="t"))
+    conn.close()
+
+    monkeypatch.setenv("SEC_USER_AGENT", "Test t@e.com")
+    monkeypatch.setenv("FINWATCH_DB", str(db))
+    result = CliRunner().invoke(app, ["shadow", "report"])
+    assert result.exit_code == 0
+    assert "risk_review=1" in result.output and "UNVALIDATED" in result.output

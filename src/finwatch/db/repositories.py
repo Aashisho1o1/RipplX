@@ -134,6 +134,22 @@ class AnalysisClaim(BaseModel):
     confidence: str | None = None
 
 
+class SignalShadowLog(BaseModel):
+    id: int | None = None
+    accession_number: str
+    ticker: str
+    review_posture: str
+    hypothetical_signal: str
+    rules_fired_json: str
+    rules_skipped_json: str
+    computed_inputs_json: str
+    price_at_eval: float | None = None
+    created_at: str
+    outcome_30d: float | None = None
+    outcome_90d: float | None = None
+    outcome_reviewed_at: str | None = None
+
+
 # ------------------------------------------------------------------- repo --
 class Repo:
     """A thin typed wrapper over an open SQLite connection."""
@@ -583,3 +599,34 @@ class Repo:
             (analysis_id,),
         ).fetchall()
         return [AnalysisClaim(**dict(r)) for r in rows]
+
+    # ---- signal shadow log -----------------------------------------------
+    def insert_shadow_log(self, row: SignalShadowLog) -> int:
+        cur = self.conn.execute(
+            """INSERT INTO signal_shadow_log
+                   (accession_number, ticker, review_posture, hypothetical_signal,
+                    rules_fired_json, rules_skipped_json, computed_inputs_json,
+                    price_at_eval, created_at, outcome_30d, outcome_90d, outcome_reviewed_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (row.accession_number, row.ticker, row.review_posture, row.hypothetical_signal,
+             row.rules_fired_json, row.rules_skipped_json, row.computed_inputs_json,
+             row.price_at_eval, row.created_at, row.outcome_30d, row.outcome_90d,
+             row.outcome_reviewed_at),
+        )
+        self.conn.commit()
+        return int(cur.lastrowid)
+
+    def list_shadow_log(self, ticker: str | None = None) -> list[SignalShadowLog]:
+        if ticker is None:
+            rows = self.conn.execute(
+                "SELECT * FROM signal_shadow_log ORDER BY id"
+            ).fetchall()
+        else:
+            rows = self.conn.execute(
+                "SELECT * FROM signal_shadow_log WHERE ticker = ? ORDER BY id", (ticker,)
+            ).fetchall()
+        return [SignalShadowLog(**dict(r)) for r in rows]
+
+    def count_shadow_log(self) -> int:
+        return int(self.conn.execute(
+            "SELECT COUNT(*) AS n FROM signal_shadow_log").fetchone()["n"])

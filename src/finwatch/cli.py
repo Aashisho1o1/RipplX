@@ -229,7 +229,15 @@ def demo() -> None:
 @shadow_app.command("report")
 def shadow_report() -> None:
     """Show the shadow-signal track record."""
-    _stub("Phase 6")
+    from finwatch.db import Repo, init_db
+    from finwatch.signals.engine import render_shadow_report
+
+    cfg = _config_or_exit()
+    conn = init_db(cfg.db_path)
+    try:
+        console.print(render_shadow_report(Repo(conn).list_shadow_log()))
+    finally:
+        conn.close()
 
 
 if __name__ == "__main__":  # pragma: no cover

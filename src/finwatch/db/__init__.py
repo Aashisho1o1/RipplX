@@ -11,6 +11,7 @@ from finwatch.db.repositories import (
     Holding,
     Price,
     Repo,
+    SignalShadowLog,
     VerificationResult,
     XbrlFact,
 )
@@ -28,6 +29,7 @@ __all__ = [
     "FilingSection",
     "Holding",
     "Price",
+    "SignalShadowLog",
     "VerificationResult",
     "XbrlFact",
 ]
