@@ -150,14 +150,14 @@ def test_f4_as_of_excludes_facts_filed_after_the_cutoff():
     from finwatch.metrics.service import as_of_facts
     from finwatch.xbrl.normalize import FactStore
 
-    def fy(end, val, filed):
-        return {"end": end, "val": val, "filed": filed, "fy": int(end[:4]), "fp": "FY",
-                "form": "10-K"}
+    def fy(year, val, filed):   # revenue is a FLOW -> needs a full-year duration
+        return {"start": f"{year}-01-01", "end": f"{year}-12-31", "val": val, "filed": filed,
+                "fy": year, "fp": "FY", "form": "10-K"}
 
     cf = {"cik": "1", "entityName": "X", "facts": {"us-gaap": {"Revenues": {"units": {"USD": [
-        fy("2022-12-31", 100, "2023-02-01"),
-        fy("2023-12-31", 200, "2024-02-01"),
-        fy("2024-12-31", 300, "2025-02-01"),   # filed AFTER the as_of below
+        fy(2022, 100, "2023-02-01"),
+        fy(2023, 200, "2024-02-01"),
+        fy(2024, 300, "2025-02-01"),   # filed AFTER the as_of below
     ]}}}}}
     filtered = as_of_facts(cf, "2024-06-01")
     kept = {e["end"] for e in filtered["facts"]["us-gaap"]["Revenues"]["units"]["USD"]}
@@ -167,14 +167,14 @@ def test_f4_as_of_excludes_facts_filed_after_the_cutoff():
 
 
 # ---- F10: V2 accounting identities run (V2b annual-gated, V2a alignment-gated) --
-def _bs(a_end, l_end, e_end, a, l, e):
+def _bs(assets_end, liab_end, equity_end, assets, liab, equity):
     def inst(end, val):
         return {"end": end, "val": val, "filed": "2024-02-01", "fy": 2023, "fp": "FY",
                 "form": "10-K"}
     return {"cik": "1", "entityName": "X", "facts": {"us-gaap": {
-        "Assets": {"units": {"USD": [inst(a_end, a)]}},
-        "Liabilities": {"units": {"USD": [inst(l_end, l)]}},
-        "StockholdersEquity": {"units": {"USD": [inst(e_end, e)]}}}}}
+        "Assets": {"units": {"USD": [inst(assets_end, assets)]}},
+        "Liabilities": {"units": {"USD": [inst(liab_end, liab)]}},
+        "StockholdersEquity": {"units": {"USD": [inst(equity_end, equity)]}}}}}
 
 
 def test_f10_v2_runs_with_annual_and_alignment_gates():

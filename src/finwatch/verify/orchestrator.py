@@ -48,7 +48,9 @@ def data_quality_report(
     v2a_aligned = _balance_sheet_aligned(store)
     out: list[CheckResult] = []
     for r in check_v2_identities(store, sector):
-        if r.check_id == "V2a" and r.verdict == "fail" and not v2a_aligned:
+        if r.check_id == "V2a" and not v2a_aligned:
+            # A=L+E is not checkable when the three concepts resolve to different
+            # period-ends — skip regardless of whether it coincidentally ties.
             out.append(CheckResult(
                 check_id="V2a", verdict="skipped_not_applicable", severity="info",
                 detail="assets/liabilities/equity resolved to different period-ends; "
@@ -71,7 +73,7 @@ def _balance_sheet_aligned(store: FactStore) -> bool:
         r = store.latest_instant(concept)
         if r is None:
             return False
-        keys.add(getattr(r.fact, "period_key", None) or r.fact.end)
+        keys.add(r.fact.end)          # instant date is the balance-sheet period-end
     return len(keys) == 1
 
 # (report, attempt_number) -> a regenerated bundle, or None to give up.
