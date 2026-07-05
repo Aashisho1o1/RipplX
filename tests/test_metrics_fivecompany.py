@@ -111,16 +111,15 @@ def test_cat_peg_not_applicable_on_negative_growth():
     assert peg.not_applicable_reason == "non_positive_growth"
 
 
-def test_cat_quarterly_net_income_stranded_under_profitloss():
-    # Documented behavior (not a bug): CAT tags recent QUARTERLY net income under
-    # `ProfitLoss`, but the `net_income` concept resolves to `NetIncomeLoss` (priority 1,
-    # which carries the annual data), so FactStore never falls through to the quarterly
-    # ProfitLoss facts. The headline YoY is unaffected; only the 4-quarter *direction*
-    # component reads 'insufficient_points'. Pinned so the interaction is explicit.
+def test_cat_quarterly_net_income_falls_through_to_profitloss():
+    # F11 regression: CAT tags recent QUARTERLY net income under the fallback tag
+    # `ProfitLoss` while `NetIncomeLoss` (priority 1) carries the annual data. Per-accessor
+    # tag resolution now lets quarterly() fall through to ProfitLoss, so the 4-quarter
+    # direction is computed ('up') instead of being stranded as 'insufficient_points'.
     nit = bundle_for("CAT").get("net_income_trend")
     assert nit.status == MetricStatus.COMPUTED
-    assert nit.components["yoy"] is not None  # headline YoY still correct
-    assert nit.components["four_quarter_direction"] == "insufficient_points"
+    assert nit.components["yoy"] is not None  # headline YoY unchanged
+    assert nit.components["four_quarter_direction"] == "up"
 
 
 # ---- bank: every not_applicable path ---------------------------------------

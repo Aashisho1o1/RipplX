@@ -226,3 +226,71 @@ def test_f15_recall_uses_critical_code_severity_gate():
             if (c := critical_code(f, s))} == {"going_concern"}
     # a natural-language phrasing at critical severity still resolves (no false negative)
     assert critical_code("substantial doubt about going concern", "critical") == "going_concern"
+
+
+# ---- F11: concept->tag resolves PER ACCESSOR (falls through to a usable tag) --
+def test_f11_annual_falls_through_to_usable_fallback_tag():
+    from finwatch.xbrl.normalize import FactStore
+
+    def dur(start, end, val):
+        return {"start": start, "end": end, "val": val, "filed": "2024-02-01", "form": "10-Q"}
+
+    cf = {"cik": "1", "facts": {"us-gaap": {
+        # priority-1 revenue tag carries ONLY a quarter; the fallback carries the annuals
+        "RevenueFromContractWithCustomerExcludingAssessedTax": {"units": {"USD": [
+            dur("2023-10-01", "2023-12-31", 50)]}},
+        "Revenues": {"units": {"USD": [
+            dur("2022-01-01", "2022-12-31", 180), dur("2023-01-01", "2023-12-31", 200)]}}}}}
+    store = FactStore.from_companyfacts(cf)
+    assert [r.fact.value for r in store.annual("revenue")] == [200.0, 180.0]   # fell through
+    assert store.quarterly("revenue")[0].fact.value == 50.0                    # primary tag
+
+
+# ---- F12: valuation history uses period-matched shares/net debt -------------
+class _FlatPrice:
+    def close_on_or_before(self, ticker, date_iso):
+        return 10.0
+
+
+def _pe_facts(share_series):
+    def dur(y, v):
+        return {"start": f"{y}-01-01", "end": f"{y}-12-31", "val": v, "filed": f"{y + 1}-02-01",
+                "form": "10-K"}
+
+    def inst(end, v):
+        return {"end": end, "val": v, "filed": end, "form": "10-K"}
+
+    return {"cik": "1", "facts": {"us-gaap": {
+        "NetIncomeLoss": {"units": {"USD": [dur(y, 100) for y in (2020, 2021, 2022, 2023)]}},
+        "CommonStockSharesOutstanding": {"units": {"shares": [
+            inst(end, v) for end, v in share_series]}}}}}
+
+
+def test_f12_history_uses_period_matched_shares():
+    from finwatch.core.types import sector_from_sic
+    from finwatch.metrics.formulas import valuation_percentile
+    from finwatch.xbrl.normalize import FactStore
+
+    # shares doubled this year -> today's P/E is RICH vs the (period-matched) history.
+    store = FactStore.from_companyfacts(_pe_facts([
+        ("2020-12-31", 100), ("2021-12-31", 100), ("2022-12-31", 100), ("2023-12-31", 200)]))
+    r = valuation_percentile(store, sector_from_sic("7372"), "2024-01-01", ticker="T",
+                             price_provider=_FlatPrice(), multiple="pe")
+    assert r.status.value == "computed"
+    assert r.components["history_capital_structure"] == "period_matched"
+    assert r.confidence == "medium"
+    assert r.value == 100.0        # reusing today's 200 shares would have (wrongly) given 0.0
+
+
+def test_f12_falls_back_to_current_shares_with_low_confidence():
+    from finwatch.core.types import sector_from_sic
+    from finwatch.metrics.formulas import valuation_percentile
+    from finwatch.xbrl.normalize import FactStore
+
+    # only the latest share count exists -> history approximated with it, confidence drops.
+    store = FactStore.from_companyfacts(_pe_facts([("2023-12-31", 200)]))
+    r = valuation_percentile(store, sector_from_sic("7372"), "2024-01-01", ticker="T",
+                             price_provider=_FlatPrice(), multiple="pe")
+    assert r.status.value == "computed"
+    assert r.components["history_capital_structure"] == "current_fallback"
+    assert r.confidence == "low"

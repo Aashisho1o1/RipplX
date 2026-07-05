@@ -471,21 +471,39 @@ def valuation_percentile(store: FactStore, sector: SectorInfo, as_of: str, *,
     cash = store.latest_instant("cash")
     net_debt = ((_val(lt) or 0.0) + (_val(st) or 0.0) - (_val(cash) or 0.0))
 
-    def multiple_value(numer_mcap: float, d: Optional[float]) -> Optional[float]:
+    # Period-matched capital structure for the HISTORY (F12): a prior year's multiple must
+    # use that year's shares (and net debt for EV), not today's. Fall back to current values
+    # only when a year's instant is missing, and drop confidence to low when we do.
+    sh_at = {r.fact.end: r.fact.value for r in store.instant("shares_outstanding", 12)}
+    lt_at = {r.fact.end: r.fact.value for r in store.instant("lt_debt", 12)}
+    st_at = {r.fact.end: r.fact.value for r in store.instant("st_debt", 12)}
+    cash_at = {r.fact.end: r.fact.value for r in store.instant("cash", 12)}
+
+    def _net_debt_at(d_end: str) -> Optional[float]:
+        parts = (lt_at.get(d_end), st_at.get(d_end), cash_at.get(d_end))
+        if all(p is None for p in parts):
+            return None
+        return (parts[0] or 0.0) + (parts[1] or 0.0) - (parts[2] or 0.0)
+
+    def multiple_value(numer_mcap: float, d: Optional[float], nd: float) -> Optional[float]:
         if d is None or d <= 0:
             return None
-        n = numer_mcap + net_debt if multiple == "ev_ebitda" else numer_mcap
+        n = numer_mcap + nd if multiple == "ev_ebitda" else numer_mcap
         return n / d
 
-    current = multiple_value(mcap, denom_at(0))
+    current = multiple_value(mcap, denom_at(0), net_debt)   # index 0 = today (correct)
     if current is None:
         return _unavailable(name, V, as_of, [f"non-positive denominator for {multiple}"])
     history: list[float] = []
+    approximated = False
     for i, d_end in enumerate(ann_dates[1:], start=1):
         p = price_provider.close_on_or_before(ticker, d_end)
         if p is None:
             continue
-        mv = multiple_value(p * sh.fact.value, denom_at(i))
+        sh_i, nd_i = sh_at.get(d_end), _net_debt_at(d_end)
+        if sh_i is None or (multiple == "ev_ebitda" and nd_i is None):
+            sh_i, nd_i, approximated = sh.fact.value, net_debt, True   # current fallback
+        mv = multiple_value(p * sh_i, denom_at(i), nd_i if nd_i is not None else net_debt)
         if mv is not None:
             history.append(mv)
     if len(history) < 3:
@@ -496,9 +514,12 @@ def valuation_percentile(store: FactStore, sector: SectorInfo, as_of: str, *,
     return _res(name, V, as_of, status=MetricStatus.COMPUTED, value=round(pct, 1),
                 components={"current_multiple": round(current, 3),
                             "history_points": len(history),
-                            "history_median": round(sorted(history)[len(history)//2], 3)},
+                            "history_median": round(sorted(history)[len(history)//2], 3),
+                            "history_capital_structure":
+                                "current_fallback" if approximated else "period_matched"},
                 inputs_used=_collect(sh, lt, st, cash),
-                sector_applicability=["general"], confidence="medium")
+                sector_applicability=["general"],
+                confidence="low" if approximated else "medium")
 
 
 def fcf_yield(store, sector, as_of, *, ticker, price_provider) -> MetricResult:

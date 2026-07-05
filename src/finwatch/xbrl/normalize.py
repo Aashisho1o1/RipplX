@@ -81,6 +81,12 @@ _ANNUAL = (300, 400)
 _QUARTER = (60, 120)
 
 
+def _in_window(window):
+    lo, hi = window
+    return lambda f: (not f.is_instant and f.duration_days is not None
+                      and lo <= f.duration_days <= hi)
+
+
 class Fact(BaseModel):
     taxonomy: str
     tag: str
@@ -180,44 +186,41 @@ class FactStore:
         return []
 
     # -- series accessors ---------------------------------------------------
+    # Resolution is PER-ACCESSOR: each accessor scans the concept's priority tags and uses
+    # the FIRST tag that yields facts of the requested period type. A primary tag carrying
+    # only quarterly data therefore falls through to an annual fallback tag for annual()
+    # (F11), instead of resolving the tag once globally and then filtering to nothing.
     def annual(self, concept: str, n: int = 6) -> list[ResolvedFact]:
         """Annual-duration facts, newest first, one per period end."""
-        return self._duration_series(concept, _ANNUAL, n)
+        return self._series(concept, _in_window(_ANNUAL), n)
 
     def quarterly(self, concept: str, n: int = 10) -> list[ResolvedFact]:
-        return self._duration_series(concept, _QUARTER, n)
+        return self._series(concept, _in_window(_QUARTER), n)
 
     def instant(self, concept: str, n: int = 6) -> list[ResolvedFact]:
         """Instant facts, newest first, one per date."""
-        rows = [r for r in self._facts_for(concept) if r.fact.is_instant]
-        rows.sort(key=lambda r: r.fact.end or "", reverse=True)
-        seen, out = set(), []
-        for r in rows:
-            if r.fact.end in seen:
-                continue
-            seen.add(r.fact.end)
-            out.append(r)
-            if len(out) >= n:
-                break
-        return out
+        return self._series(concept, lambda f: f.is_instant, n)
 
-    def _duration_series(self, concept: str, window: tuple[int, int],
-                         n: int) -> list[ResolvedFact]:
-        lo, hi = window
-        rows = [r for r in self._facts_for(concept)
-                if not r.fact.is_instant
-                and r.fact.duration_days is not None
-                and lo <= r.fact.duration_days <= hi]
-        rows.sort(key=lambda r: r.fact.end or "", reverse=True)
-        seen, out = set(), []
-        for r in rows:
-            if r.fact.end in seen:
+    def _series(self, concept: str, keep, n: int) -> list[ResolvedFact]:
+        """Deduped (by period-end, newest first) series from the first priority tag whose
+        facts pass `keep`."""
+        for taxo, tag in self._tags_for(concept):
+            rows = [ResolvedFact(concept=concept, fact=f)
+                    for f in self._by_tag.get((taxo, tag), ()) if keep(f)]
+            if not rows:
                 continue
-            seen.add(r.fact.end)
-            out.append(r)
-            if len(out) >= n:
-                break
-        return out
+            rows.sort(key=lambda r: r.fact.end or "", reverse=True)
+            seen: set = set()
+            out: list[ResolvedFact] = []
+            for r in rows:
+                if r.fact.end in seen:
+                    continue
+                seen.add(r.fact.end)
+                out.append(r)
+                if len(out) >= n:
+                    break
+            return out
+        return []
 
     # -- convenience ---------------------------------------------------------
     def latest_annual(self, concept: str) -> Optional[ResolvedFact]:
