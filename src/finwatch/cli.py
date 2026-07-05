@@ -125,12 +125,85 @@ def watch(
     )
 
 
+def _require_models(cfg: Config) -> None:
+    if not cfg.model_extract or not cfg.model_reason:
+        console.print(
+            "[red]LLM models not configured.[/] Set [bold]FINWATCH_MODEL_EXTRACT[/] and "
+            "[bold]FINWATCH_MODEL_REASON[/] (litellm model strings) in your .env to run the "
+            "analysis pipeline. No key is needed for [bold]finwatch demo[/]."
+        )
+        raise typer.Exit(code=1)
+
+
+def _run_pipeline(cfg: Config, *, cik: str | None, limit: int | None):
+    """Build the production Orchestrator (real EdgarClient + LiteLLM) and process every
+    not-yet-analyzed filing (optionally one CIK / capped). Returns the result list."""
+    from pathlib import Path
+
+    from finwatch.db import Repo, init_db
+    from finwatch.ingest import EdgarClient
+    from finwatch.llm.router import LiteLLMClient
+    from finwatch.pipeline.run import build_orchestrator, process_tracked
+
+    conn = init_db(cfg.db_path)
+    repo = Repo(conn)
+    cache_dir = Path(cfg.db_path).parent / "cache" if cfg.db_path != ":memory:" else None
+    edgar = EdgarClient(cfg.sec_user_agent, cache_dir=cache_dir)
+    orch = build_orchestrator(
+        repo, llm_extract=LiteLLMClient(cfg.model_extract),
+        llm_reason=LiteLLMClient(cfg.model_reason),
+        companyfacts_provider=lambda c: edgar.companyfacts(c), price_provider=repo,
+        model_extract=cfg.model_extract, model_reason=cfg.model_reason)
+
+    def fetch_html(url: str) -> str:
+        return edgar.fetch_primary_doc(url).decode("utf-8", "replace")
+
+    try:
+        return process_tracked(repo, orch, fetch_html, cik=cik, limit=limit)
+    finally:
+        edgar.close()
+        conn.close()
+
+
+def _print_pipeline_results(results) -> None:
+    for r in results:
+        if r.ok:
+            mark = "[yellow]⚠ manual review[/]" if r.manual_review else f"[green]{r.verdict}[/]"
+            console.print(f"[green]✓[/] {r.ticker} {r.accession} — {mark}")
+        else:
+            console.print(f"[yellow]![/] {r.ticker} {r.accession} — [red]{r.error}[/]")
+    ok = sum(1 for r in results if r.ok)
+    console.print(f"[bold]Processed {ok}/{len(results)} filing(s).[/] "
+                  f"Run [bold]finwatch digest[/] to see the report.")
+
+
 @app.command()
 def analyze(
-    ticker: str = typer.Argument(..., help="Ticker to analyze ad-hoc."),
+    ticker: str = typer.Argument(..., help="Ticker to analyze (must be tracked + ingested)."),
+    limit: int | None = typer.Option(
+        None, "--limit", help="Max filings to analyze (default: all not-yet-analyzed)."),
 ) -> None:
-    """Ad-hoc analysis with watch semantics (not persisted)."""
-    _stub("Phase 5")
+    """Run the analysis pipeline over a tracked ticker's ingested filings (watch semantics
+    if it is not an owned holding); does not add a holding."""
+    from finwatch.db import Repo, init_db
+
+    cfg = _config_or_exit()
+    _require_models(cfg)
+    conn = init_db(cfg.db_path)
+    company = Repo(conn).get_company_by_ticker(ticker)
+    conn.close()
+    if company is None:
+        console.print(
+            f"[red]{ticker} is not tracked.[/] Run [bold]finwatch watch {ticker}[/] "
+            f"(or [bold]finwatch add {ticker} ...[/]) then [bold]finwatch ingest[/] first."
+        )
+        raise typer.Exit(code=1)
+    results = _run_pipeline(cfg, cik=company.cik, limit=limit)
+    if not results:
+        console.print(f"No un-analyzed filings for {ticker}. Run [bold]finwatch ingest[/] "
+                      f"to pull new filings.")
+        return
+    _print_pipeline_results(results)
 
 
 @app.command()
@@ -171,6 +244,36 @@ def ingest(
         f"[bold]Ingest complete:[/] {summary.companies} companies, "
         f"{summary.filings} filings, {summary.xbrl_facts} XBRL facts, {summary.prices} prices."
     )
+
+
+@app.command()
+def process(
+    ticker: str | None = typer.Option(
+        None, "--ticker", help="Only process this tracked ticker's filings."),
+    limit: int | None = typer.Option(
+        None, "--limit", help="Max filings to process this run."),
+) -> None:
+    """Run the analysis pipeline (P0→P1→metrics→P2→verify→P3) over ingested-but-not-yet-
+    analyzed filings, persisting the analyses the digest renders from."""
+    from finwatch.db import Repo, init_db
+
+    cfg = _config_or_exit()
+    _require_models(cfg)
+    cik = None
+    if ticker:
+        conn = init_db(cfg.db_path)
+        company = Repo(conn).get_company_by_ticker(ticker)
+        conn.close()
+        if company is None:
+            console.print(f"[red]{ticker} is not tracked.[/] "
+                          f"[bold]finwatch watch {ticker} && finwatch ingest[/] first.")
+            raise typer.Exit(code=1)
+        cik = company.cik
+    results = _run_pipeline(cfg, cik=cik, limit=limit)
+    if not results:
+        console.print("No un-analyzed filings. Run [bold]finwatch ingest[/] to pull filings.")
+        return
+    _print_pipeline_results(results)
 
 
 @app.command()
@@ -245,8 +348,26 @@ def eval(
 def verify(
     accession: str = typer.Argument(..., help="Accession number to re-verify."),
 ) -> None:
-    """Re-run the deterministic verifier on a stored analysis."""
-    _stub("Phase 4")
+    """Re-run the deterministic verifier (V1/V4/V5) on a stored analysis — offline, from
+    the DB, no LLM or network."""
+    from finwatch.db import Repo, init_db
+    from finwatch.pipeline.run import reverify
+
+    cfg = _config_or_exit()
+    conn = init_db(cfg.db_path)
+    try:
+        report = reverify(Repo(conn), accession)
+    finally:
+        conn.close()
+    if report is None:
+        console.print(f"[red]No stored analysis for {accession}.[/] "
+                      f"Run [bold]finwatch process[/] first.")
+        raise typer.Exit(code=1)
+    colour = {"PASS": "green", "PASS_WITH_WARNINGS": "yellow", "FAIL": "red"}[report.verdict]
+    console.print(f"[{colour}]{report.verdict}[/] — {accession}")
+    for c in report.results:
+        console.print(f"  {c.check_id}: {c.verdict}"
+                      + (f" — {c.detail}" if c.detail else ""))
 
 
 @app.command()
