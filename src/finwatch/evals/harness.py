@@ -16,6 +16,7 @@ from finwatch.evals.golden import GoldenCase, load_case_html, load_manifest, loa
 from finwatch.llm.router import FakeLLMClient, LLMClient
 from finwatch.llm.stages import P1Extractor, StageError
 from finwatch.metrics.envelope import MetricsBundle
+from finwatch.pipeline.adapters import critical_code
 from finwatch.pipeline.orchestrator import assemble_verify_bundle
 from finwatch.verify.checks import run_all
 
@@ -127,7 +128,11 @@ def score_case(case: GoldenCase, llm: LLMClient, html: str, *, now: str = "eval"
         return CaseScore(case.id, case.category, recall, json_valid=False,
                          verifier_pass=False, false_alarm=false_alarm)
 
-    found = {rf.flag for rf in p1.red_flags}
+    # Score recall through the REAL adapter (F15): the golden gate must measure what the
+    # matrix's M1 actually sees — critical_code applies the severity gate — so a model that
+    # emits the right flag at LOW severity (which the adapter drops, so M1 never fires) does
+    # NOT pass, and one that phrases the flag naturally ("substantial doubt…") still does.
+    found = {c for rf in p1.red_flags if (c := critical_code(rf.flag, rf.severity)) is not None}
     expected = set(case.expected_critical_flags)
     recall = 1.0 if not expected else len(expected & found) / len(expected)
     false_alarm = case.category == "boring" and (

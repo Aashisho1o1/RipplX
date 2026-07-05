@@ -211,14 +211,8 @@ class Orchestrator:
             )
             decision = signal.decision
 
-        # --- verify (V1/V4/V5; + V3 re-derivation when a P3 decision exists) --
-        # The verifier gates the LLM OUTPUT — the failure modes regeneration can fix.
-        # store/sector (→ V2 accounting identities) are deliberately NOT passed: V2
-        # validates the XBRL *data*, which re-running the LLM can never repair, and the
-        # Tier 1 V2b cash tie-out systematically false-fails on quarterly-latest filings
-        # (it compares instant_pair("cash") — the latest quarter-ends — against
-        # latest_annual("cash_change"), a different period). V2 belongs to a separate
-        # data-quality audit, not the per-filing analysis gate. (Flagged to the operator.)
+        # --- verify: LLM-gate (V1/V4/V5 + V3) WITH regeneration ---------------
+        # This gate covers the failure modes regenerating an LLM stage can fix.
         bundle = assemble_verify_bundle(
             p1_out, p2_out, metrics,
             section_texts_from_repo(self.repo, filing.accession_number),
@@ -230,10 +224,23 @@ class Orchestrator:
         # A recorded/deterministic response cannot self-repair, so give up immediately
         # and route to manual review; a live pipeline supplies a real stage re-run here.
         outcome = run_with_regeneration(bundle, lambda _r, _n: None)
-        persist_report(self.repo, p1_aid, outcome.report, created_at=self._now_fn())
+
+        # --- data-quality audit: V2 accounting identities (F10) ---------------
+        # V2 validates the XBRL DATA, which re-running an LLM stage can never repair, so it
+        # runs OUTSIDE the regeneration loop. V2a (A=L+E) and V2c (Rev≥GP≥OpInc) run on every
+        # filing; V2b (cash tie-out) only on annual filings (it compares a fiscal-year change).
+        v2 = self.metrics_service.data_quality(
+            filing.cik, as_of=as_of, form_type=filing.form_type)
+        combined = list(outcome.report.results) + list(v2)
+        blocking = any(c.verdict == "fail" and c.severity == "blocking" for c in combined)
+        warns = any(c.verdict == "warn" for c in combined)
+        report = VerificationReport(
+            verdict="FAIL" if blocking else "PASS_WITH_WARNINGS" if warns else "PASS",
+            results=combined)
+        persist_report(self.repo, p1_aid, report, created_at=self._now_fn())
 
         return FilingAnalysis(
             accession_number=filing.accession_number, ticker=ticker, p1=p1_out,
             p1_analysis_id=p1_aid, metrics=metrics, p2=p2_out,
-            verification=outcome.report, manual_review=outcome.manual_review, signal=signal,
+            verification=report, manual_review=report.verdict == "FAIL", signal=signal,
         )

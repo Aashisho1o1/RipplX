@@ -143,3 +143,86 @@ def test_f9_dollar_target_form_is_caught_without_false_positive():
     assert any(c.verdict == "fail" for c in _v5("We assign a $50 target."))
     assert any(c.verdict == "fail" for c in _v5("price target of $50"))
     assert all(c.verdict == "pass" for c in _v5("drifting above its target weight"))
+
+
+# ---- F4: point-in-time — historical analyses never use future-filed facts ---
+def test_f4_as_of_excludes_facts_filed_after_the_cutoff():
+    from finwatch.metrics.service import as_of_facts
+    from finwatch.xbrl.normalize import FactStore
+
+    def fy(end, val, filed):
+        return {"end": end, "val": val, "filed": filed, "fy": int(end[:4]), "fp": "FY",
+                "form": "10-K"}
+
+    cf = {"cik": "1", "entityName": "X", "facts": {"us-gaap": {"Revenues": {"units": {"USD": [
+        fy("2022-12-31", 100, "2023-02-01"),
+        fy("2023-12-31", 200, "2024-02-01"),
+        fy("2024-12-31", 300, "2025-02-01"),   # filed AFTER the as_of below
+    ]}}}}}
+    filtered = as_of_facts(cf, "2024-06-01")
+    kept = {e["end"] for e in filtered["facts"]["us-gaap"]["Revenues"]["units"]["USD"]}
+    assert kept == {"2022-12-31", "2023-12-31"}         # the 2025-filed fact is excluded
+    store = FactStore.from_companyfacts(filtered)
+    assert store.latest_annual("revenue").fact.value == 200.0   # not 300 (a future filing)
+
+
+# ---- F10: V2 accounting identities run (V2b annual-gated, V2a alignment-gated) --
+def _bs(a_end, l_end, e_end, a, l, e):
+    def inst(end, val):
+        return {"end": end, "val": val, "filed": "2024-02-01", "fy": 2023, "fp": "FY",
+                "form": "10-K"}
+    return {"cik": "1", "entityName": "X", "facts": {"us-gaap": {
+        "Assets": {"units": {"USD": [inst(a_end, a)]}},
+        "Liabilities": {"units": {"USD": [inst(l_end, l)]}},
+        "StockholdersEquity": {"units": {"USD": [inst(e_end, e)]}}}}}
+
+
+def test_f10_v2_runs_with_annual_and_alignment_gates():
+    from finwatch.core.types import sector_from_sic
+    from finwatch.verify.orchestrator import data_quality_report
+    from finwatch.xbrl.normalize import FactStore
+
+    def audit(cf, form):
+        store = FactStore.from_companyfacts(cf)
+        return {r.check_id: r for r in data_quality_report(store, sector_from_sic("7372"),
+                                                           form_type=form)}
+
+    aligned = audit(_bs("2023-12-31", "2023-12-31", "2023-12-31", 100, 60, 40), "10-Q")
+    assert aligned["V2a"].verdict == "pass"                          # A = L + E, same period
+    assert aligned["V2b"].verdict == "skipped_not_applicable"        # 10-Q -> V2b n/a
+
+    misaligned = audit(_bs("2023-12-31", "2023-12-31", "2022-12-31", 100, 60, 40), "10-Q")
+    assert misaligned["V2a"].verdict == "skipped_not_applicable"     # different period-ends
+
+    imbalanced = audit(_bs("2023-12-31", "2023-12-31", "2023-12-31", 100, 60, 50), "10-K")
+    assert imbalanced["V2a"].verdict == "fail"                       # real A != L + E, aligned
+
+
+# ---- F13: incomplete price coverage -> weights unavailable ------------------
+def test_f13_unpriced_holding_makes_portfolio_weights_unavailable():
+    from finwatch.db import Company, Holding, Price, Repo, init_db
+    from finwatch.metrics.service import MetricsService
+
+    repo = Repo(init_db(":memory:"))
+    for cik, tkr in (("1", "AAA"), ("2", "BBB")):
+        repo.upsert_company(Company(cik=cik, ticker=tkr, sic_code="7372", is_financial=0,
+                                    added_at="t"))
+        repo.upsert_holding(Holding(cik=cik, ticker=tkr, owned=1, shares=10, cost_basis=1.0,
+                                    added_at="t"))
+    repo.upsert_prices([Price(ticker="AAA", date="2024-01-01", close=100.0)])   # BBB unpriced
+    svc = MetricsService(repo, repo, lambda _c: {"facts": {}}, now_fn=lambda: "t")
+    assert svc._portfolio_market_value("2024-06-01") is None        # incomplete coverage
+    repo.upsert_prices([Price(ticker="BBB", date="2024-01-01", close=100.0)])
+    assert svc._portfolio_market_value("2024-06-01") == 2000.0      # both priced
+
+
+# ---- F15: golden gate scores recall through the real severity-gated adapter --
+def test_f15_recall_uses_critical_code_severity_gate():
+    from finwatch.pipeline.adapters import critical_code
+
+    # the harness now computes found = {critical_code(flag, severity) ...}
+    assert {c for (f, s) in [("going_concern", "low")] if (c := critical_code(f, s))} == set()
+    assert {c for (f, s) in [("going_concern", "critical")]
+            if (c := critical_code(f, s))} == {"going_concern"}
+    # a natural-language phrasing at critical severity still resolves (no false negative)
+    assert critical_code("substantial doubt about going concern", "critical") == "going_concern"

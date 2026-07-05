@@ -44,12 +44,12 @@ _Computed by versioned deterministic formulas from SEC XBRL facts (never by the 
 ### MSFT
 | Metric | Value | Formula | ✓ |
 |---|---|---|---|
-| Revenue growth | +14.9% YoY (TTM revenue $311.9B) | `revenue_growth.v1` | ✓ |
-| Net income trend | +15.5% YoY · 4-quarter direction mixed | `net_income_trend.v1` | ✓ |
-| Operating cash flow | +14.9% YoY · 4-quarter direction mixed | `cfo_trend.v1` | ✓ |
-| Liquidity | cash $32.1B · net debt $8.2B · current ratio 1.28 | `liquidity_basics.v1` | ✓ |
-| Share count Δ | -0.1% YoY (buyback) | `share_count_change.v1` | ✓ |
-| Leverage | net debt/EBITDA 0.05× · interest coverage 43.79× | `simple_leverage.v1` | ✓ |
+| Revenue growth | +17.5% YoY (TTM revenue $205.1B) | `revenue_growth.v1` | ✓ |
+| Net income trend | +38.4% YoY · 4-quarter direction mixed | `net_income_trend.v1` | ✓ |
+| Operating cash flow | +26.5% YoY · 4-quarter direction mixed | `cfo_trend.v1` | ✓ |
+| Liquidity | cash $19.6B · net debt $25.3B · current ratio 1.24 | `liquidity_basics.v1` | ✓ |
+| Share count Δ | +0.0% YoY (dilution) | `share_count_change.v1` | ✓ |
+| Leverage | net debt/EBITDA 0.32× · interest coverage 29.80× | `simple_leverage.v1` | ✓ |
 
 ## Open questions
 

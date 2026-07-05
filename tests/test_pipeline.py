@@ -86,8 +86,9 @@ def test_pipeline_end_to_end_passes_and_persists():
     assert len(repo.list_analysis_claims(fa.p1_analysis_id)) == 1
 
 
-def test_pipeline_verify_skips_v2_and_v3():
-    # V2 (data identities) and V3 (P3 decision) are not part of the per-filing LLM gate.
+def test_pipeline_runs_v2_data_quality_and_skips_v3_without_decision():
+    # V2 accounting identities now run as a data-quality audit (F10); V3 is skipped when
+    # there is no P3 decision (no owned holding persisted here).
     repo = Repo(init_db(":memory:"))
     _seed(repo)
     fa = _orchestrator(repo).process_html(
@@ -95,9 +96,10 @@ def test_pipeline_verify_skips_v2_and_v3():
         records=[{"ticker": "MSFT", "owned": True, "shares": 100, "cost_basis": 300.0}])
     ids = {c.check_id for c in fa.verification.results}
     assert "V1" in ids and "V4" in ids and "V5" in ids
-    assert not any(i.startswith("V2") for i in ids)  # store/sector not passed
+    assert {"V2a", "V2b", "V2c"} <= ids                 # V2 audit is present now
     v3 = next(c for c in fa.verification.results if c.check_id == "V3")
     assert v3.verdict == "skipped_not_applicable"
+    assert fa.verification.verdict in ("PASS", "PASS_WITH_WARNINGS")
 
 
 def test_p2_gate_on_severity_and_red_flags():
