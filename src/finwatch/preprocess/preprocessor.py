@@ -121,6 +121,17 @@ class Preprocessor:
     def _risk_factor_diff(
         self, cik: str, form_type: str, filed_at: str, sections: list[FilingSection]
     ) -> RiskFactorDiff | None:
+        """Diff this filing's risk section against the PRIOR COMPARABLE filing — same base
+        form + same canonical section key (a 10-K's `risk_factors` vs the prior 10-K's; a
+        10-Q's `risk_factor_changes` vs the prior 10-Q's).
+
+        Design note (F14): a 10-Q's Part II Item 1A is, by SEC rule, only the *material
+        changes vs the latest 10-K*, so the section is ALREADY a delta and P1 treats any
+        content in it as inherently notable (§11 T2). Diffing that small delta against the
+        full 10-K `risk_factors` would produce a large, low-signal diff (the whole 10-K
+        reading as "removed", the whole delta as "added"); diffing delta-vs-prior-delta is
+        the more informative comparison. So comparing like-for-like base forms is deliberate,
+        not an oversight — a 10-Q intentionally does not diff against the 10-K here."""
         key = _RISK_SECTION_KEY.get(form_family(form_type))
         if key is None:
             return None

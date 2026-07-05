@@ -56,6 +56,14 @@ broken thesis, and — behind `--signals` — the shadow signal engine.
 - [x] **Phase 7** — Digest + demo + release polish: deterministic markdown renderer
       (reproducible from the DB, no LLM at render time), `finwatch demo` (zero-key, bundled
       fixtures), `finwatch digest [--since] [--until] [--signals] [--out]`, and this README.
+- [x] **Review hardening (post-v0.2)** — an external adversarial review drove fixes across the
+      trust layer: the production pipeline is now wired into the CLI (`process`/`analyze`/
+      `verify`); the verifier no longer skips V2 accounting identities, re-derives the full P3
+      decision (V3), is sign-aware (V1) and catches the `$N target` price form (V5), and now
+      scans P3 rationale prose; XBRL is point-in-time (no future-filed facts) with per-accessor
+      tag resolution and period-matched valuation history; LLM output contracts (vocabularies +
+      claim graph) are enforced by the schemas; and several signal-matrix edge cases were
+      corrected. See the `fix:`/`feat:` commits for the finding-by-finding detail.
 
 ## Quickstart (development)
 
@@ -75,14 +83,21 @@ SEC_USER_AGENT="Your Name your-email@example.com"
 The SEC requires this header for all API access; finwatch refuses to make network calls
 without it.
 
-Then track holdings and ingest their filings + financials:
+Then track holdings, pull their filings, run the analysis pipeline, and read the digest:
 
 ```bash
 uv run finwatch init                              # create the database
 uv run finwatch add AAPL --shares 10 --cost 150   # owned holding (thesis optional)
 uv run finwatch watch MSFT                         # track without ownership
 uv run finwatch ingest                             # pull filings, XBRL facts, EOD prices
+uv run finwatch process                            # run P0→P1→metrics→P2→verify→P3, persist analyses
+uv run finwatch digest                             # render the markdown digest from the DB
 ```
+
+`process` (and `analyze TICKER`) run the LLM stages, so set the model strings in `.env`
+(`FINWATCH_MODEL_EXTRACT`, `FINWATCH_MODEL_REASON` — any litellm model string). `ingest` and
+`digest` need no model; `finwatch demo` needs no config at all. `finwatch verify ACCESSION`
+re-runs the deterministic verifier on a stored analysis offline.
 
 > **Dev note:** if `uv run finwatch` can't import the package (a uv/`site` editable-install
 > quirk on some Python builds), reinstall it non-editable: `uv sync --no-editable`. Tests are
