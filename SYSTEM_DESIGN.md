@@ -13,9 +13,7 @@ critical code). Precedence for the building agent:
 
 Every file in the repository belongs to exactly one tier:
 
-- **⚙ TIER 1 — PRE-WRITTEN (transcribe verbatim from CORE_CODE.md).** The trust layer. Do not
-  refactor, rename, reorder, "improve," or reformat. Build everything else to fit these.
-  If an interface genuinely cannot work, STOP and report to the operator — do not adapt the core.
+- **⚙ TIER 1 — PRE-WRITTEN (transcribe verbatim from CORE_CODE.md).** 
 - **🔧 TIER 2 — GUIDED BUILD.** Build per the detailed specs in CLAUDE.md §§5–7, 10–12, 15–16.
   Interfaces touching Tier 1 are fixed contracts (see §4 below).
 - **🧱 TIER 3 — FREE BUILD.** Standard engineering; agent's discretion within CLAUDE.md rules
