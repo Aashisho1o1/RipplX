@@ -43,7 +43,16 @@ def data_quality_report(
     V2a compares three concepts, each resolved to its own latest instant, so it is only
     meaningful when all three land on the SAME period-end; when they don't (e.g. a concept
     was last reported in a different period), a blocking V2a is reclassified
-    skipped_not_applicable rather than false-failing across mismatched dates."""
+    skipped_not_applicable rather than false-failing across mismatched dates.
+
+    NON-BLOCKING by design: any remaining V2 failure is surfaced as a data-quality WARNING,
+    never a blocking failure. V2 validates the XBRL DATA — which re-running an LLM stage can
+    never repair — and the raw identities false-fail on legitimate accounting structures too
+    often to quarantine a whole filing on them: A=L+E uses parent-only StockholdersEquity so
+    it breaks for any consolidated issuer with noncontrolling interest, and the cash tie-out
+    compares unrestricted balance-sheet cash against the restricted-cash-inclusive cash-flow
+    reconciliation (ASU 2016-18). So V2 informs the digest (open questions) without
+    suppressing the independently-verified qualitative analysis (fewer/sharper alerts)."""
     annual = (form_type or "").upper().split("/")[0] in _ANNUAL_FORMS
     v2a_aligned = _balance_sheet_aligned(store)
     out: list[CheckResult] = []
@@ -60,6 +69,10 @@ def data_quality_report(
                 check_id="V2b", verdict="skipped_not_applicable", severity="info",
                 detail="cash tie-out compares the fiscal-year change; not applicable on a "
                        "non-annual filing (latest cash instant is a quarter-end)"))
+        elif r.verdict == "fail":
+            # data-quality signal, not a blocking gate (see docstring)
+            out.append(CheckResult(check_id=r.check_id, verdict="warn", severity="warning",
+                                   detail=r.detail))
         else:
             out.append(r)
     return out

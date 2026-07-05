@@ -125,6 +125,35 @@ def test_process_reports_errors_without_aborting():
     assert repo2.get_filing(ACCN).status == "failed"
 
 
+def test_transient_failure_is_retried_and_not_rendered_clean():
+    # Remediation-review regression: P1 commits before P2/P3, so a transient error in a later
+    # stage must (a) mark the filing 'failed' and retry it next run — never permanently skip a
+    # filing that has a P1 — and (b) NOT render the half-analyzed filing as a clean result.
+    repo = Repo(init_db(":memory:"))
+    _seed(repo)
+
+    def flaky(system, _user):
+        if "portfolio manager and risk officer" in system:
+            raise RuntimeError("rate limited (429)")     # P2 blows up after P1 committed
+        if "chair the investment committee" in system:
+            return _P3
+        return _P1
+
+    llm = FakeLLMClient(responder=flaky)
+    orch = build_orchestrator(repo, llm_extract=llm, llm_reason=llm,
+                              companyfacts_provider=lambda _c: MSFT_CF, price_provider=repo,
+                              model_extract="x", model_reason="r", now_fn=lambda: "t")
+    r = process_tracked(repo, orch, fetch_html=lambda _u: TENQ, now_fn=lambda: "t")
+    assert not r[0].ok and "pipeline failed" in r[0].error
+    assert repo.get_filing(ACCN).status == "failed"
+    assert repo.latest_analysis(ACCN, "P1") is not None       # P1 was committed
+    # retried, not stranded, on the next run
+    assert [f.accession_number for f in unanalyzed_filings(repo)] == [ACCN]
+    # digest flags it, does not present it as clean
+    md = render_digest(repo, since="2024-01-01").markdown
+    assert "manual review required" in md
+
+
 def test_reverify_reruns_from_db_offline():
     repo = Repo(init_db(":memory:"))
     _seed(repo)

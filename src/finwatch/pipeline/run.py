@@ -75,10 +75,16 @@ def holding_records(repo: Repo) -> list[dict]:
     ]
 
 
+# A filing is "done" only once the pipeline completed and the verifier ran. Anything else —
+# never started ('fetched'/'sectioned') or errored mid-pipeline ('failed') — is retried, so a
+# transient P2/P3/network error does not permanently strand a half-analyzed filing (its P1 is
+# committed before later stages run, so a P1-present check would wrongly skip it forever).
+_DONE_STATUS = frozenset({"verified", "analyzed"})
+
+
 def unanalyzed_filings(repo: Repo, cik: str | None = None) -> list[Filing]:
-    """Filings with no P1 analysis yet (oldest first, so history builds in order)."""
-    todo = [f for f in repo.list_filings(cik)
-            if repo.latest_analysis(f.accession_number, "P1") is None]
+    """Filings not yet fully analyzed + verified (oldest first, so history builds in order)."""
+    todo = [f for f in repo.list_filings(cik) if f.status not in _DONE_STATUS]
     todo.sort(key=lambda f: (f.filed_at, f.accession_number))
     return todo
 

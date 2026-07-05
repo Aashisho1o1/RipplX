@@ -49,6 +49,7 @@ class _FilingView:
     p3: P3Output | None
     claims: dict[str, Claim]             # claim_id -> P1 claim (original ids + provenance)
     manual_review: bool
+    data_quality: list[tuple[str, str]] = field(default_factory=list)  # (check_id, detail) warns
 
     @property
     def ticker(self) -> str:
@@ -147,11 +148,18 @@ def _load_view(repo: Repo, filing: Filing) -> _FilingView:
     # persisted analysis_claims rows namespace the ids, which would not match red_flag refs.
     claims = {c.claim_id: c for c in p1.claims} if p1 else {}
     manual = False
+    data_quality: list[tuple[str, str]] = []
     if p1a:
-        manual = any(v.verdict == "fail" and v.severity == "blocking"
-                     for v in repo.list_verification_results(p1a.id))
+        vers = repo.list_verification_results(p1a.id)
+        manual = any(v.verdict == "fail" and v.severity == "blocking" for v in vers)
+        # A filing whose pipeline errored after P1 committed (status 'failed') is INCOMPLETE —
+        # never render its half-finished analysis as a clean, verified result.
+        if filing.status == "failed":
+            manual = True
+        data_quality = [(v.check_id, v.detail or "") for v in vers if v.verdict == "warn"]
     return _FilingView(filing, repo.get_company(filing.cik),
-                       repo.get_holding_by_cik(filing.cik), p1, p2, p3, claims, manual)
+                       repo.get_holding_by_cik(filing.cik), p1, p2, p3, claims, manual,
+                       data_quality)
 
 
 def _evidence_snippet(view: _FilingView, claim_ids: list[str]) -> str | None:
@@ -355,6 +363,8 @@ def _open_questions_section(views: list[_FilingView]) -> list[str]:
         if v.p3 is not None:
             for sk in v.p3.rules_skipped:
                 items.append(f"- {v.ticker}: rule {sk.rule} not evaluated — {sk.reason}")
+        for check_id, detail in v.data_quality:
+            items.append(f"- {v.ticker}: data-quality check {check_id} — {detail}")
         if v.manual_review:
             items.append(f"- {v.ticker}: automated verification failed — manual review required")
     if not items:

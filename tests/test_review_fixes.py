@@ -194,8 +194,34 @@ def test_f10_v2_runs_with_annual_and_alignment_gates():
     misaligned = audit(_bs("2023-12-31", "2023-12-31", "2022-12-31", 100, 60, 40), "10-Q")
     assert misaligned["V2a"].verdict == "skipped_not_applicable"     # different period-ends
 
+    # A real, aligned imbalance is surfaced as a non-blocking WARNING, not a blocking fail:
+    # V2 validates DATA and the raw identities false-fail on legitimate structures (NCI in
+    # equity, restricted cash) too often to quarantine a whole filing on them.
     imbalanced = audit(_bs("2023-12-31", "2023-12-31", "2023-12-31", 100, 60, 50), "10-K")
-    assert imbalanced["V2a"].verdict == "fail"                       # real A != L + E, aligned
+    assert imbalanced["V2a"].verdict == "warn" and imbalanced["V2a"].severity == "warning"
+
+
+def test_review_v2_nci_imbalance_does_not_block_the_filing():
+    # Remediation-review regression: a healthy consolidated issuer with noncontrolling
+    # interest (A = L + parent-equity + NCI) breaks the parent-only A=L+E identity, but must
+    # NOT escalate to manual review — it is a data-quality warning only.
+    from finwatch.core.types import sector_from_sic
+    from finwatch.verify.checks import run_all
+    from finwatch.verify.orchestrator import data_quality_report
+    from finwatch.xbrl.normalize import FactStore
+
+    store = FactStore.from_companyfacts(
+        _bs("2024-12-31", "2024-12-31", "2024-12-31", 10000, 6000, 3600))  # 400 of NCI
+    v2 = data_quality_report(store, sector_from_sic("7372"), form_type="10-K")
+    assert {r.check_id for r in v2} >= {"V2a"}
+    assert all(not (r.verdict == "fail" and r.severity == "blocking") for r in v2)
+    # combined with a clean LLM-gate report, the verdict is not FAIL (no manual review)
+    from finwatch.metrics.envelope import MetricsBundle
+    from finwatch.verify.checks import VerifyBundle
+    llm_gate = run_all(VerifyBundle(rendered_text="", metrics=MetricsBundle(),
+                                    disclaimer_text=DISCLAIMER, trade_action=None))
+    combined = list(llm_gate.results) + list(v2)
+    assert not any(c.verdict == "fail" and c.severity == "blocking" for c in combined)
 
 
 # ---- F13: incomplete price coverage -> weights unavailable ------------------
