@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 
 from finwatch.db.repositories import Company, Filing, Holding, Repo, SignalShadowLog
 from finwatch.llm.schemas import Claim, P1Output, P2Output, P3Output
-from finwatch.metrics.envelope import MetricResult
+from finwatch.metrics.envelope import MetricResult, MetricsBundle
 
 # Starter-set metrics surfaced in the digest (CLAUDE.md §9 "conservative surface").
 _STARTER = ("revenue_growth", "net_income_trend", "cfo_trend", "liquidity_basics",
@@ -94,8 +94,9 @@ def _date(iso: str | None) -> str:
     return (iso or "")[:10]
 
 
-def _metric_summary(r: MetricResult) -> str:
-    """One-line human summary of a computed starter metric."""
+def format_metric_value(r: MetricResult) -> str:
+    """One-line human summary of a computed metric's value (shared by the digest table and
+    the ``finwatch metrics`` CLI so the two never drift)."""
     c = r.components
     m = r.metric
     if m == "revenue_growth":
@@ -343,13 +344,41 @@ def _metric_rows(results: list[MetricResult]) -> list[str]:
     for r in results:
         label = _STARTER_LABELS.get(r.metric, r.metric)
         if r.status.value == "computed":
-            rows.append(f"| {label} | {_metric_summary(r)} | `{r.formula_version}` | ✓ |")
+            rows.append(f"| {label} | {format_metric_value(r)} | `{r.formula_version}` | ✓ |")
         elif r.status.value == "not_applicable":
             reason = r.not_applicable_reason or "not applicable for this issuer"
             rows.append(f"| {label} | n/a — {reason} | `{r.formula_version}` | — |")
         else:  # unavailable
             missing = ", ".join(r.unavailable_missing) or "missing data"
             rows.append(f"| {label} | unavailable — {missing} | `{r.formula_version}` | — |")
+    return rows
+
+
+def metric_view_rows(
+    bundle: MetricsBundle, *, show_all: bool
+) -> list[tuple[str, str, str, str]]:
+    """Display rows ``(label, value, formula_version, ✓|—)`` for the ``finwatch metrics`` CLI.
+
+    Default = the digest's conservative starter surface (``_STARTER``); ``show_all`` = every
+    metric in the bundle, computed first. Shares metric selection and value formatting with the
+    digest's ``_verified_numbers_section`` so terminal output and the markdown digest can't drift.
+    """
+    if show_all:
+        results = sorted(bundle.all_results(), key=lambda r: (not r.computed, r.metric))
+    else:
+        by_name = {r.metric: r for r in bundle.all_results()}
+        results = [by_name[n] for n in _STARTER if n in by_name]
+    rows: list[tuple[str, str, str, str]] = []
+    for r in results:
+        label = _STARTER_LABELS.get(r.metric, r.metric)
+        if r.status.value == "computed":
+            rows.append((label, format_metric_value(r), r.formula_version, "✓"))
+        elif r.status.value == "not_applicable":
+            reason = r.not_applicable_reason or "not applicable for this issuer"
+            rows.append((label, f"n/a — {reason}", r.formula_version, "—"))
+        else:  # unavailable
+            missing = ", ".join(r.unavailable_missing) or "missing data"
+            rows.append((label, f"unavailable — {missing}", r.formula_version, "—"))
     return rows
 
 

@@ -276,6 +276,79 @@ def process(
     _print_pipeline_results(results)
 
 
+def _print_metrics_table(ticker: str, as_of: str, rows: list[tuple[str, str, str, str]]) -> None:
+    from rich.table import Table
+
+    table = Table(title=f"{ticker} — verified numbers (as of {as_of})", title_style="bold")
+    table.add_column("Metric")
+    table.add_column("Value")
+    table.add_column("Formula", style="dim")
+    table.add_column("✓", justify="center")
+    for label, value, formula, mark in rows:
+        table.add_row(label, value, formula, mark)
+    console.print(table)
+
+
+@app.command()
+def metrics(
+    ticker: str = typer.Argument(..., help="Ticker to compute SEC-XBRL verified numbers for."),
+    as_of: str | None = typer.Option(
+        None, "--as-of", help="Point-in-time date (YYYY-MM-DD); default today."),
+    backfill: int | None = typer.Option(
+        None, "--backfill", help="Quarters of filing history to pull (default 8)."),
+    show_all: bool = typer.Option(
+        False, "--all", help="Show every computed metric, not just the digest starter set."),
+) -> None:
+    """Compute and print a company's verified numbers straight from SEC XBRL — deterministic,
+    NO LLM key needed. Ingests the ticker if needed (adding it as a watch entry), runs the
+    metrics engine, and prints the results. A fast way to see the trust layer work on real data."""
+    from datetime import date
+
+    from finwatch.digest.render import metric_view_rows
+    from finwatch.metrics.service import MetricsService
+
+    cfg = _config_or_exit()
+    conn, service = build_service(cfg)
+    quarters = backfill if backfill is not None else DEFAULT_BACKFILL_QUARTERS
+    as_of_date = as_of or date.today().isoformat()
+    try:
+        ticker_u = ticker.strip().upper()
+        company = service.repo.get_company_by_ticker(ticker_u)
+        if company is None:
+            try:
+                company = service.add_holding(ticker_u, owned=False)
+            except TickerNotFoundError as exc:
+                console.print(f"[red]{exc}[/]")
+                raise typer.Exit(code=1) from exc
+            console.print(
+                f"[dim]{company.ticker} was not tracked — added as a watch entry (non-owned) "
+                f"so its metrics can be computed.[/]"
+            )
+        result = service.ingest_one(company.cik, backfill_quarters=quarters)
+        if result.error:
+            console.print(f"[yellow]![/] ingest note for {company.ticker}: {result.error}")
+        ms = MetricsService(service.repo, service.repo,
+                            lambda c: service.edgar.companyfacts(c))
+        bundle, _ = ms.compute_and_store(company.cik, as_of=as_of_date)
+        ticker_out = company.ticker
+    finally:
+        service.edgar.close()
+        service.stooq.close()
+        conn.close()
+
+    rows = metric_view_rows(bundle, show_all=show_all)
+    _print_metrics_table(ticker_out, as_of_date, rows)
+    if not any(mark == "✓" for *_, mark in rows):
+        console.print(
+            f"[yellow]No verified financials for {ticker_out}.[/] The issuer may lack structured "
+            f"XBRL (e.g. some foreign private issuers) or filed too little history to compute."
+        )
+    console.print(
+        "[dim]Computed deterministically from SEC XBRL facts (never by an LLM). "
+        "Run [bold]finwatch digest[/] to see them in report context.[/]"
+    )
+
+
 @app.command()
 def digest(
     since: str | None = typer.Option(

@@ -24,6 +24,34 @@ a watch-only non-reliance filing, a **verified-numbers** table (each value compu
 deterministically from XBRL facts, formula-versioned, and traceable — never from the LLM), a
 broken thesis, and — behind `--signals` — the shadow signal engine.
 
+## Verify the backend on real data — no API key
+
+`finwatch demo` proves the wiring on bundled data. To watch the **trust layer run on a live
+company** — real SEC XBRL in, deterministic verified numbers out — with **no LLM key**:
+
+```bash
+uv run finwatch init
+uv run finwatch metrics AAPL          # revenue growth · net income · cash flow · liquidity · leverage
+uv run finwatch metrics AAPL --all    # the full engine: Altman-Z, Piotroski-F, valuation percentiles, …
+uv run finwatch metrics JPM --all     # a bank — watch the sector-aware not_applicable paths
+```
+
+`metrics` needs only `SEC_USER_AGENT`. It fetches the company's filings + XBRL from EDGAR
+(adding it as a watch entry if untracked), runs the metrics engine, and prints the numbers —
+all deterministic Python; the LLM is never involved. It also persists to `computations`, so a
+later `finwatch digest` shows the same verified-numbers table.
+
+You can also assert the live EDGAR path directly, still key-free:
+
+```bash
+SEC_USER_AGENT="Your Name you@example.com" uv run pytest -m live \
+  tests/test_ingest_live.py tests/test_preprocess_live.py
+```
+
+Running the **LLM stages** (P1/P2/P3 → red-flag analysis, thesis checks, the full digest) needs
+a model + key — see the Quickstart below. It is cheap: ~1–3 model calls per filing; cap a probe
+with `finwatch process --ticker AAPL --limit 1`.
+
 ## Status
 
 **v0.2 backend complete.** Built backend-first, phase by phase. See

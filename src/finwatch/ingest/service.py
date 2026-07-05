@@ -154,8 +154,16 @@ class IngestService:
     ) -> IngestSummary:
         summary = IngestSummary()
         for cik in self.repo.list_tracked_ciks():
-            summary.results.append(self._ingest_cik(cik, backfill_quarters))
+            summary.results.append(self.ingest_one(cik, backfill_quarters=backfill_quarters))
         return summary
+
+    def ingest_one(
+        self, cik: str, *, backfill_quarters: int | None = DEFAULT_BACKFILL_QUARTERS
+    ) -> CikIngestResult:
+        """Ingest a single CIK (profile+SIC, filings, companyfacts, prices) — the per-ticker
+        path behind ``ingest_all``, exposed so ``finwatch metrics`` can scope to one company
+        without pulling the whole tracked portfolio."""
+        return self._ingest_cik(cik, backfill_quarters)
 
     def _as_of_date(self) -> date:
         return self._as_of or date.today()
