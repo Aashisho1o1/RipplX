@@ -45,6 +45,18 @@ supported by LiteLLM.
 For frontend development, run `npm run dev` from `web/` while `finwatch serve` provides the API;
 Vite proxies `/api` to port 8765.
 
+### Vercel frontend deployment
+
+The root [`vercel.json`](vercel.json) tells Vercel to install and build the Vite application in
+`web/`; do not add `src.finwatch.cli:app` as a Python entrypoint. That object is the Typer CLI,
+not an ASGI application.
+
+Vercel hosts the frontend assets only. The complete RipplX application still needs
+`finwatch serve` on a persistent Python host because it uses local SQLite, an in-process job
+manager, and process-memory session keys. Production should reverse-proxy that API under the
+same origin. `VITE_API_BASE_URL` can select a custom same-origin proxy prefix at build time; its
+default is empty, which keeps requests at `/api` for local and single-origin deployments.
+
 ## Verify the backend on real data — no API key
 
 `finwatch demo` proves the wiring on bundled data. To watch the **trust layer run on a live
