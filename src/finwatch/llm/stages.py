@@ -42,13 +42,36 @@ def _run_stage(
     now_fn: Callable[[], str],
 ) -> tuple[Any, int, LLMResponse]:
     system, version = load_prompt(prompt_stage)
-    user = json.dumps(inputs, ensure_ascii=False, default=str)
-    resp = llm.complete(system=system, user=user, temperature=temperature, json_mode=True)
-    try:
-        data = extract_json(resp.text)
-        output = schema_cls.model_validate(data)
-    except Exception as exc:  # noqa: BLE001 — any parse/validation failure is a stage failure
-        raise StageError(f"{stage} output invalid: {exc}") from exc
+    active_inputs = inputs
+    last_error: Exception | None = None
+    resp: LLMResponse | None = None
+    for attempt in range(2):
+        user = json.dumps(active_inputs, ensure_ascii=False, default=str)
+        resp = llm.complete(system=system, user=user, temperature=temperature, json_mode=True)
+        try:
+            data = extract_json(resp.text)
+            output = schema_cls.model_validate(data)
+            break
+        except Exception as exc:  # noqa: BLE001 — one bounded schema-repair attempt
+            last_error = exc
+            if attempt == 1:
+                raise StageError(f"{stage} output invalid after schema repair: {exc}") from exc
+            active_inputs = {
+                **inputs,
+                "_schema_repair": {
+                    "instruction": (
+                        "Your previous response failed validation. Recreate the complete "
+                        "JSON output using the exact field names and constraints in this schema."
+                    ),
+                    "validation_error": str(exc),
+                    "json_schema": schema_cls.model_json_schema(),
+                },
+            }
+    else:  # pragma: no cover - the loop either breaks or raises
+        assert last_error is not None
+        raise StageError(f"{stage} output invalid: {last_error}") from last_error
+
+    assert resp is not None
 
     analysis_id = repo.insert_analysis(Analysis(
         accession_number=accession_number, ticker=ticker, stage=stage,

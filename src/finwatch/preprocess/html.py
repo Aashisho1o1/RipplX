@@ -152,7 +152,11 @@ def html_to_text(html: str) -> NormalizedDoc:
             parts.append("\n")
             pos += 1
         prev_block = block
-        text = raw.replace("\xa0", " ")
+        # SEC filings commonly use NBSP, thin-space, en-space, and narrow-NBSP
+        # between header tokens (for example ``Item\u20095.02``). Normalize every
+        # Unicode space-separator to one ASCII space; this remains 1:1 so provenance
+        # offsets continue to round-trip exactly.
+        text = "".join(" " if unicodedata.category(char) == "Zs" else char for char in raw)
         start = pos
         parts.append(text)
         pos += len(text)

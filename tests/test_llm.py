@@ -26,7 +26,9 @@ def test_prompt_loader_splices_foundation_and_versions():
     assert "[FOUNDATION BLOCK]" not in text
     assert "R1. NUMBERS" in text            # foundation content spliced in
     assert "senior buy-side research analyst" in text  # P1 role
-    assert version == "P1_extractor.v1+foundation.v1"
+    assert version == "P1_extractor.v2+foundation.v1"
+    assert '"claim_id"' in text and '"claim_type"' in text
+    assert '{"value":"none_stated","claim_id":null}' in text
 
 
 def test_foundation_prompt_has_its_own_version():
@@ -158,6 +160,22 @@ def test_stage_error_on_unparseable_output():
     with pytest.raises(StageError):
         P1Extractor(llm, repo).run(
             filing_meta={"accession_number": "a-1", "ticker": "T"}, sections={})
+
+
+def test_p1_extractor_repairs_one_schema_invalid_response():
+    repo = Repo(init_db(":memory:"))
+
+    def respond(_system, user):
+        if '"_schema_repair"' in user:
+            return json.dumps(VALID_P1)
+        return json.dumps({**VALID_P1, "claims": [{"id": "j1", "type": "judgment"}]})
+
+    llm = FakeLLMClient(responder=respond)
+    out, _, _ = P1Extractor(llm, repo).run(
+        filing_meta={"accession_number": "a-1", "ticker": "T"}, sections={}
+    )
+    assert out.guidance_direction.value == "none_stated"
+    assert len(llm.calls) == 2
 
 
 def test_duplicate_claim_id_is_stage_error_and_leaves_no_orphan_row():

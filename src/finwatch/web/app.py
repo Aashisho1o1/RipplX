@@ -66,6 +66,7 @@ class SettingsUpdate(BaseModel):
 
 class JobRequest(BaseModel):
     ticker: str | None = None
+    limit: int = Field(default=1, ge=1, le=10)
 
 
 def _since_for_period(period: str) -> str:
@@ -75,6 +76,18 @@ def _since_for_period(period: str) -> str:
 
 def _trimmed(value: str | None) -> str | None:
     return value.strip() if value and value.strip() else None
+
+
+def _compute_synced_metrics(service, cik: str, *, as_of: str) -> int:
+    """Persist deterministic XBRL metrics after a web sync and return the usable count."""
+    from finwatch.metrics.service import MetricsService
+
+    bundle, _ = MetricsService(
+        service.repo,
+        service.repo,
+        lambda selected_cik: service.edgar.companyfacts(selected_cik),
+    ).compute_and_store(cik, as_of=as_of)
+    return sum(result.status.value == "computed" for result in bundle.all_results())
 
 
 def create_app(*, db_path: str | None = None, web_dist: str | Path | None = None):
@@ -348,18 +361,31 @@ def create_app(*, db_path: str | None = None, web_dist: str | Path | None = None
                     key = company.ticker if company else cik
                     result = service.ingest_one(cik)
                     partial = partial or bool(result.error)
+                    metrics_error = None
+                    metrics_computed = 0
+                    try:
+                        metrics_computed = _compute_synced_metrics(
+                            service, cik, as_of=date.today().isoformat()
+                        )
+                    except Exception as exc:  # noqa: BLE001 - preserve successful ingest work
+                        partial = True
+                        metrics_error = str(exc)
+                    details = (
+                        f"{result.filings_indexed} filings ({result.filings_new} new), "
+                        f"{result.xbrl_facts} XBRL facts, {result.prices} prices, "
+                        f"{metrics_computed} verified metrics"
+                    )
+                    message = result.error or details
+                    if result.error and metrics_computed:
+                        message += f"; {metrics_computed} verified metrics computed"
+                    if metrics_error:
+                        message += f"; metrics unavailable: {metrics_error}"
                     registry.add_item(
                         job_id,
                         JobItem(
                             key=key,
-                            state="failed" if result.error else "completed",
-                            message=(
-                                result.error
-                                or (
-                                    f"{result.filings_indexed} filings ({result.filings_new} new), "
-                                    f"{result.xbrl_facts} XBRL facts, {result.prices} prices"
-                                )
-                            ),
+                            state="failed" if result.error or metrics_error else "completed",
+                            message=message,
                         ),
                     )
             finally:
@@ -370,7 +396,7 @@ def create_app(*, db_path: str | None = None, web_dist: str | Path | None = None
 
         return work
 
-    def analysis_work(ticker: str | None):
+    def analysis_work(ticker: str | None, limit: int):
         def work(job_id: str, registry: JobRegistry) -> bool:
             from pathlib import Path as FilePath
 
@@ -422,7 +448,19 @@ def create_app(*, db_path: str | None = None, web_dist: str | Path | None = None
             partial = False
             try:
                 records = holding_records(repo)
-                for filing in unanalyzed_filings(repo, cik):
+                # The browser's demo-safe action processes the newest eligible filing(s).
+                # CLI backfills retain their deliberate oldest-first ordering.
+                filings = list(reversed(unanalyzed_filings(repo, cik)))[:limit]
+                if not filings:
+                    registry.add_item(
+                        job_id,
+                        JobItem(
+                            key=ticker.upper() if ticker else "portfolio",
+                            state="completed",
+                            message="No unanalyzed 10-K, 10-Q, or 8-K filings.",
+                        ),
+                    )
+                for filing in filings:
                     result = process_filing(
                         orchestrator,
                         repo,
@@ -476,7 +514,9 @@ def create_app(*, db_path: str | None = None, web_dist: str | Path | None = None
                 409, "models_not_configured", "Configure an analysis model and API key first."
             )
         try:
-            return app.state.jobs.start("analysis", analysis_work(_trimmed(payload.ticker)))
+            return app.state.jobs.start(
+                "analysis", analysis_work(_trimmed(payload.ticker), payload.limit)
+            )
         except JobConflictError as exc:
             raise ApiProblem(409, "job_conflict", str(exc)) from exc
 

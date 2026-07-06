@@ -42,6 +42,9 @@ Settings stay only in the running Python process and are never written to SQLite
 the API. Persistent credentials can still be supplied through the provider environment variables
 supported by LiteLLM.
 
+On Windows, `scripts\start_demo.cmd` starts the built local app and backs up an existing
+`data\finwatch.db` before launch. Pass `-SkipBackup` only when that safety copy is unnecessary.
+
 For frontend development, run `npm run dev` from `web/` while `finwatch serve` provides the API;
 Vite proxies `/api` to port 8765.
 

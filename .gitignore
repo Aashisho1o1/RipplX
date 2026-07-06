@@ -33,6 +33,13 @@ node_modules/
 web/dist/
 .playwright-cli/
 
+# Local portable toolchains used on machines without Python 3.13 / Node on PATH
+/.node-runtime/
+/.uv-python/
+/.uv-cache/
+/.npm-cache/
+/.node-*.zip
+
 # OS / editor cruft
 .DS_Store
 *.swp

@@ -252,6 +252,19 @@ def test_8k_furnishing_is_scoped_per_item():
     assert secs["item_7_01"].is_furnished is True    # furnished legend in its span
 
 
+def test_8k_item_number_and_title_may_be_on_separate_lines():
+    html = (
+        "<html><body>"
+        "<div>Item\u20095.02.</div>"
+        "<div>Departure of Directors or Certain Officers; Election of Directors.</div>"
+        "<p>A director will not stand for re-election.</p>"
+        "</body></html>"
+    )
+    sections = {section.section_key: section for section in split_8k(html_to_text(html))}
+    assert "item_5_02" in sections
+    assert "Departure of Directors" in sections["item_5_02"].title
+
+
 def test_diff_modified_survives_mid_block_insertion():
     prior = (
         "Risk A is about markets being volatile and hard to predict.\n"

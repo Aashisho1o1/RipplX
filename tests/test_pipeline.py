@@ -205,6 +205,7 @@ def test_malicious_p3_prose_fails_verification_and_digest_withholds_it():
                            records=records)
 
     assert fa.manual_review                                  # V5 caught it
+    assert sum("chair the investment committee" in system for system, _ in llm.calls) == 2
     assert any(c.check_id == "V5" and c.verdict == "fail" for c in fa.verification.results)
     md = render_digest(repo, since="2024-01-01", include_signals=True).markdown
     assert "Guaranteed profit" not in md and "$999" not in md

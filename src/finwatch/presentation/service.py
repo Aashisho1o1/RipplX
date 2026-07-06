@@ -289,14 +289,22 @@ class PresentationService:
         analyzed = [view for view in views if view.p1]
         critical = [view for view in analyzed if view.is_critical]
         impactful = [view for view in analyzed if has_impact(view)]
-        boring = [view for view in analyzed if not view.is_critical and not has_impact(view)]
+        manual = [view for view in analyzed if view.manual_review]
+        boring = [
+            view
+            for view in analyzed
+            if not view.manual_review and not view.is_critical and not has_impact(view)
+        ]
         owned = sorted(holding.ticker for holding in holdings if holding.owned)
         watching = sorted(holding.ticker for holding in holdings if not holding.owned)
         posture_candidates = [view.p3.review_posture for view in analyzed if view.p3]
         answer_posture = (
             min(posture_candidates, key=lambda p: POSTURE_ORDER[p]) if posture_candidates else None
         )
-        if any(view.is_critical and view.holding and view.holding.owned for view in analyzed):
+        if manual:
+            answer = "One filing needs manual review before conclusions are shown."
+            answer_posture = "risk_review"
+        elif any(view.is_critical and view.holding and view.holding.owned for view in analyzed):
             answer = "One holding needs a critical review."
             answer_posture = "critical_review"
         elif any(view.is_critical for view in analyzed):
@@ -338,6 +346,7 @@ class PresentationService:
             period=BriefPeriodView(
                 covered=f"{since or 'inception'} → {until or 'now'}",
                 filings_in_window=len(views),
+                analyzed_filings=len(analyzed),
             ),
             portfolio=BriefPortfolioView(owned=owned, watching=watching),
             answer=answer,

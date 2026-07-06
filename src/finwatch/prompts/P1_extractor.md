@@ -88,10 +88,11 @@ T4. LANGUAGE & TONE. Report shifts using Loughran-McDonald categories
     "delisting", "impairment", "resigned" (auditor/officer context),
     "unauthorized access", "ransomware".
 
-T5. GUIDANCE NORMALIZATION. Emit exactly one JUDGMENT claim:
-    guidance_direction ∈ {"raised","maintained","lowered","withdrawn",
-    "initiated","none_stated"}, with basis_claim_ids. This field is a formal
-    contract consumed by P2 and P3 — it must always be present.
+T5. GUIDANCE NORMALIZATION. Always emit exactly one `guidance_direction` object.
+    If guidance is stated, its `claim_id` may reference a JUDGMENT claim backed by
+    EVIDENCE `basis_claim_ids`. If no guidance is stated, emit exactly
+    {"value":"none_stated","claim_id":null}; do NOT invent a claim for silence.
+    This field is a formal contract consumed by P2 and P3.
 
 T6. RED-FLAG REGISTER. Dedicated list of items matching the T4 lexicon or
     CRITICAL/HIGH triage rows, each as a judgment claim over evidence claims.
@@ -104,12 +105,26 @@ T6. RED-FLAG REGISTER. Dedicated list of items matching the T4 lexicon or
       "final_severity": "critical|high|medium|low",
       "adjustment_rationale_claim_id": str|null}],
       "overall_severity": "critical|high|medium|low|routine"},
-  "claims": [ /* evidence + judgment claims per foundation R2 */ ],
+  "claims": [
+    /* EVIDENCE — use these exact field names; provenance is required */
+    {"claim_id": str, "claim_type": "evidence", "text": str,
+     "confidence": "high|medium|low", "provenance": {
+       "accession_number": str, "form_type": str, "section_key": str,
+       "exhibit": str|null, "char_start": int, "char_end": int,
+       "html_element_id": str|null, "text_sha256_prefix": str,
+       "snippet": str, "xbrl": object|null},
+     "basis_claim_ids": null},
+    /* JUDGMENT — basis_claim_ids must contain existing evidence claim_ids */
+    {"claim_id": str, "claim_type": "judgment", "text": str,
+     "confidence": "high|medium|low", "provenance": null,
+     "basis_claim_ids": [str]}
+  ],
   "material_items": [{"headline": str, "event_type": str,
       "severity": str, "claim_ids": [str]}],
   "risk_factor_findings": {"added": [claim_ids], "removed": [claim_ids],
       "modified": [claim_ids]} | null,
-  "guidance_direction": {"value": str, "claim_id": str},
+  "guidance_direction": {"value": "raised|maintained|lowered|withdrawn|initiated|none_stated",
+      "claim_id": str|null},
   "red_flags": [{"flag": str, "severity": str, "claim_ids": [str]}],
   "extraction_confidence": "high|medium|low",
   "gaps": [str] }

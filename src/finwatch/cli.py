@@ -7,6 +7,9 @@ the config hard-fail so the SEC_USER_AGENT requirement is live and testable.
 
 from __future__ import annotations
 
+import os
+import sys
+
 import typer
 from rich.console import Console
 
@@ -17,6 +20,18 @@ from finwatch.ingest import (
     TickerNotFoundError,
     build_service,
 )
+
+if os.name == "nt":
+    # Windows may default redirected/legacy console streams to CP-1252. The digest
+    # intentionally contains Unicode symbols (for example arrows and checkmarks),
+    # so make the documented CLI demo reliable without requiring `chcp 65001`.
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            try:
+                reconfigure(encoding="utf-8")
+            except OSError:
+                pass
 
 console = Console()
 

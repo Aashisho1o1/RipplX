@@ -13,6 +13,8 @@ def test_demo_projection_preserves_digest_order_and_trust_data():
         conn.close()
 
     assert view.answer == "One holding needs a critical review."
+    assert view.period.filings_in_window == 5
+    assert view.period.analyzed_filings == 5
     assert [item.ticker for item in view.critical_red_flags] == ["TWKS", "DPLS"]
     assert view.critical_red_flags[1].flags[0].quote
     assert [row.ticker for row in view.verified_numbers] == ["DPLS", "MSFT"]

@@ -13,7 +13,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from finwatch.core.types import DISCLAIMER
+from finwatch.core.types import DISCLAIMER, FORBIDDEN_VOCABULARY
 from finwatch.db.repositories import Analysis, Repo, SignalShadowLog
 from finwatch.llm.prompts import STAGE_P3, load_prompt
 from finwatch.llm.router import LLMClient, extract_json
@@ -138,10 +138,54 @@ class SignalEngine:
             "impact": impact.model_dump(),
             "record": record.model_dump(),
         }
-        resp = self.llm.complete(
-            system=system, user=json.dumps(inputs, ensure_ascii=False, default=str),
-            temperature=0.2, json_mode=True)
-        llm_out = P3Output.model_validate(extract_json(resp.text))  # prose fields only
+        active_inputs = inputs
+        llm_out = None
+        resp = None
+        for attempt in range(2):
+            resp = self.llm.complete(
+                system=system,
+                user=json.dumps(active_inputs, ensure_ascii=False, default=str),
+                temperature=0.2,
+                json_mode=True,
+            )
+            try:
+                llm_out = P3Output.model_validate(extract_json(resp.text))
+            except Exception as exc:  # noqa: BLE001 — one bounded schema repair
+                if attempt == 1:
+                    raise
+                active_inputs = {
+                    **inputs,
+                    "_schema_repair": {
+                        "instruction": "Return corrected JSON matching the exact P3 schema.",
+                        "validation_error": str(exc),
+                        "json_schema": P3Output.model_json_schema(),
+                    },
+                }
+                continue
+
+            visible = "\n".join([
+                llm_out.rationale,
+                llm_out.counter_evidence,
+                *llm_out.what_would_change_this,
+            ]).lower()
+            forbidden = next(
+                (word for word in FORBIDDEN_VOCABULARY if word.lower() in visible), None
+            )
+            if forbidden and attempt == 0:
+                active_inputs = {
+                    **inputs,
+                    "_schema_repair": {
+                        "instruction": (
+                            "Rewrite the complete P3 JSON without forbidden vocabulary; "
+                            "preserve the engine-provided posture, signal, rules, and inputs."
+                        ),
+                        "validation_error": f"forbidden vocabulary: {forbidden!r}",
+                    },
+                }
+                continue
+            break
+
+        assert llm_out is not None and resp is not None
 
         # Apply only a VALID one-notch-toward-caution escalation; ignore aggression.
         if llm_out.escalation_request is not None:

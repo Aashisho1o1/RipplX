@@ -160,6 +160,10 @@ class Orchestrator:
             form_type=filing.form_type, filed_at=filing.filed_at,
             period_of_report=filing.period_of_report, html=html,
         )
+        if not pp.sections:
+            raise ValueError(
+                f"{filing.form_type} section routing produced no canonical sections"
+            )
         sections = {
             s.section_key: {
                 "text": s.text, "char_start": s.char_start, "char_end": s.char_end,

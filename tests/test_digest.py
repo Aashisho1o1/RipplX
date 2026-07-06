@@ -194,7 +194,7 @@ def test_cli_digest_writes_file_and_persists_digest_row(monkeypatch, tmp_path):
     result = CliRunner().invoke(
         app, ["digest", "--since", DEMO_SINCE, "--out", str(out)])
     assert result.exit_code == 0
-    assert out.exists() and "## Critical red flags" in out.read_text()
+    assert out.exists() and "## Critical red flags" in out.read_text(encoding="utf-8")
 
     rows = Repo(init_db(str(db))).list_digests()
     assert len(rows) == 1 and json.loads(rows[0].filings_json)          # accessions recorded

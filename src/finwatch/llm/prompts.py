@@ -15,6 +15,7 @@ _FOUNDATION_PLACEHOLDER = "[FOUNDATION BLOCK]"
 STAGE_P1 = "P1_extractor"
 STAGE_P2 = "P2_impact"
 STAGE_P3 = "P3_rationale"
+_STAGE_VERSIONS = {STAGE_P1: "v2"}
 
 
 def _read(name: str) -> str:
@@ -29,7 +30,7 @@ def load_prompt(stage: str) -> tuple[str, str]:
     """Return ``(system_prompt, prompt_version)`` for a stage, with the foundation
     block spliced in where the placeholder appears."""
     text = _read(stage)
-    version = f"{stage}.{PROMPT_SUITE_VERSION}"
+    version = f"{stage}.{_STAGE_VERSIONS.get(stage, PROMPT_SUITE_VERSION)}"
     if _FOUNDATION_PLACEHOLDER in text:
         text = text.replace(_FOUNDATION_PLACEHOLDER, _read("foundation"))
         version = f"{version}+foundation.{PROMPT_SUITE_VERSION}"

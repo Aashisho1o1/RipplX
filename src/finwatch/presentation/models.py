@@ -96,6 +96,7 @@ class ShadowSignalView(BaseModel):
 class BriefPeriodView(BaseModel):
     covered: str
     filings_in_window: int
+    analyzed_filings: int
 
 
 class BriefPortfolioView(BaseModel):

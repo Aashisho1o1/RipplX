@@ -109,6 +109,25 @@ def test_process_is_idempotent():
     assert process_tracked(repo, orch, fetch_html=lambda _u: TENQ) == []   # nothing to redo
 
 
+def test_analysis_queue_excludes_unsupported_sec_forms():
+    repo = Repo(init_db(":memory:"))
+    _seed(repo)
+    repo.upsert_filing(Filing(
+        accession_number="0000789019-24-000071", cik=CIK, form_type="4",
+        filed_at="2024-08-02", primary_doc_url="https://www.sec.gov/form4.htm",
+    ))
+    repo.upsert_filing(Filing(
+        accession_number="0000789019-24-000072", cik=CIK, form_type="20-F",
+        filed_at="2024-08-03", primary_doc_url="https://www.sec.gov/20f.htm",
+    ))
+    repo.upsert_filing(Filing(
+        accession_number="0000789019-24-000073", cik=CIK, form_type="8-K/A",
+        filed_at="2024-08-04", primary_doc_url="https://www.sec.gov/8ka.htm",
+    ))
+
+    assert [filing.form_type for filing in unanalyzed_filings(repo)] == ["10-Q", "8-K/A"]
+
+
 def test_process_reports_errors_without_aborting():
     repo = Repo(init_db(":memory:"))
     _seed(repo, url=None)                                       # no primary-doc URL

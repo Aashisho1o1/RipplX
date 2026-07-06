@@ -23,6 +23,7 @@ from finwatch.pipeline.orchestrator import (
     Orchestrator,
     assemble_verify_bundle,
 )
+from finwatch.preprocess.forms import base_form
 from finwatch.preprocess.preprocessor import Preprocessor
 from finwatch.signals.engine import SignalEngine
 from finwatch.verify.checks import VerificationReport, run_all
@@ -79,12 +80,19 @@ def holding_records(repo: Repo) -> list[dict]:
 # never started ('fetched'/'sectioned') or errored mid-pipeline ('failed') — is retried, so a
 # transient P2/P3/network error does not permanently strand a half-analyzed filing (its P1 is
 # committed before later stages run, so a P1-present check would wrongly skip it forever).
-_DONE_STATUS = frozenset({"verified", "analyzed"})
+# Manual-review (``analyzed``) filings remain retryable; only a verified filing is done.
+_DONE_STATUS = frozenset({"verified"})
+_ANALYZABLE_FORMS = frozenset({"10-K", "10-Q", "8-K"})
 
 
 def unanalyzed_filings(repo: Repo, cik: str | None = None) -> list[Filing]:
-    """Filings not yet fully analyzed + verified (oldest first, so history builds in order)."""
-    todo = [f for f in repo.list_filings(cik) if f.status not in _DONE_STATUS]
+    """Supported filings not yet analyzed + verified (oldest first for CLI backfills)."""
+    todo = [
+        filing
+        for filing in repo.list_filings(cik)
+        if filing.status not in _DONE_STATUS
+        and base_form(filing.form_type) in _ANALYZABLE_FORMS
+    ]
     todo.sort(key=lambda f: (f.filed_at, f.accession_number))
     return todo
 
