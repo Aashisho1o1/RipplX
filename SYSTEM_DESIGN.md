@@ -102,12 +102,14 @@ trustworthy.
 6. **Stage schemas:** `llm/schemas.py` pydantic models must round-trip the JSON schemas in
    CLAUDE.md §§11–13 exactly; V5 validates against them.
 
-## 5. Extension points (post-v0.2, do not build now)
+## 5. Extension points
 
 New metrics → add a function in `formulas.py` returning `MetricResult` and register in
 `compute_all`. New matrix rules → new rule block with an explicit per-rule gate + tests; caps
 remain monotone toward caution. New data sources → new `ingest/` module feeding existing
-tables. Web UI / MCP server → separate packages consuming the DB read-only.
+tables. The RipplX web app lives in the separate `web/` package and consumes structured
+projections from `src/finwatch/presentation/` through the local-only `src/finwatch/web/`
+adapter. It calls existing services for writes and never duplicates trust-layer logic.
 
 ## 6. Why these five modules were pre-written (rationale for reviewers)
 

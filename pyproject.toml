@@ -22,6 +22,12 @@ dependencies = [
     "litellm>=1.40",
 ]
 
+[project.optional-dependencies]
+web = [
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+]
+
 # Heavier, phase-specific dependencies from the approved Tech Stack (CLAUDE.md §4)
 # are added at the phase that first needs them (all pre-approved, ask before others):
 # edgartools (approved) is available if richer filing parsing is ever needed.
