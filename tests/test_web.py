@@ -76,3 +76,16 @@ def test_mutation_rejects_foreign_origin(tmp_path):
     )
     assert response.status_code == 403
     assert response.json()["error"]["code"] == "origin_not_allowed"
+
+
+def test_frontend_dist_can_be_configured_for_packaged_deployment(tmp_path, monkeypatch):
+    dist = tmp_path / "web-dist"
+    dist.mkdir()
+    (dist / "index.html").write_text("<main>packaged RipplX</main>", encoding="utf-8")
+    monkeypatch.setenv("FINWATCH_WEB_DIST", str(dist))
+
+    app = create_app(db_path=str(tmp_path / "finwatch.db"))
+    response = TestClient(app).get("/brief")
+
+    assert response.status_code == 200
+    assert "packaged RipplX" in response.text

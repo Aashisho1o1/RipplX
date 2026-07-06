@@ -1,0 +1,16 @@
+.git
+.github
+.venv
+.pytest_cache
+.ruff_cache
+.mypy_cache
+node_modules
+web/node_modules
+web/dist
+data
+cache
+*.db
+*.db-journal
+*.db-wal
+In-depth prompt guidance/
+In-depth prompt guidance.zip

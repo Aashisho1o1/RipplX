@@ -57,6 +57,26 @@ manager, and process-memory session keys. Production should reverse-proxy that A
 same origin. `VITE_API_BASE_URL` can select a custom same-origin proxy prefix at build time; its
 default is empty, which keeps requests at `/api` for local and single-origin deployments.
 
+### Persistent prototype deployment
+
+The complete app is packaged by the root `Dockerfile`: it builds the React frontend, installs
+the Python web dependencies, and runs one FastAPI process that serves both the UI and `/api`.
+SQLite lives at `/data/finwatch.db` by default.
+
+```bash
+docker build -t ripplx .
+docker run --rm -p 8765:8765 -v ripplx-data:/data ripplx
+```
+
+On a container host such as Render, Railway, or Fly.io, deploy this Dockerfile, attach one
+persistent volume at `/data`, and expose the host-provided `PORT`. Keep the service at one
+instance because this prototype uses SQLite and an in-process job runner. `/api/bootstrap` is a
+suitable health-check path. Provider credentials can be configured as environment variables;
+keys entered in the UI remain process-memory only and disappear on restart.
+
+This prototype has no authentication. Keep the deployment private or use the hosting platform's
+access protection when portfolio data or model credentials are present.
+
 ## Verify the backend on real data — no API key
 
 `finwatch demo` proves the wiring on bundled data. To watch the **trust layer run on a live

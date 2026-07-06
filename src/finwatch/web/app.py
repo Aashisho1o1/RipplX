@@ -87,7 +87,9 @@ def create_app(*, db_path: str | None = None, web_dist: str | Path | None = None
         raise RuntimeError("Install RipplX web dependencies with `uv sync --extra web`.") from exc
 
     resolved_db = db_path or os.environ.get("FINWATCH_DB", "./data/finwatch.db")
-    dist = Path(web_dist) if web_dist else Path(__file__).resolve().parents[3] / "web" / "dist"
+    configured_dist = os.environ.get("FINWATCH_WEB_DIST")
+    default_dist = Path(__file__).resolve().parents[3] / "web" / "dist"
+    dist = Path(web_dist if web_dist is not None else configured_dist or default_dist)
     app = FastAPI(title="RipplX local API", version="0.1.0")
     app.state.db_path = resolved_db
     app.state.secrets = RuntimeSecrets()
