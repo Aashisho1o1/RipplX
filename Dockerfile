@@ -21,7 +21,6 @@ COPY --from=frontend /build/web/dist ./web/dist/
 
 RUN pip install --no-cache-dir ".[web]" && mkdir -p /data
 
-VOLUME ["/data"]
 EXPOSE 8765
 
 CMD ["sh", "-c", "finwatch serve --host 0.0.0.0 --allow-remote --port \"${PORT:-8765}\""]
