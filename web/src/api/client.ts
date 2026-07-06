@@ -19,10 +19,22 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
       0,
     );
   }
-  if (!response.ok) {
-    const body = await response.json().catch(() => ({})) as { error?: { code?: string; message?: string } };
-    throw new ApiError(body.error?.code ?? "request_failed", body.error?.message ?? "Request failed.", response.status);
-  }
   if (response.status === 204) return undefined as T;
-  return response.json() as Promise<T>;
+
+  let body: unknown;
+  try {
+    body = await response.json();
+  } catch {
+    throw new ApiError(
+      "invalid_api_response",
+      "RipplX API returned a non-JSON response. The frontend is deployed, but /api is not connected to finwatch serve.",
+      response.status,
+    );
+  }
+
+  if (!response.ok) {
+    const errorBody = body as { error?: { code?: string; message?: string } };
+    throw new ApiError(errorBody.error?.code ?? "request_failed", errorBody.error?.message ?? "Request failed.", response.status);
+  }
+  return body as T;
 }

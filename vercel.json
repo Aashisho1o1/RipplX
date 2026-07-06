@@ -6,7 +6,27 @@
   "outputDirectory": "web/dist",
   "rewrites": [
     {
-      "source": "/(.*)",
+      "source": "/brief/:path*",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/holdings/:path*",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/track-record/:path*",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/settings/:path*",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/filings/:path*",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/companies/:path*",
       "destination": "/index.html"
     }
   ]
