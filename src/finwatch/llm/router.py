@@ -6,6 +6,7 @@ string from the environment. ``litellm`` is imported lazily inside ``LiteLLMClie
 so tests and non-LLM code paths never pay its (heavy) import cost — tests drive a
 ``FakeLLMClient`` with recorded responses (no network, per the build rules).
 """
+
 from __future__ import annotations
 
 import json
@@ -32,10 +33,18 @@ class LLMClient(Protocol):
 class LiteLLMClient:
     """Real client. Any litellm-supported provider via its model string."""
 
-    def __init__(self, model: str, *, timeout: float = 120.0, num_retries: int = 2) -> None:
+    def __init__(
+        self,
+        model: str,
+        *,
+        api_key: str | None = None,
+        timeout: float = 120.0,
+        num_retries: int = 2,
+    ) -> None:
         if not model:
             raise ValueError("LiteLLMClient requires a model string")
         self.model = model
+        self._api_key = api_key
         self.timeout = timeout
         self.num_retries = num_retries
 
@@ -56,6 +65,8 @@ class LiteLLMClient:
         }
         if json_mode:
             kwargs["response_format"] = {"type": "json_object"}
+        if self._api_key:
+            kwargs["api_key"] = self._api_key
         resp = litellm.completion(**kwargs)
         text = resp.choices[0].message.content or ""
         usage = getattr(resp, "usage", None)
@@ -65,7 +76,8 @@ class LiteLLMClient:
         except Exception:  # noqa: BLE001 — cost is best-effort, never fatal
             cost = None
         return LLMResponse(
-            text=text, model=self.model,
+            text=text,
+            model=self.model,
             tokens_in=getattr(usage, "prompt_tokens", 0) or 0,
             tokens_out=getattr(usage, "completion_tokens", 0) or 0,
             cost_usd=cost,
@@ -93,8 +105,10 @@ class FakeLLMClient:
         else:
             raise RuntimeError("FakeLLMClient: configure responder= or responses=")
         return LLMResponse(
-            text=text, model=self.model,
-            tokens_in=max(1, len(user) // 4), tokens_out=max(1, len(text) // 4),
+            text=text,
+            model=self.model,
+            tokens_in=max(1, len(user) // 4),
+            tokens_out=max(1, len(text) // 4),
         )
 
 

@@ -1,0 +1,44 @@
+:root {
+  --color-bg: #FCFCFA;
+  --color-panel: #F1F0EA;
+  --color-panel-alt: #F4F3EE;
+  --color-ink: #18211D;
+  --color-body: #3C443E;
+  --color-muted: #5C645E;
+  --color-faint: #8A8F88;
+  --color-faint-2: #A6ABA4;
+  --color-hairline: #E4E2DA;
+  --color-accent: #0E7C66;
+  --color-accent-wash: rgba(14, 124, 102, 0.10);
+  --color-warn: #BC6B2E;
+  --color-warn-wash: rgba(188, 107, 46, 0.12);
+
+  --font-serif: 'Spectral', serif;
+  --font-sans: 'IBM Plex Sans', sans-serif;
+  --font-mono: 'IBM Plex Mono', monospace;
+
+  /* App-density translation of the original presentation scale (~0.55–0.6×). */
+  --text-display: 40px;
+  --text-h1: 32px;
+  --text-h2-italic: 26px;
+  --text-lede: 21px;
+  --text-body-lg: 17px;
+  --text-body: 16px;
+  --text-body-sm: 15px;
+  --text-kicker: 12px;
+  --text-caption: 13px;
+  --tracking-kicker: 0.16em;
+  --tracking-badge: 0.06em;
+  --tracking-tight: -0.01em;
+
+  --radius-pill: 999px;
+  --radius-lg: 14px;
+  --radius-md: 12px;
+  --radius-sm: 8px;
+  --border-hair: 1px solid var(--color-hairline);
+  --border-strong: 2px solid var(--color-ink);
+  --space-page-x: 56px;
+  --space-page-y: 44px;
+  --space-section: 40px;
+  --space-item: 14px;
+}

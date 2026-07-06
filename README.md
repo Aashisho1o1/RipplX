@@ -24,6 +24,27 @@ a watch-only non-reliance filing, a **verified-numbers** table (each value compu
 deterministically from XBRL facts, formula-versioned, and traceable — never from the LLM), a
 broken thesis, and — behind `--signals` — the shadow signal engine.
 
+## RipplX local web app
+
+RipplX is the local, browser-based interface over the same finwatch trust layer. It uses the
+real SQLite repository, deterministic metrics, verifier, bundled demo, and analysis pipeline;
+the browser never recreates financial logic or parses the Markdown digest.
+
+```bash
+uv sync --extra web
+cd web && npm install && npm run build && cd ..
+uv run finwatch serve
+```
+
+Open `http://127.0.0.1:8765`. First run asks for the SEC User-Agent identity, but the bundled
+sample brief is always available without keys or network access. Provider API keys entered in
+Settings stay only in the running Python process and are never written to SQLite or returned by
+the API. Persistent credentials can still be supplied through the provider environment variables
+supported by LiteLLM.
+
+For frontend development, run `npm run dev` from `web/` while `finwatch serve` provides the API;
+Vite proxies `/api` to port 8765.
+
 ## Verify the backend on real data — no API key
 
 `finwatch demo` proves the wiring on bundled data. To watch the **trust layer run on a live
@@ -92,6 +113,10 @@ with `finwatch process --ticker AAPL --limit 1`.
       tag resolution and period-matched valuation history; LLM output contracts (vocabularies +
       claim graph) are enforced by the schemas; and several signal-matrix edge cases were
       corrected. See the `fix:`/`feat:` commits for the finding-by-finding detail.
+- [x] **RipplX web prototype** — local FastAPI adapter, structured presentation contracts,
+      real bundled-demo projection, session-only LLM credentials, sequential sync/analysis jobs,
+      and a lean React/TypeScript interface for the Brief, holdings, evidence, metrics, settings,
+      and shadow track record.
 
 ## Quickstart (development)
 

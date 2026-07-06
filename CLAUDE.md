@@ -345,8 +345,8 @@ architecture, re-run the bake-off whenever the model landscape shifts.
 
 ## Roadmap — explicitly out of scope (do not start unprompted)
 
-Web UI · MCP server wrapper · broker CSV import/sync · Form 4 insider tracking · news APIs
-· sector-relative valuation · earnings-call transcripts · deep symbolic math-as-compiler
+MCP server wrapper · broker CSV import/sync · Form 4 insider tracking · news APIs ·
+sector-relative valuation · earnings-call transcripts · deep symbolic math-as-compiler
 (constraint-checking over reasoning chains).
 
 ## Where to find things
@@ -363,6 +363,7 @@ Web UI · MCP server wrapper · broker CSV import/sync · Form 4 insider trackin
 | LLM prompts (versioned, verbatim) | `src/finwatch/prompts/*.md` |
 | Signal matrix (pure function) | `src/finwatch/signals/matrix.py` |
 | Verifier checks | `src/finwatch/verify/checks.py` |
+| RipplX web UI and local API | `web/`, `src/finwatch/web/`, `src/finwatch/presentation/` |
 | Golden set | `src/finwatch/evals/golden_set/manifest.yaml` |
 | Production pipeline runner | `src/finwatch/pipeline/run.py` |
 

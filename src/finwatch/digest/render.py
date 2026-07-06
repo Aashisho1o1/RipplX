@@ -8,28 +8,59 @@ Design posture matches the product: postures not trade actions; silence on borin
 filings is a feature; every rendered number traces to a persisted computation or a
 verbatim evidence snippet; missing P2/P3 degrades gracefully.
 """
+
 from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
 
-from finwatch.db.repositories import Company, Filing, Holding, Repo, SignalShadowLog
-from finwatch.llm.schemas import Claim, P1Output, P2Output, P3Output
+from finwatch.db.repositories import Filing, Holding, Repo, SignalShadowLog
+from finwatch.llm.schemas import P1Output
 from finwatch.metrics.envelope import MetricResult, MetricsBundle
+from finwatch.presentation.formatting import format_metric_value as _format_metric_value
+from finwatch.presentation.projection import (
+    FilingProjection as _FilingView,
+)
+from finwatch.presentation.projection import (
+    evidence_snippet as _projection_evidence_snippet,
+)
+from finwatch.presentation.projection import (
+    has_impact as _projection_has_impact,
+)
+from finwatch.presentation.projection import (
+    in_window as _projection_in_window,
+)
+from finwatch.presentation.projection import (
+    load_filing_projection as _load_view,
+)
 
 # Starter-set metrics surfaced in the digest (CLAUDE.md §9 "conservative surface").
-_STARTER = ("revenue_growth", "net_income_trend", "cfo_trend", "liquidity_basics",
-            "share_count_change", "simple_leverage")
+_STARTER = (
+    "revenue_growth",
+    "net_income_trend",
+    "cfo_trend",
+    "liquidity_basics",
+    "share_count_change",
+    "simple_leverage",
+)
 _STARTER_LABELS = {
-    "revenue_growth": "Revenue growth", "net_income_trend": "Net income trend",
-    "cfo_trend": "Operating cash flow", "liquidity_basics": "Liquidity",
-    "share_count_change": "Share count Δ", "simple_leverage": "Leverage",
+    "revenue_growth": "Revenue growth",
+    "net_income_trend": "Net income trend",
+    "cfo_trend": "Operating cash flow",
+    "liquidity_basics": "Liquidity",
+    "share_count_change": "Share count Δ",
+    "simple_leverage": "Leverage",
 }
 _CRITICAL_SEVERITIES = frozenset({"critical", "high"})
 # P2 transmission channels (skip C8, the driver-type label, and any "not implicated").
 _CHANNEL_LABELS = {
-    "C1": "revenue", "C2": "margins", "C3": "capital structure", "C4": "cash/working capital",
-    "C5": "competitive position", "C6": "governance", "C7": "cross-holding spillover",
+    "C1": "revenue",
+    "C2": "margins",
+    "C3": "capital structure",
+    "C4": "cash/working capital",
+    "C5": "competitive position",
+    "C6": "governance",
+    "C7": "cross-holding spillover",
 }
 
 
@@ -39,36 +70,9 @@ class DigestRender:
     accessions: list[str] = field(default_factory=list)
 
 
-@dataclass
-class _FilingView:
-    filing: Filing
-    company: Company | None
-    holding: Holding | None
-    p1: P1Output | None
-    p2: P2Output | None
-    p3: P3Output | None
-    claims: dict[str, Claim]             # claim_id -> P1 claim (original ids + provenance)
-    manual_review: bool
-    data_quality: list[tuple[str, str]] = field(default_factory=list)  # (check_id, detail) warns
-
-    @property
-    def ticker(self) -> str:
-        return self.company.ticker if self.company else self.filing.cik
-
-    @property
-    def severity(self) -> str:
-        return self.p1.classification.overall_severity if self.p1 else "unanalyzed"
-
-    @property
-    def is_critical(self) -> bool:
-        return bool(self.p1) and (
-            self.severity in _CRITICAL_SEVERITIES or bool(self.p1.red_flags))
-
-
 def _has_impact(view: _FilingView) -> bool:
     """True when P2 found at least one non-``no_impact`` record for this filing."""
-    return view.p2 is not None and any(
-        rec.impact_class != "no_impact" for rec in view.p2.records_affected)
+    return _projection_has_impact(view)
 
 
 # --------------------------------------------------------------- formatting --
@@ -97,29 +101,7 @@ def _date(iso: str | None) -> str:
 def format_metric_value(r: MetricResult) -> str:
     """One-line human summary of a computed metric's value (shared by the digest table and
     the ``finwatch metrics`` CLI so the two never drift)."""
-    c = r.components
-    m = r.metric
-    if m == "revenue_growth":
-        return f"{_pct(c.get('yoy'))} YoY (TTM revenue {_usd(c.get('ttm_revenue'))})"
-    if m in ("net_income_trend", "cfo_trend"):
-        direction = c.get("four_quarter_direction", "?")
-        return f"{_pct(c.get('yoy'))} YoY · 4-quarter direction {direction}"
-    if m == "liquidity_basics":
-        parts = [f"cash {_usd(c.get('cash'))}", f"net debt {_usd(c.get('net_debt'))}"]
-        if c.get("current_ratio") is not None:
-            parts.append(f"current ratio {_num(c['current_ratio'])}")
-        return " · ".join(parts)
-    if m == "share_count_change":
-        drift = "buyback" if (r.value or 0) < 0 else "dilution" if (r.value or 0) > 0 else "flat"
-        return f"{_pct(r.value)} YoY ({drift})"
-    if m == "simple_leverage":
-        parts = []
-        if c.get("net_debt_to_ebitda") is not None:
-            parts.append(f"net debt/EBITDA {_num(c['net_debt_to_ebitda'])}×")
-        if c.get("interest_coverage") is not None:
-            parts.append(f"interest coverage {_num(c['interest_coverage'])}×")
-        return " · ".join(parts) or "computed"
-    return _num(r.value) if r.value is not None else "computed"
+    return _format_metric_value(r)
 
 
 def _edgar_url(filing: Filing) -> str:
@@ -131,61 +113,26 @@ def _edgar_url(filing: Filing) -> str:
         cik = str(int(filing.cik))
     except ValueError:
         cik = filing.cik
-    return (f"https://www.sec.gov/Archives/edgar/data/{cik}/{accn_nodash}/"
-            f"{filing.accession_number}-index.htm")
+    return (
+        f"https://www.sec.gov/Archives/edgar/data/{cik}/{accn_nodash}/"
+        f"{filing.accession_number}-index.htm"
+    )
 
 
 # ---------------------------------------------------------------- loading ----
-def _load_view(repo: Repo, filing: Filing) -> _FilingView:
-    def _stage(stage: str):
-        a = repo.latest_analysis(filing.accession_number, stage)
-        return a
-
-    p1a, p2a, p3a = _stage("P1"), _stage("P2"), _stage("P3")
-    p1 = P1Output.model_validate_json(p1a.output_json) if p1a else None
-    p2 = P2Output.model_validate_json(p2a.output_json) if p2a else None
-    p3 = P3Output.model_validate_json(p3a.output_json) if p3a else None
-    # Claims come from the parsed P1 output (original claim_ids + full provenance); the
-    # persisted analysis_claims rows namespace the ids, which would not match red_flag refs.
-    claims = {c.claim_id: c for c in p1.claims} if p1 else {}
-    manual = False
-    data_quality: list[tuple[str, str]] = []
-    if p1a:
-        vers = repo.list_verification_results(p1a.id)
-        manual = any(v.verdict == "fail" and v.severity == "blocking" for v in vers)
-        # A filing whose pipeline errored after P1 committed (status 'failed') is INCOMPLETE —
-        # never render its half-finished analysis as a clean, verified result.
-        if filing.status == "failed":
-            manual = True
-        data_quality = [(v.check_id, v.detail or "") for v in vers if v.verdict == "warn"]
-    return _FilingView(filing, repo.get_company(filing.cik),
-                       repo.get_holding_by_cik(filing.cik), p1, p2, p3, claims, manual,
-                       data_quality)
-
-
 def _evidence_snippet(view: _FilingView, claim_ids: list[str]) -> str | None:
     """First verbatim evidence snippet backing any of the given claim ids."""
-    for cid in claim_ids:
-        claim = view.claims.get(cid)
-        if claim and claim.claim_type == "evidence" and claim.provenance:
-            snippet = claim.provenance.snippet
-            if snippet:
-                return snippet
-    return None
+    return _projection_evidence_snippet(view, claim_ids)
 
 
 def _in_window(filing: Filing, since: str | None, until: str | None) -> bool:
-    day = _date(filing.filed_at)
-    if since and day < since[:10]:
-        return False
-    if until and day > until[:10]:
-        return False
-    return True
+    return _projection_in_window(filing, since, until)
 
 
 # ------------------------------------------------------------ section render -
-def _header(views: list[_FilingView], holdings: list[Holding],
-            since: str | None, until: str | None) -> list[str]:
+def _header(
+    views: list[_FilingView], holdings: list[Holding], since: str | None, until: str | None
+) -> list[str]:
     owned = sorted({h.ticker for h in holdings if h.owned})
     watch = sorted({h.ticker for h in holdings if not h.owned})
     period = f"{since or 'inception'} → {until or 'now'}"
@@ -208,11 +155,17 @@ def _critical_section(critical: list[_FilingView]) -> list[str]:
         out += ["_None. No critical or high-severity findings in this window._", ""]
         return out
     for v in critical:
-        posture = (v.p3.review_posture if v.p3
-                   else "watch — company-level read, no signal" if v.holding and not v.holding.owned
-                   else v.severity)
-        out.append(f"### {v.ticker} — {v.filing.form_type} filed {_date(v.filing.filed_at)} "
-                   f"· {v.severity.upper()} · {posture}")
+        posture = (
+            v.p3.review_posture
+            if v.p3
+            else "watch — company-level read, no signal"
+            if v.holding and not v.holding.owned
+            else v.severity
+        )
+        out.append(
+            f"### {v.ticker} — {v.filing.form_type} filed {_date(v.filing.filed_at)} "
+            f"· {v.severity.upper()} · {posture}"
+        )
         for mi in v.p1.material_items:
             if mi.severity in _CRITICAL_SEVERITIES:
                 out.append(f"- {mi.headline} _({mi.event_type})_")
@@ -238,14 +191,18 @@ def _what_changed_section(material: list[_FilingView]) -> list[str]:
         for rec in v.p2.records_affected:
             if rec.impact_class == "no_impact":
                 continue
-            out.append(f"### {rec.ticker} ({rec.impact_class}) — via {v.ticker} "
-                       f"{v.filing.form_type} {_date(v.filing.filed_at)}")
+            out.append(
+                f"### {rec.ticker} ({rec.impact_class}) — via {v.ticker} "
+                f"{v.filing.form_type} {_date(v.filing.filed_at)}"
+            )
             out.append(rec.net_read.text)
             channels = _implicated_channels(rec.channels)
             if channels:
                 out.append(f"- **Channels:** {', '.join(channels)}")
-            out.append(f"- **Guidance:** {rec.guidance_direction} · "
-                       f"**Liquidity:** {rec.liquidity_read} · **Net:** {rec.net_direction}")
+            out.append(
+                f"- **Guidance:** {rec.guidance_direction} · "
+                f"**Liquidity:** {rec.liquidity_read} · **Net:** {rec.net_direction}"
+            )
             rf = _risk_factor_highlights(v.p1)
             if rf:
                 out.append(f"- **Risk-factor changes:** {rf}")
@@ -283,9 +240,11 @@ def _risk_factor_highlights(p1: P1Output | None) -> str:
 
 def _thesis_section(material: list[_FilingView]) -> list[str]:
     out = ["## Thesis impact", ""]
-    _NO_THESIS = ("No thesis provided. I can still monitor critical red flags, filing changes, "
-                  "and financial deterioration, but I cannot say whether this weakens your "
-                  "original reason for owning the stock.")
+    _NO_THESIS = (
+        "No thesis provided. I can still monitor critical red flags, filing changes, "
+        "and financial deterioration, but I cannot say whether this weakens your "
+        "original reason for owning the stock."
+    )
     seen = False
     for v in material:
         if v.p2 is None:
@@ -317,14 +276,17 @@ def _verified_numbers_section(repo: Repo, holdings: list[Holding]) -> list[str]:
     any_shown = False
     for h in owned:
         comps = {c.tool: c for c in repo.latest_computations(h.ticker)}
-        results = [MetricResult.model_validate_json(comps[n].result_json)
-                   for n in _STARTER if n in comps]
+        results = [
+            MetricResult.model_validate_json(comps[n].result_json) for n in _STARTER if n in comps
+        ]
         if not any(r.status.value == "computed" for r in results):
             # Nothing computed for this issuer — one honest line beats six "unavailable" rows.
             if results:
                 any_shown = True
-                out.append(f"- **{h.ticker}:** no verified financials yet "
-                           f"(XBRL facts insufficient or not yet ingested).")
+                out.append(
+                    f"- **{h.ticker}:** no verified financials yet "
+                    f"(XBRL facts insufficient or not yet ingested)."
+                )
                 out.append("")
             continue
         any_shown = True
@@ -354,9 +316,7 @@ def _metric_rows(results: list[MetricResult]) -> list[str]:
     return rows
 
 
-def metric_view_rows(
-    bundle: MetricsBundle, *, show_all: bool
-) -> list[tuple[str, str, str, str]]:
+def metric_view_rows(bundle: MetricsBundle, *, show_all: bool) -> list[tuple[str, str, str, str]]:
     """Display rows ``(label, value, formula_version, ✓|—)`` for the ``finwatch metrics`` CLI.
 
     Default = the digest's conservative starter surface (``_STARTER``); ``show_all`` = every
@@ -416,8 +376,9 @@ def _boring_section(boring: list[_FilingView]) -> list[str]:
     ]
 
 
-def _shadow_section(repo: Repo, accessions: set[str],
-                    views_by_accn: dict[str, _FilingView]) -> list[str]:
+def _shadow_section(
+    repo: Repo, accessions: set[str], views_by_accn: dict[str, _FilingView]
+) -> list[str]:
     out = [
         "## Shadow signals",
         "",
@@ -437,8 +398,10 @@ def _shadow_section(repo: Repo, accessions: set[str],
 
 
 def _shadow_block(row: SignalShadowLog, view: _FilingView | None) -> list[str]:
-    out = [f"### {row.ticker} — hypothetical signal: **{row.hypothetical_signal}** "
-           f"(posture {row.review_posture})"]
+    out = [
+        f"### {row.ticker} — hypothetical signal: **{row.hypothetical_signal}** "
+        f"(posture {row.review_posture})"
+    ]
     try:
         fired = json.loads(row.rules_fired_json)
     except json.JSONDecodeError:
@@ -447,8 +410,9 @@ def _shadow_block(row: SignalShadowLog, view: _FilingView | None) -> list[str]:
         out.append(f"- Rules fired: {', '.join(fired)}")
     if view is not None and view.manual_review:
         # The P3 prose failed deterministic verification (V1/V5) — never render it.
-        out.append("- ⚠ rationale withheld — automated verification failed (manual review "
-                   "required).")
+        out.append(
+            "- ⚠ rationale withheld — automated verification failed (manual review required)."
+        )
     elif view is not None and view.p3 is not None:
         p3 = view.p3
         out.append(f"- Rationale: {p3.rationale}")
@@ -495,7 +459,9 @@ def render_digest(
         lines += _shadow_section(repo, accns, {v.filing.accession_number: v for v in analyzed})
 
     from finwatch.core.types import DISCLAIMER
+
     lines += ["---", "", f"_{DISCLAIMER}_", ""]
 
-    return DigestRender(markdown="\n".join(lines),
-                        accessions=[v.filing.accession_number for v in views])
+    return DigestRender(
+        markdown="\n".join(lines), accessions=[v.filing.accession_number for v in views]
+    )

@@ -4,6 +4,7 @@ Every method is a small, explicit SQL call. Row models mirror the schema columns
 one-to-one so ``Model(**dict(row))`` round-trips. Booleans-as-INTEGER (owned,
 is_financial, is_amendment) are kept as ``int`` to match the DB exactly.
 """
+
 from __future__ import annotations
 
 import sqlite3
@@ -91,10 +92,10 @@ class FilingSection(BaseModel):
 class Computation(BaseModel):
     id: int | None = None
     ticker: str
-    tool: str                 # metric name
+    tool: str  # metric name
     args_json: str
-    result_json: str          # the MetricResult, model_dump_json()
-    status: str               # computed | unavailable | not_applicable
+    result_json: str  # the MetricResult, model_dump_json()
+    status: str  # computed | unavailable | not_applicable
     formula_version: str
     as_of: str
     created_at: str
@@ -103,9 +104,9 @@ class Computation(BaseModel):
 class VerificationResult(BaseModel):
     id: int | None = None
     analysis_id: int
-    check_id: str             # V1..V6 sub-checks, e.g. 'V2b'
-    verdict: str              # pass | fail | warn | skipped_not_applicable
-    severity: str             # blocking | warning | info
+    check_id: str  # V1..V6 sub-checks, e.g. 'V2b'
+    verdict: str  # pass | fail | warn | skipped_not_applicable
+    severity: str  # blocking | warning | info
     detail: str | None = None
     created_at: str
 
@@ -114,7 +115,7 @@ class Analysis(BaseModel):
     id: int | None = None
     accession_number: str
     ticker: str
-    stage: str                # 'P1' | 'P2' | 'P3'
+    stage: str  # 'P1' | 'P2' | 'P3'
     model: str
     prompt_version: str
     output_json: str
@@ -125,9 +126,9 @@ class Analysis(BaseModel):
 
 
 class AnalysisClaim(BaseModel):
-    claim_id: str             # globally unique (namespaced by analysis id on persist)
+    claim_id: str  # globally unique (namespaced by analysis id on persist)
     analysis_id: int
-    claim_type: str           # 'evidence' | 'judgment'
+    claim_type: str  # 'evidence' | 'judgment'
     text: str
     provenance_json: str | None = None
     basis_claim_ids_json: str | None = None
@@ -156,7 +157,7 @@ class Digest(BaseModel):
     since: str | None = None
     until: str | None = None
     markdown_path: str
-    filings_json: str          # JSON array of accession numbers covered
+    filings_json: str  # JSON array of accession numbers covered
 
 
 # ------------------------------------------------------------------- repo --
@@ -208,23 +209,27 @@ class Repo:
         return [Company(**dict(r)) for r in rows]
 
     def list_tracked_ciks(self) -> list[str]:
-        rows = self.conn.execute(
-            "SELECT DISTINCT cik FROM holdings ORDER BY cik"
-        ).fetchall()
+        rows = self.conn.execute("SELECT DISTINCT cik FROM holdings ORDER BY cik").fetchall()
         return [r["cik"] for r in rows]
 
     # ---- holdings --------------------------------------------------------
     def upsert_holding(self, h: Holding) -> int:
         """One holding per CIK at the app level: update if present, else insert."""
-        existing = self.conn.execute(
-            "SELECT id FROM holdings WHERE cik = ?", (h.cik,)
-        ).fetchone()
+        existing = self.conn.execute("SELECT id FROM holdings WHERE cik = ?", (h.cik,)).fetchone()
         if existing is not None:
             self.conn.execute(
                 """UPDATE holdings SET ticker=?, owned=?, shares=?, cost_basis=?,
                        target_weight_pct=?, horizon=?, thesis=? WHERE id=?""",
-                (h.ticker, h.owned, h.shares, h.cost_basis, h.target_weight_pct,
-                 h.horizon, h.thesis, existing["id"]),
+                (
+                    h.ticker,
+                    h.owned,
+                    h.shares,
+                    h.cost_basis,
+                    h.target_weight_pct,
+                    h.horizon,
+                    h.thesis,
+                    existing["id"],
+                ),
             )
             holding_id = int(existing["id"])
         else:
@@ -233,8 +238,17 @@ class Repo:
                        (cik, ticker, owned, shares, cost_basis, target_weight_pct,
                         horizon, thesis, added_at)
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (h.cik, h.ticker, h.owned, h.shares, h.cost_basis, h.target_weight_pct,
-                 h.horizon, h.thesis, h.added_at),
+                (
+                    h.cik,
+                    h.ticker,
+                    h.owned,
+                    h.shares,
+                    h.cost_basis,
+                    h.target_weight_pct,
+                    h.horizon,
+                    h.thesis,
+                    h.added_at,
+                ),
             )
             holding_id = int(cur.lastrowid)
         self.conn.commit()
@@ -252,6 +266,12 @@ class Repo:
                 "SELECT * FROM holdings WHERE owned = ? ORDER BY ticker", (int(owned),)
             ).fetchall()
         return [Holding(**dict(r)) for r in rows]
+
+    def delete_holding(self, cik: str) -> bool:
+        """Stop tracking a company while retaining its historical audit data."""
+        cur = self.conn.execute("DELETE FROM holdings WHERE cik = ?", (cik,))
+        self.conn.commit()
+        return cur.rowcount > 0
 
     # ---- filings ---------------------------------------------------------
     def upsert_filing(self, f: Filing) -> bool:
@@ -279,9 +299,7 @@ class Repo:
 
     def list_filings(self, cik: str | None = None) -> list[Filing]:
         if cik is None:
-            rows = self.conn.execute(
-                "SELECT * FROM filings ORDER BY filed_at DESC"
-            ).fetchall()
+            rows = self.conn.execute("SELECT * FROM filings ORDER BY filed_at DESC").fetchall()
         else:
             rows = self.conn.execute(
                 "SELECT * FROM filings WHERE cik = ? ORDER BY filed_at DESC", (cik,)
@@ -300,9 +318,22 @@ class Repo:
         already carries full, amendment-superseded history, so a clean replace keeps
         the table faithful to the latest fetch."""
         rows = [
-            (f.cik, f.taxonomy, f.tag, f.value, f.unit_ref, f.decimals,
-             f.period_start, f.period_end, f.instant, f.fy, f.fp, f.form,
-             f.accession_number, f.dimensions_json)
+            (
+                f.cik,
+                f.taxonomy,
+                f.tag,
+                f.value,
+                f.unit_ref,
+                f.decimals,
+                f.period_start,
+                f.period_end,
+                f.instant,
+                f.fy,
+                f.fp,
+                f.form,
+                f.accession_number,
+                f.dimensions_json,
+            )
             for f in facts
         ]
         self.conn.execute("DELETE FROM xbrl_facts WHERE cik = ?", (cik,))
@@ -326,9 +357,7 @@ class Repo:
         return int(row["n"])
 
     def list_xbrl_facts(self, cik: str) -> list[XbrlFact]:
-        rows = self.conn.execute(
-            "SELECT * FROM xbrl_facts WHERE cik = ?", (cik,)
-        ).fetchall()
+        rows = self.conn.execute("SELECT * FROM xbrl_facts WHERE cik = ?", (cik,)).fetchall()
         return [XbrlFact(**dict(r)) for r in rows]
 
     # ---- prices ----------------------------------------------------------
@@ -342,8 +371,7 @@ class Repo:
 
     def close_on_or_before(self, ticker: str, date_iso: str) -> float | None:
         row = self.conn.execute(
-            "SELECT close FROM prices WHERE ticker = ? AND date <= ? "
-            "ORDER BY date DESC LIMIT 1",
+            "SELECT close FROM prices WHERE ticker = ? AND date <= ? ORDER BY date DESC LIMIT 1",
             (ticker.upper(), date_iso),
         ).fetchone()
         return None if row is None else float(row["close"])
@@ -367,9 +395,7 @@ class Repo:
         self.conn.commit()
 
     def get_setting(self, key: str) -> str | None:
-        row = self.conn.execute(
-            "SELECT value FROM settings WHERE key = ?", (key,)
-        ).fetchone()
+        row = self.conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
         return None if row is None else row["value"]
 
     # ---- filing sections (P0 output) -------------------------------------
@@ -400,8 +426,17 @@ class Repo:
                        (accession_number, section_key, title, char_start, char_end,
                         html_element_id, is_furnished, text, text_sha256)
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (accession_number, s.section_key, s.title, s.char_start, s.char_end,
-                 s.html_element_id, int(s.is_furnished), s.text, s.text_sha256),
+                (
+                    accession_number,
+                    s.section_key,
+                    s.title,
+                    s.char_start,
+                    s.char_end,
+                    s.html_element_id,
+                    int(s.is_furnished),
+                    s.text,
+                    s.text_sha256,
+                ),
             )
             self.conn.execute(
                 "INSERT INTO section_fts(rowid, text) VALUES (?, ?)", (cur.lastrowid, s.text)
@@ -417,9 +452,7 @@ class Repo:
         ).fetchall()
         return [FilingSection(**dict(r)) for r in rows]
 
-    def get_filing_section(
-        self, accession_number: str, section_key: str
-    ) -> FilingSection | None:
+    def get_filing_section(self, accession_number: str, section_key: str) -> FilingSection | None:
         row = self.conn.execute(
             "SELECT * FROM filing_sections WHERE accession_number = ? AND section_key = ? "
             "ORDER BY char_start LIMIT 1",
@@ -481,8 +514,16 @@ class Repo:
     # ---- computations (metric results) -----------------------------------
     def insert_computations(self, computations: Iterable[Computation]) -> int:
         rows = [
-            (c.ticker, c.tool, c.args_json, c.result_json, c.status,
-             c.formula_version, c.as_of, c.created_at)
+            (
+                c.ticker,
+                c.tool,
+                c.args_json,
+                c.result_json,
+                c.status,
+                c.formula_version,
+                c.as_of,
+                c.created_at,
+            )
             for c in computations
         ]
         self.conn.executemany(
@@ -497,9 +538,7 @@ class Repo:
 
     def list_computations(self, ticker: str | None = None) -> list[Computation]:
         if ticker is None:
-            rows = self.conn.execute(
-                "SELECT * FROM computations ORDER BY id"
-            ).fetchall()
+            rows = self.conn.execute("SELECT * FROM computations ORDER BY id").fetchall()
         else:
             rows = self.conn.execute(
                 "SELECT * FROM computations WHERE ticker = ? ORDER BY id", (ticker,)
@@ -516,6 +555,18 @@ class Repo:
                    ON c.id = latest.mid
                 ORDER BY c.tool""",
             (ticker,),
+        ).fetchall()
+        return [Computation(**dict(r)) for r in rows]
+
+    def computations_as_of(self, ticker: str, as_of: str) -> list[Computation]:
+        """Latest computation per metric whose point-in-time date is not after ``as_of``."""
+        rows = self.conn.execute(
+            """SELECT c.* FROM computations c
+                 JOIN (SELECT tool, MAX(id) AS mid FROM computations
+                        WHERE ticker = ? AND as_of <= ? GROUP BY tool) latest
+                   ON c.id = latest.mid
+                ORDER BY c.tool""",
+            (ticker, as_of),
         ).fetchall()
         return [Computation(**dict(r)) for r in rows]
 
@@ -552,9 +603,7 @@ class Repo:
 
     def count_verification_results(self, analysis_id: int | None = None) -> int:
         if analysis_id is None:
-            row = self.conn.execute(
-                "SELECT COUNT(*) AS n FROM verification_results"
-            ).fetchone()
+            row = self.conn.execute("SELECT COUNT(*) AS n FROM verification_results").fetchone()
         else:
             row = self.conn.execute(
                 "SELECT COUNT(*) AS n FROM verification_results WHERE analysis_id = ?",
@@ -569,16 +618,24 @@ class Repo:
                    (accession_number, ticker, stage, model, prompt_version, output_json,
                     tokens_in, tokens_out, cost_usd, created_at)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (a.accession_number, a.ticker, a.stage, a.model, a.prompt_version,
-             a.output_json, a.tokens_in, a.tokens_out, a.cost_usd, a.created_at),
+            (
+                a.accession_number,
+                a.ticker,
+                a.stage,
+                a.model,
+                a.prompt_version,
+                a.output_json,
+                a.tokens_in,
+                a.tokens_out,
+                a.cost_usd,
+                a.created_at,
+            ),
         )
         self.conn.commit()
         return int(cur.lastrowid)
 
     def get_analysis(self, analysis_id: int) -> Analysis | None:
-        row = self.conn.execute(
-            "SELECT * FROM analyses WHERE id = ?", (analysis_id,)
-        ).fetchone()
+        row = self.conn.execute("SELECT * FROM analyses WHERE id = ?", (analysis_id,)).fetchone()
         return None if row is None else Analysis(**dict(row))
 
     def latest_analysis(self, accession_number: str, stage: str) -> Analysis | None:
@@ -601,8 +658,15 @@ class Repo:
 
     def insert_analysis_claims(self, claims: Iterable[AnalysisClaim]) -> int:
         rows = [
-            (c.claim_id, c.analysis_id, c.claim_type, c.text, c.provenance_json,
-             c.basis_claim_ids_json, c.confidence)
+            (
+                c.claim_id,
+                c.analysis_id,
+                c.claim_type,
+                c.text,
+                c.provenance_json,
+                c.basis_claim_ids_json,
+                c.confidence,
+            )
             for c in claims
         ]
         self.conn.executemany(
@@ -630,19 +694,27 @@ class Repo:
                     rules_fired_json, rules_skipped_json, computed_inputs_json,
                     price_at_eval, created_at, outcome_30d, outcome_90d, outcome_reviewed_at)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (row.accession_number, row.ticker, row.review_posture, row.hypothetical_signal,
-             row.rules_fired_json, row.rules_skipped_json, row.computed_inputs_json,
-             row.price_at_eval, row.created_at, row.outcome_30d, row.outcome_90d,
-             row.outcome_reviewed_at),
+            (
+                row.accession_number,
+                row.ticker,
+                row.review_posture,
+                row.hypothetical_signal,
+                row.rules_fired_json,
+                row.rules_skipped_json,
+                row.computed_inputs_json,
+                row.price_at_eval,
+                row.created_at,
+                row.outcome_30d,
+                row.outcome_90d,
+                row.outcome_reviewed_at,
+            ),
         )
         self.conn.commit()
         return int(cur.lastrowid)
 
     def list_shadow_log(self, ticker: str | None = None) -> list[SignalShadowLog]:
         if ticker is None:
-            rows = self.conn.execute(
-                "SELECT * FROM signal_shadow_log ORDER BY id"
-            ).fetchall()
+            rows = self.conn.execute("SELECT * FROM signal_shadow_log ORDER BY id").fetchall()
         else:
             rows = self.conn.execute(
                 "SELECT * FROM signal_shadow_log WHERE ticker = ? ORDER BY id", (ticker,)
@@ -650,8 +722,7 @@ class Repo:
         return [SignalShadowLog(**dict(r)) for r in rows]
 
     def count_shadow_log(self) -> int:
-        return int(self.conn.execute(
-            "SELECT COUNT(*) AS n FROM signal_shadow_log").fetchone()["n"])
+        return int(self.conn.execute("SELECT COUNT(*) AS n FROM signal_shadow_log").fetchone()["n"])
 
     # ---- digests ---------------------------------------------------------
     def insert_digest(self, d: Digest) -> int:

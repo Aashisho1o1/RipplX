@@ -4,6 +4,7 @@ Phase 0 provides the full command skeleton mirroring CLAUDE.md §5. Each command
 stubbed and marks the phase that will implement it. ``finwatch init`` already wires
 the config hard-fail so the SEC_USER_AGENT requirement is live and testable.
 """
+
 from __future__ import annotations
 
 import typer
@@ -26,6 +27,7 @@ def _config_or_exit() -> Config:
     except ConfigError as exc:
         console.print(f"[red]Configuration error:[/] {exc}")
         raise typer.Exit(code=1) from exc
+
 
 app = typer.Typer(
     name="finwatch",
@@ -52,7 +54,10 @@ def _version_callback(value: bool) -> None:
 @app.callback()
 def main(
     version: bool = typer.Option(
-        False, "--version", callback=_version_callback, is_eager=True,
+        False,
+        "--version",
+        callback=_version_callback,
+        is_eager=True,
         help="Show version and exit.",
     ),
 ) -> None:
@@ -71,24 +76,57 @@ def init() -> None:
 
 
 @app.command()
+def serve(
+    host: str = typer.Option("127.0.0.1", help="Bind address (loopback by default)."),
+    port: int = typer.Option(8765, min=1, max=65535, help="HTTP port."),
+    allow_remote: bool = typer.Option(
+        False, "--allow-remote", help="Explicitly allow a non-loopback bind address."
+    ),
+) -> None:
+    """Serve the local RipplX web application and API."""
+    if host not in {"127.0.0.1", "localhost", "::1"} and not allow_remote:
+        console.print(
+            "[yellow]Refusing a non-loopback bind.[/] Pass [bold]--allow-remote[/] "
+            "only if you understand that this prototype has no authentication."
+        )
+        raise typer.Exit(code=1)
+    try:
+        import uvicorn
+
+        from finwatch.web import create_app
+    except (ImportError, RuntimeError) as exc:
+        console.print(f"[yellow]{exc}[/]")
+        raise typer.Exit(code=1) from exc
+    uvicorn.run(create_app(), host=host, port=port, log_level="info")
+
+
+@app.command()
 def add(
     ticker: str = typer.Argument(..., help="Ticker to add as an owned holding."),
     shares: float = typer.Option(..., "--shares", help="Number of shares held."),
     cost: float = typer.Option(..., "--cost", help="Cost basis per share."),
     target_weight: float | None = typer.Option(
-        None, "--target-weight", help="Target portfolio weight (%)."),
+        None, "--target-weight", help="Target portfolio weight (%)."
+    ),
     horizon: str | None = typer.Option(
-        None, "--horizon", help="Holding horizon: trading|1-3y|5y+|indefinite."),
+        None, "--horizon", help="Holding horizon: trading|1-3y|5y+|indefinite."
+    ),
     thesis: str | None = typer.Option(
-        None, "--thesis", help="Investment thesis (OPTIONAL by design)."),
+        None, "--thesis", help="Investment thesis (OPTIONAL by design)."
+    ),
 ) -> None:
     """Add an owned holding (thesis optional by design)."""
     cfg = _config_or_exit()
     conn, service = build_service(cfg)
     try:
         company = service.add_holding(
-            ticker, owned=True, shares=shares, cost_basis=cost,
-            target_weight_pct=target_weight, horizon=horizon, thesis=thesis,
+            ticker,
+            owned=True,
+            shares=shares,
+            cost_basis=cost,
+            target_weight_pct=target_weight,
+            horizon=horizon,
+            thesis=thesis,
         )
     except TickerNotFoundError as exc:
         console.print(f"[red]{exc}[/]")
@@ -150,10 +188,14 @@ def _run_pipeline(cfg: Config, *, cik: str | None, limit: int | None):
     cache_dir = Path(cfg.db_path).parent / "cache" if cfg.db_path != ":memory:" else None
     edgar = EdgarClient(cfg.sec_user_agent, cache_dir=cache_dir)
     orch = build_orchestrator(
-        repo, llm_extract=LiteLLMClient(cfg.model_extract),
+        repo,
+        llm_extract=LiteLLMClient(cfg.model_extract),
         llm_reason=LiteLLMClient(cfg.model_reason),
-        companyfacts_provider=lambda c: edgar.companyfacts(c), price_provider=repo,
-        model_extract=cfg.model_extract, model_reason=cfg.model_reason)
+        companyfacts_provider=lambda c: edgar.companyfacts(c),
+        price_provider=repo,
+        model_extract=cfg.model_extract,
+        model_reason=cfg.model_reason,
+    )
 
     def fetch_html(url: str) -> str:
         return edgar.fetch_primary_doc(url).decode("utf-8", "replace")
@@ -173,15 +215,18 @@ def _print_pipeline_results(results) -> None:
         else:
             console.print(f"[yellow]![/] {r.ticker} {r.accession} — [red]{r.error}[/]")
     ok = sum(1 for r in results if r.ok)
-    console.print(f"[bold]Processed {ok}/{len(results)} filing(s).[/] "
-                  f"Run [bold]finwatch digest[/] to see the report.")
+    console.print(
+        f"[bold]Processed {ok}/{len(results)} filing(s).[/] "
+        f"Run [bold]finwatch digest[/] to see the report."
+    )
 
 
 @app.command()
 def analyze(
     ticker: str = typer.Argument(..., help="Ticker to analyze (must be tracked + ingested)."),
     limit: int | None = typer.Option(
-        None, "--limit", help="Max filings to analyze (default: all not-yet-analyzed)."),
+        None, "--limit", help="Max filings to analyze (default: all not-yet-analyzed)."
+    ),
 ) -> None:
     """Run the analysis pipeline over a tracked ticker's ingested filings (watch semantics
     if it is not an owned holding); does not add a holding."""
@@ -200,8 +245,10 @@ def analyze(
         raise typer.Exit(code=1)
     results = _run_pipeline(cfg, cik=company.cik, limit=limit)
     if not results:
-        console.print(f"No un-analyzed filings for {ticker}. Run [bold]finwatch ingest[/] "
-                      f"to pull new filings.")
+        console.print(
+            f"No un-analyzed filings for {ticker}. Run [bold]finwatch ingest[/] "
+            f"to pull new filings."
+        )
         return
     _print_pipeline_results(results)
 
@@ -209,7 +256,8 @@ def analyze(
 @app.command()
 def ingest(
     backfill: int | None = typer.Option(
-        None, "--backfill", help="Quarters of filing history to index (default 8)."),
+        None, "--backfill", help="Quarters of filing history to index (default 8)."
+    ),
 ) -> None:
     """Pull filings + companyfacts (and EOD prices) for tracked CIKs."""
     cfg = _config_or_exit()
@@ -249,9 +297,9 @@ def ingest(
 @app.command()
 def process(
     ticker: str | None = typer.Option(
-        None, "--ticker", help="Only process this tracked ticker's filings."),
-    limit: int | None = typer.Option(
-        None, "--limit", help="Max filings to process this run."),
+        None, "--ticker", help="Only process this tracked ticker's filings."
+    ),
+    limit: int | None = typer.Option(None, "--limit", help="Max filings to process this run."),
 ) -> None:
     """Run the analysis pipeline (P0→P1→metrics→P2→verify→P3) over ingested-but-not-yet-
     analyzed filings, persisting the analyses the digest renders from."""
@@ -265,8 +313,10 @@ def process(
         company = Repo(conn).get_company_by_ticker(ticker)
         conn.close()
         if company is None:
-            console.print(f"[red]{ticker} is not tracked.[/] "
-                          f"[bold]finwatch watch {ticker} && finwatch ingest[/] first.")
+            console.print(
+                f"[red]{ticker} is not tracked.[/] "
+                f"[bold]finwatch watch {ticker} && finwatch ingest[/] first."
+            )
             raise typer.Exit(code=1)
         cik = company.cik
     results = _run_pipeline(cfg, cik=cik, limit=limit)
@@ -293,11 +343,14 @@ def _print_metrics_table(ticker: str, as_of: str, rows: list[tuple[str, str, str
 def metrics(
     ticker: str = typer.Argument(..., help="Ticker to compute SEC-XBRL verified numbers for."),
     as_of: str | None = typer.Option(
-        None, "--as-of", help="Point-in-time date (YYYY-MM-DD); default today."),
+        None, "--as-of", help="Point-in-time date (YYYY-MM-DD); default today."
+    ),
     backfill: int | None = typer.Option(
-        None, "--backfill", help="Quarters of filing history to pull (default 8)."),
+        None, "--backfill", help="Quarters of filing history to pull (default 8)."
+    ),
     show_all: bool = typer.Option(
-        False, "--all", help="Show every computed metric, not just the digest starter set."),
+        False, "--all", help="Show every computed metric, not just the digest starter set."
+    ),
 ) -> None:
     """Compute and print a company's verified numbers straight from SEC XBRL — deterministic,
     NO LLM key needed. Ingests the ticker if needed (adding it as a watch entry), runs the
@@ -327,8 +380,7 @@ def metrics(
         result = service.ingest_one(company.cik, backfill_quarters=quarters)
         if result.error:
             console.print(f"[yellow]![/] ingest note for {company.ticker}: {result.error}")
-        ms = MetricsService(service.repo, service.repo,
-                            lambda c: service.edgar.companyfacts(c))
+        ms = MetricsService(service.repo, service.repo, lambda c: service.edgar.companyfacts(c))
         bundle, _ = ms.compute_and_store(company.cik, as_of=as_of_date)
         ticker_out = company.ticker
     finally:
@@ -352,13 +404,15 @@ def metrics(
 @app.command()
 def digest(
     since: str | None = typer.Option(
-        None, "--since", help="Only include filings since this date (YYYY-MM-DD)."),
+        None, "--since", help="Only include filings since this date (YYYY-MM-DD)."
+    ),
     until: str | None = typer.Option(
-        None, "--until", help="Only include filings up to this date (YYYY-MM-DD)."),
+        None, "--until", help="Only include filings up to this date (YYYY-MM-DD)."
+    ),
     signals: bool = typer.Option(
-        False, "--signals", help="Also render the (unvalidated) shadow-signal block."),
-    out: str | None = typer.Option(
-        None, "--out", help="Also write the markdown to this path."),
+        False, "--signals", help="Also render the (unvalidated) shadow-signal block."
+    ),
+    out: str | None = typer.Option(None, "--out", help="Also write the markdown to this path."),
 ) -> None:
     """Render the markdown digest from the DB (``--signals`` gated, OFF by default)."""
     import json as _json
@@ -375,14 +429,22 @@ def digest(
         run_at = datetime.now(UTC).isoformat()
         if out:
             from pathlib import Path
+
             # UTF-8 explicitly: the digest always contains non-ASCII (→, ✓, ⚠) and the
             # platform default encoding (cp1252 on Windows, ASCII under LC_ALL=C) would crash.
             Path(out).write_text(result.markdown, encoding="utf-8")
-            repo.insert_digest(Digest(run_at=run_at, since=since, until=until,
-                                      markdown_path=out,
-                                      filings_json=_json.dumps(result.accessions)))
-            console.print(f"[green]✓[/] Digest written to {out} "
-                          f"({len(result.accessions)} filings).")
+            repo.insert_digest(
+                Digest(
+                    run_at=run_at,
+                    since=since,
+                    until=until,
+                    markdown_path=out,
+                    filings_json=_json.dumps(result.accessions),
+                )
+            )
+            console.print(
+                f"[green]✓[/] Digest written to {out} ({len(result.accessions)} filings)."
+            )
         else:
             console.print(result.markdown)
     finally:
@@ -392,9 +454,11 @@ def digest(
 @app.command()
 def eval(
     models: str | None = typer.Option(
-        None, "--models",
+        None,
+        "--models",
         help="Comma-separated litellm model strings to bake off (live). "
-             "Omit to run the bundled recorded golden set (no API keys)."),
+        "Omit to run the bundled recorded golden set (no API keys).",
+    ),
 ) -> None:
     """Golden-set bake-off across candidate models (CLAUDE.md §16)."""
     from finwatch.evals.harness import bakeoff, render_report, run_live, run_recorded
@@ -433,20 +497,21 @@ def verify(
     finally:
         conn.close()
     if report is None:
-        console.print(f"[red]No stored analysis for {accession}.[/] "
-                      f"Run [bold]finwatch process[/] first.")
+        console.print(
+            f"[red]No stored analysis for {accession}.[/] Run [bold]finwatch process[/] first."
+        )
         raise typer.Exit(code=1)
     colour = {"PASS": "green", "PASS_WITH_WARNINGS": "yellow", "FAIL": "red"}[report.verdict]
     console.print(f"[{colour}]{report.verdict}[/] — {accession}")
     for c in report.results:
-        console.print(f"  {c.check_id}: {c.verdict}"
-                      + (f" — {c.detail}" if c.detail else ""))
+        console.print(f"  {c.check_id}: {c.verdict}" + (f" — {c.detail}" if c.detail else ""))
 
 
 @app.command()
 def demo(
     signals: bool = typer.Option(
-        False, "--signals", help="Also render the (unvalidated) shadow-signal block."),
+        False, "--signals", help="Also render the (unvalidated) shadow-signal block."
+    ),
 ) -> None:
     """Run the full pipeline on bundled filings with ZERO API keys, then print a digest."""
     from finwatch.db import Repo
@@ -460,8 +525,10 @@ def demo(
         conn.close()
     console.print(result.markdown)
     if not signals:
-        console.print("\n[dim]Re-run with [bold]finwatch demo --signals[/] to see the "
-                      "unvalidated shadow-signal block.[/]")
+        console.print(
+            "\n[dim]Re-run with [bold]finwatch demo --signals[/] to see the "
+            "unvalidated shadow-signal block.[/]"
+        )
 
 
 @shadow_app.command("report")
