@@ -66,6 +66,8 @@ class SettingsUpdate(BaseModel):
 
 class JobRequest(BaseModel):
     ticker: str | None = None
+    accession: str | None = None
+    mode: Literal["auto", "parse", "analysis"] = "auto"
     limit: int = Field(default=1, ge=1, le=10)
 
 
@@ -396,7 +398,9 @@ def create_app(*, db_path: str | None = None, web_dist: str | Path | None = None
 
         return work
 
-    def analysis_work(ticker: str | None, limit: int):
+    def analysis_work(
+        ticker: str | None, limit: int, accession: str | None, mode: str
+    ):
         def work(job_id: str, registry: JobRegistry) -> bool:
             from pathlib import Path as FilePath
 
@@ -407,6 +411,7 @@ def create_app(*, db_path: str | None = None, web_dist: str | Path | None = None
                 build_orchestrator,
                 holding_records,
                 process_filing,
+                process_parsing,
                 unanalyzed_filings,
             )
 
@@ -416,10 +421,10 @@ def create_app(*, db_path: str | None = None, web_dist: str | Path | None = None
             if not settings.sec_user_agent:
                 connection.close()
                 raise RuntimeError("SEC User-Agent is not configured.")
-            if not settings.model_extract or not settings.model_reason:
+            if mode != "parse" and (not settings.model_extract or not settings.model_reason):
                 connection.close()
                 raise RuntimeError("Analysis models are not configured.")
-            if not settings.api_key_configured:
+            if mode != "parse" and not settings.api_key_configured:
                 connection.close()
                 raise RuntimeError("A provider API key is not configured.")
             cik = None
@@ -435,22 +440,32 @@ def create_app(*, db_path: str | None = None, web_dist: str | Path | None = None
                 else None
             )
             edgar = EdgarClient(settings.sec_user_agent, cache_dir=cache)
-            key = app.state.secrets.api_key()
-            orchestrator = build_orchestrator(
-                repo,
-                llm_extract=LiteLLMClient(settings.model_extract, api_key=key),
-                llm_reason=LiteLLMClient(settings.model_reason, api_key=key),
-                companyfacts_provider=lambda selected_cik: edgar.companyfacts(selected_cik),
-                price_provider=repo,
-                model_extract=settings.model_extract,
-                model_reason=settings.model_reason,
-            )
+            orchestrator = None
+            if mode != "parse":
+                key = app.state.secrets.api_key()
+                orchestrator = build_orchestrator(
+                    repo,
+                    llm_extract=LiteLLMClient(settings.model_extract, api_key=key),
+                    llm_reason=LiteLLMClient(settings.model_reason, api_key=key),
+                    companyfacts_provider=lambda selected_cik: edgar.companyfacts(selected_cik),
+                    price_provider=repo,
+                    model_extract=settings.model_extract,
+                    model_reason=settings.model_reason,
+                )
             partial = False
             try:
                 records = holding_records(repo)
-                # The browser's demo-safe action processes the newest eligible filing(s).
-                # CLI backfills retain their deliberate oldest-first ordering.
-                filings = list(reversed(unanalyzed_filings(repo, cik)))[:limit]
+                if accession:
+                    selected = repo.get_filing(accession)
+                    if selected is None:
+                        raise RuntimeError(f"Filing {accession} was not found.")
+                    if cik is not None and selected.cik != cik:
+                        raise RuntimeError(f"Filing {accession} does not belong to {ticker}.")
+                    filings = [selected]
+                else:
+                    # Browser actions process the newest eligible filing(s); CLI backfills
+                    # retain their deliberate oldest-first ordering.
+                    filings = list(reversed(unanalyzed_filings(repo, cik)))[:limit]
                 if not filings:
                     registry.add_item(
                         job_id,
@@ -461,15 +476,41 @@ def create_app(*, db_path: str | None = None, web_dist: str | Path | None = None
                         ),
                     )
                 for filing in filings:
-                    result = process_filing(
-                        orchestrator,
-                        repo,
-                        filing,
-                        fetch_html=lambda url: edgar.fetch_primary_doc(url).decode(
-                            "utf-8", "replace"
-                        ),
-                        records=records,
+                    company = repo.get_company(filing.cik)
+                    filing_key = (
+                        f"{company.ticker if company else filing.cik} "
+                        f"{filing.accession_number}"
                     )
+
+                    def progress(stage, state, message, diagnostics, key=filing_key):
+                        registry.upsert_item(
+                            job_id,
+                            JobItem(
+                                key=f"{key}:{stage}",
+                                state=state,
+                                message=message,
+                                stage=stage,
+                                diagnostics=diagnostics,
+                            ),
+                        )
+
+                    def fetch(url):
+                        return edgar.fetch_primary_doc(url).decode("utf-8", "replace")
+                    if mode == "parse":
+                        result = process_parsing(
+                            repo, filing, fetch_html=fetch, on_stage=progress
+                        )
+                    else:
+                        assert orchestrator is not None
+                        result = process_filing(
+                            orchestrator,
+                            repo,
+                            filing,
+                            fetch_html=fetch,
+                            records=records,
+                            rerun_from="extract" if mode == "analysis" else None,
+                            on_stage=progress,
+                        )
                     partial = partial or not result.ok or result.manual_review
                     registry.add_item(
                         job_id,
@@ -505,7 +546,7 @@ def create_app(*, db_path: str | None = None, web_dist: str | Path | None = None
     def start_analysis(payload: JobRequest):
         with repo_context() as repo:
             settings = resolve_settings(repo, app.state.secrets)
-        if (
+        if payload.mode != "parse" and (
             not settings.model_extract
             or not settings.model_reason
             or not settings.api_key_configured
@@ -515,7 +556,13 @@ def create_app(*, db_path: str | None = None, web_dist: str | Path | None = None
             )
         try:
             return app.state.jobs.start(
-                "analysis", analysis_work(_trimmed(payload.ticker), payload.limit)
+                "analysis",
+                analysis_work(
+                    _trimmed(payload.ticker),
+                    payload.limit,
+                    _trimmed(payload.accession),
+                    payload.mode,
+                ),
             )
         except JobConflictError as exc:
             raise ApiProblem(409, "job_conflict", str(exc)) from exc

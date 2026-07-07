@@ -9,7 +9,7 @@ import importlib.resources
 import sqlite3
 from pathlib import Path
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 def _schema_sql() -> str:
@@ -20,9 +20,16 @@ def _schema_sql() -> str:
     )
 
 
+def _migration_sql(name: str) -> str:
+    return importlib.resources.files("finwatch.db").joinpath(name).read_text(encoding="utf-8")
+
+
 def _migrations() -> list[tuple[int, str]]:
     """Ordered (version, sql) migrations. Append new versions; never edit old ones."""
-    return [(1, _schema_sql())]
+    return [
+        (1, _schema_sql()),
+        (2, _migration_sql("migration_002_filing_stage_runs.sql")),
+    ]
 
 
 def connect(db_path: str | Path) -> sqlite3.Connection:

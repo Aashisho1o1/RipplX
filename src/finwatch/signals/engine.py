@@ -123,6 +123,39 @@ class SignalEngine:
             escalated=decision.escalation is not None,
         )
 
+    def restore(
+        self,
+        *,
+        record: Record,
+        extraction: ExtractionSummary,
+        impact: ImpactSummary,
+        metrics: MetricsBundle,
+        accession_number: str,
+    ) -> SignalResult | None:
+        """Rebuild a SignalResult from persisted P3 output without another model call/log."""
+        analysis = self.repo.latest_analysis(accession_number, "P3")
+        if analysis is None:
+            return None
+        p3 = P3Output.model_validate_json(analysis.output_json)
+        decision = evaluate(record, extraction, impact, metrics)
+        if p3.escalation_request is not None:
+            try:
+                decision = apply_escalation(
+                    decision,
+                    p3.escalation_request.to,
+                    p3.escalation_request.justification,
+                )
+            except ValueError:
+                return None
+        if decision.posture != p3.review_posture or decision.signal != p3.hypothetical_signal:
+            return None
+        return SignalResult(
+            decision=decision,
+            p3=p3,
+            analysis_id=analysis.id,
+            escalated=decision.escalation is not None,
+        )
+
     def _rationale(
         self, decision: Decision, extraction: ExtractionSummary, impact: ImpactSummary,
         record: Record, computed: list[dict], accession: str, ticker: str, disclaimer: str,

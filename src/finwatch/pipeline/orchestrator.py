@@ -18,6 +18,7 @@ from finwatch.llm.stages import P1Extractor, P2Explainer
 from finwatch.metrics.envelope import MetricsBundle
 from finwatch.metrics.service import MetricsService
 from finwatch.pipeline.adapters import to_extraction_summary, to_impact_summary, to_record
+from finwatch.pipeline.progress import ProgressCallback, StageReporter
 from finwatch.preprocess.diff import RiskFactorDiff
 from finwatch.preprocess.preprocessor import Preprocessor
 from finwatch.signals.engine import SignalEngine, SignalResult
@@ -149,20 +150,78 @@ class Orchestrator:
         self.disclaimer = disclaimer
 
     def process_html(
-        self, *, filing: Filing, html: str, as_of: str, records: list,
+        self,
+        *,
+        filing: Filing,
+        html: str | None,
+        as_of: str,
+        records: list,
+        resume: bool = True,
+        on_stage: ProgressCallback | None = None,
     ) -> FilingAnalysis:
         company = self.repo.get_company(filing.cik)
         ticker = company.ticker if company else filing.cik
+        reporter = StageReporter(
+            self.repo, filing.accession_number, now_fn=self._now_fn, callback=on_stage
+        )
+
+        def reusable(stage: str, artifact: object | None) -> bool:
+            if not resume or not artifact:
+                return False
+            state = self.repo.get_filing_stage(filing.accession_number, stage)
+            return state is None or state.status in {"completed", "skipped"}
+
+        def run_stage(stage: str, operation, diagnostics=None):
+            reporter.running(stage)
+            try:
+                result = operation()
+                details = diagnostics(result) if diagnostics else {}
+                reporter.completed(stage, details)
+                return result
+            except Exception as exc:
+                reporter.failed(stage, exc)
+                raise
 
         # --- P0: preprocess -> canonical sections + risk-factor diff -------
-        pp = self.preprocessor.preprocess_html(
-            accession_number=filing.accession_number, cik=filing.cik,
-            form_type=filing.form_type, filed_at=filing.filed_at,
-            period_of_report=filing.period_of_report, html=html,
-        )
-        if not pp.sections:
-            raise ValueError(
-                f"{filing.form_type} section routing produced no canonical sections"
+        stored_sections = self.repo.list_filing_sections(filing.accession_number)
+        if reusable("parse", stored_sections):
+            pp = self.preprocessor.load_result(filing)
+            reporter.completed(
+                "parse",
+                {
+                    "detected_form": pp.form_family,
+                    "sections_found": [section.section_key for section in pp.sections],
+                    "resumed": True,
+                },
+                message="Parsed (reused stored sections)",
+            )
+        else:
+            def parse():
+                if html is None:
+                    raise ValueError("parsing requires the downloaded primary document")
+                result = self.preprocessor.preprocess_html(
+                    accession_number=filing.accession_number,
+                    cik=filing.cik,
+                    form_type=filing.form_type,
+                    filed_at=filing.filed_at,
+                    period_of_report=filing.period_of_report,
+                    html=html,
+                )
+                if not result.sections:
+                    raise ValueError(
+                        f"{filing.form_type} section routing produced no canonical sections"
+                    )
+                return result
+
+            pp = run_stage(
+                "parse",
+                parse,
+                lambda result: {
+                    "detected_form": result.form_family,
+                    "document_bytes": len((html or "").encode("utf-8")),
+                    "sections_found": [section.section_key for section in result.sections],
+                    "section_count": len(result.sections),
+                },
             )
         sections = {
             s.section_key: {
@@ -183,23 +242,80 @@ class Orchestrator:
         rf_diff = risk_diff_to_dict(pp.risk_factor_diff) if pp.risk_factor_diff else None
 
         # --- P1: extract ---------------------------------------------------
-        p1_out, p1_aid, _ = self.p1.run(
-            filing_meta=filing_meta, sections=sections, risk_factor_diff=rf_diff,
-        )
+        stored_p1 = self.repo.latest_analysis(filing.accession_number, "P1")
+        if reusable("extract", stored_p1):
+            assert stored_p1 is not None
+            p1_out = P1Output.model_validate_json(stored_p1.output_json)
+            p1_aid = stored_p1.id
+            reporter.completed(
+                "extract",
+                {"analysis_id": p1_aid, "resumed": True},
+                message="Extracted (reused stored analysis)",
+            )
+        else:
+            p1_out, p1_aid, _ = run_stage(
+                "extract",
+                lambda: self.p1.run(
+                    filing_meta=filing_meta,
+                    sections=sections,
+                    risk_factor_diff=rf_diff,
+                ),
+                lambda result: {
+                    "analysis_id": result[1],
+                    "severity": result[0].classification.overall_severity,
+                    "claim_count": len(result[0].claims),
+                },
+            )
 
         # --- metrics -------------------------------------------------------
         # Persist to `computations` so the digest renders "Verified numbers" straight
         # from the DB (deterministic, no LLM at render time — CLAUDE.md §15).
-        metrics = self.metrics_service.compute(filing.cik, as_of=as_of)
-        self.metrics_service.persist(ticker, metrics, as_of)
+        metrics_were_complete = reporter.is_complete("metrics")
+
+        def compute_metrics():
+            result = self.metrics_service.compute(filing.cik, as_of=as_of)
+            if not metrics_were_complete:
+                self.metrics_service.persist(ticker, result, as_of)
+            return result
+
+        metrics = run_stage(
+            "metrics",
+            compute_metrics,
+            lambda result: {
+                "computed": sum(metric.computed for metric in result.all_results()),
+                "result_count": len(result.all_results()),
+                "resumed": metrics_were_complete,
+            },
+        )
 
         # --- P2: portfolio impact (material filings only) ------------------
         p2_out = None
         if p2_gate(p1_out) and records:
-            p2_out, _, _ = self.p2.run(
-                extraction=p1_out.model_dump(), records=records,
-                accession_number=filing.accession_number, ticker=ticker,
-            )
+            stored_p2 = self.repo.latest_analysis(filing.accession_number, "P2")
+            if reusable("impact", stored_p2):
+                assert stored_p2 is not None
+                p2_out = P2Output.model_validate_json(stored_p2.output_json)
+                reporter.completed(
+                    "impact",
+                    {"analysis_id": stored_p2.id, "resumed": True},
+                    message="Impact assessed (reused stored analysis)",
+                )
+            else:
+                p2_out, _, _ = run_stage(
+                    "impact",
+                    lambda: self.p2.run(
+                        extraction=p1_out.model_dump(),
+                        records=records,
+                        accession_number=filing.accession_number,
+                        ticker=ticker,
+                    ),
+                    lambda result: {
+                        "analysis_id": result[1],
+                        "records_assessed": len(result[0].records_affected),
+                    },
+                )
+        else:
+            reporter.skipped("impact", "Impact assessment not required for this filing")
 
         # --- P3: signal engine (owned records only; shadow mode) ----------
         signal = None
@@ -209,14 +325,47 @@ class Orchestrator:
             record = to_record(holding, metrics)
             extraction_sum = to_extraction_summary(p1_out)
             impact_sum = to_impact_summary(p2_out, ticker)
-            signal = self.signal_engine.run(
-                record=record, extraction=extraction_sum, impact=impact_sum, metrics=metrics,
-                accession_number=filing.accession_number, ticker=ticker, as_of=as_of,
+            signal = (
+                self.signal_engine.restore(
+                    record=record,
+                    extraction=extraction_sum,
+                    impact=impact_sum,
+                    metrics=metrics,
+                    accession_number=filing.accession_number,
+                )
+                if reporter.is_complete("signal")
+                else None
             )
+            if signal is not None:
+                reporter.completed(
+                    "signal",
+                    {"analysis_id": signal.analysis_id, "resumed": True},
+                    message="Signal evaluated (reused stored analysis)",
+                )
+            else:
+                signal = run_stage(
+                    "signal",
+                    lambda: self.signal_engine.run(
+                        record=record,
+                        extraction=extraction_sum,
+                        impact=impact_sum,
+                        metrics=metrics,
+                        accession_number=filing.accession_number,
+                        ticker=ticker,
+                        as_of=as_of,
+                    ),
+                    lambda result: {
+                        "analysis_id": result.analysis_id,
+                        "posture": result.decision.posture,
+                    },
+                )
             decision = signal.decision
+        else:
+            reporter.skipped("signal", "Signal evaluation applies only to owned holdings")
 
         # --- verify: LLM-gate (V1/V4/V5 + V3) WITH regeneration ---------------
         # This gate covers the failure modes regenerating an LLM stage can fix.
+        reporter.running("verify")
         bundle = assemble_verify_bundle(
             p1_out, p2_out, metrics,
             section_texts_from_repo(self.repo, filing.accession_number),
@@ -242,6 +391,7 @@ class Orchestrator:
             verdict="FAIL" if blocking else "PASS_WITH_WARNINGS" if warns else "PASS",
             results=combined)
         persist_report(self.repo, p1_aid, report, created_at=self._now_fn())
+        reporter.completed("verify", {"verdict": report.verdict, "checks": len(report.results)})
 
         return FilingAnalysis(
             accession_number=filing.accession_number, ticker=ticker, p1=p1_out,

@@ -1,8 +1,17 @@
 """Data layer: schema/migrations + repository semantics."""
 from __future__ import annotations
 
-from finwatch.db import Company, Filing, Holding, Price, XbrlFact, apply_migrations, init_db
-from finwatch.db.database import SCHEMA_VERSION
+from finwatch.db import (
+    Company,
+    Filing,
+    Holding,
+    Price,
+    XbrlFact,
+    apply_migrations,
+    connect,
+    init_db,
+)
+from finwatch.db.database import SCHEMA_VERSION, _schema_sql
 
 
 def test_schema_applies_and_versions():
@@ -12,7 +21,7 @@ def test_schema_applies_and_versions():
     assert {
         "companies", "holdings", "filings", "filing_sections", "xbrl_facts", "prices",
         "analyses", "analysis_claims", "computations", "verification_results",
-        "signal_shadow_log", "digests", "settings",
+        "signal_shadow_log", "digests", "settings", "filing_stage_runs",
     } <= tables
 
 
@@ -28,6 +37,18 @@ def test_migration_is_idempotent():
     conn = init_db(":memory:")
     assert apply_migrations(conn) == SCHEMA_VERSION  # re-run is a no-op
     assert conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+
+
+def test_v1_database_upgrades_to_stage_ledger():
+    conn = connect(":memory:")
+    conn.executescript(_schema_sql())
+    conn.execute("PRAGMA user_version = 1")
+
+    assert apply_migrations(conn) == SCHEMA_VERSION
+    table = conn.execute(
+        "SELECT name FROM sqlite_master WHERE name = 'filing_stage_runs'"
+    ).fetchone()
+    assert table is not None
 
 
 def test_company_upsert_preserves_identity_and_conditional_is_financial(repo):
@@ -88,6 +109,24 @@ def test_filing_index_idempotent(repo):
     assert repo.upsert_filing(f) is True
     assert repo.upsert_filing(f) is False  # second insert ignored
     assert repo.known_accessions("1") == {"a-1"}
+
+
+def test_filing_stage_progress_persists_attempts_diagnostics_and_reset(repo):
+    repo.upsert_company(Company(cik="1", ticker="AAA", added_at="t"))
+    repo.upsert_filing(
+        Filing(accession_number="a-1", cik="1", form_type="10-K", filed_at="2024-01-01")
+    )
+    repo.set_filing_stage("a-1", "parse", "running", at="t1")
+    repo.set_filing_stage(
+        "a-1", "parse", "failed", at="t2", error="no sections", diagnostics={"bytes": 12}
+    )
+    stage = repo.get_filing_stage("a-1", "parse")
+    assert stage.status == "failed" and stage.attempts == 1
+    assert stage.error == "no sections" and '"bytes": 12' in stage.diagnostics_json
+
+    repo.reset_filing_stages("a-1", ["parse"])
+    reset = repo.get_filing_stage("a-1", "parse")
+    assert reset.status == "pending" and reset.attempts == 1 and reset.error is None
 
 
 def test_replace_xbrl_facts_replaces_not_appends(repo):

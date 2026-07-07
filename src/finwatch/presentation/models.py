@@ -133,6 +133,15 @@ class VerificationView(BaseModel):
     checks: list[VerificationCheckView] = Field(default_factory=list)
 
 
+class PipelineStageView(BaseModel):
+    stage: str
+    label: str
+    status: str
+    attempts: int = 0
+    error: str | None = None
+    diagnostics: dict = Field(default_factory=dict)
+
+
 class FilingDetailView(BaseModel):
     filing: FilingItemView
     what_changed: list[WhatChangedView] = Field(default_factory=list)
@@ -141,6 +150,7 @@ class FilingDetailView(BaseModel):
     verification: VerificationView | None = None
     shadow_signal: ShadowSignalView | None = None
     insufficient_reason: str | None = None
+    pipeline: list[PipelineStageView] = Field(default_factory=list)
     disclaimer: str = DISCLAIMER
 
 

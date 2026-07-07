@@ -84,6 +84,12 @@ def test_pipeline_end_to_end_passes_and_persists():
     assert stages == {"P1", "P2"}
     assert repo.count_verification_results(fa.p1_analysis_id) == len(fa.verification.results)
     assert len(repo.list_analysis_claims(fa.p1_analysis_id)) == 1
+    progress = {stage.stage: stage for stage in repo.list_filing_stages(ACCN)}
+    assert progress["parse"].status == "completed"
+    assert '"mdna"' in progress["parse"].diagnostics_json
+    assert progress["extract"].status == "completed"
+    assert progress["signal"].status == "skipped"
+    assert progress["verify"].status == "completed"
 
 
 def test_pipeline_runs_v2_data_quality_and_skips_v3_without_decision():

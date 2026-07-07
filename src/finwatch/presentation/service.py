@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import json
 from collections import Counter
 
 from finwatch.db.repositories import Computation, Filing, Holding, Repo
 from finwatch.metrics.envelope import MetricResult
+from finwatch.pipeline.progress import PIPELINE_STAGES, STAGE_LABELS
 from finwatch.presentation.formatting import format_metric_value
 from finwatch.presentation.models import (
     BriefPeriodView,
@@ -20,6 +22,7 @@ from finwatch.presentation.models import (
     MaterialItemView,
     MetricRowView,
     MetricsView,
+    PipelineStageView,
     RedFlagView,
     ShadowSignalView,
     ThesisImpactView,
@@ -395,6 +398,41 @@ class PresentationService:
         insufficient_reason = None
         if view.p1 and view.p1.extraction_confidence == "low" and view.p1.gaps:
             insufficient_reason = "; ".join(view.p1.gaps)
+        stored_stages = {row.stage: row for row in self.repo.list_filing_stages(accession)}
+        inferred = {
+            "download": "completed" if filing.status != "fetched" else "pending",
+            "parse": "completed" if self.repo.list_filing_sections(accession) else "pending",
+            "extract": "completed" if view.p1 else "pending",
+            "metrics": "completed"
+            if self.repo.latest_computations(view.ticker)
+            else "pending",
+            "impact": "completed" if view.p2 else "skipped" if view.p1 else "pending",
+            "signal": "completed"
+            if view.p3
+            else "skipped"
+            if holding is None or not holding.owned
+            else "pending",
+            "verify": "completed" if verification else "pending",
+        }
+        pipeline = []
+        for stage in PIPELINE_STAGES:
+            stored = stored_stages.get(stage)
+            diagnostics = {}
+            if stored:
+                try:
+                    diagnostics = json.loads(stored.diagnostics_json)
+                except json.JSONDecodeError:
+                    diagnostics = {"raw": stored.diagnostics_json}
+            pipeline.append(
+                PipelineStageView(
+                    stage=stage,
+                    label=STAGE_LABELS[stage],
+                    status=stored.status if stored else inferred[stage],
+                    attempts=stored.attempts if stored else 0,
+                    error=stored.error if stored else None,
+                    diagnostics=diagnostics,
+                )
+            )
         return FilingDetailView(
             filing=self._filing_item(view),
             what_changed=self._what_changed(view),
@@ -403,6 +441,7 @@ class PresentationService:
             verification=verification,
             shadow_signal=self._shadow(view) if include_signals else None,
             insufficient_reason=insufficient_reason,
+            pipeline=pipeline,
         )
 
     def holdings(self) -> HoldingsView:

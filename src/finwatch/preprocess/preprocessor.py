@@ -110,6 +110,19 @@ class Preprocessor:
             html=raw.decode("utf-8", errors="replace"),
         )
 
+    def load_result(self, filing: Filing) -> PreprocessResult:
+        """Rebuild P0's result from persisted sections for a resumed downstream stage."""
+        sections = self.repo.list_filing_sections(filing.accession_number)
+        return PreprocessResult(
+            accession_number=filing.accession_number,
+            form_family=form_family(filing.form_type),
+            sections=sections,
+            amends_accession=filing.amends_accession,
+            risk_factor_diff=self._risk_factor_diff(
+                filing.cik, filing.form_type, filing.filed_at, sections
+            ),
+        )
+
     # -- internals ---------------------------------------------------------
     def _to_row(self, accession_number: str, s: Section) -> FilingSection:
         return FilingSection(

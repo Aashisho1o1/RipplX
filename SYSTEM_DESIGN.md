@@ -102,6 +102,10 @@ trustworthy.
 6. **Stage schemas:** `llm/schemas.py` pydantic models must round-trip the JSON schemas in
    CLAUDE.md §§11–13 exactly; V5 validates against them.
 
+7. **Resumable execution:** `pipeline/progress.py` defines the small persisted stage ledger
+   (`download` through `verify`). Completed P0/P1/P2/P3 artifacts are reused after downstream
+   failures; explicit parse or analysis reruns invalidate stale downstream artifacts first.
+
 ## 5. Extension points
 
 New metrics → add a function in `formulas.py` returning `MetricResult` and register in

@@ -23,8 +23,9 @@ from finwatch.pipeline.orchestrator import (
     Orchestrator,
     assemble_verify_bundle,
 )
+from finwatch.pipeline.progress import ProgressCallback, StageReporter, stages_from
 from finwatch.preprocess.forms import base_form
-from finwatch.preprocess.preprocessor import Preprocessor
+from finwatch.preprocess.preprocessor import Preprocessor, route_sections
 from finwatch.signals.engine import SignalEngine
 from finwatch.verify.checks import VerificationReport, run_all
 from finwatch.verify.orchestrator import (
@@ -115,6 +116,8 @@ def process_filing(
     fetch_html: HtmlFetcher,
     records: list[dict],
     now_fn: Callable[[], str] = _now_iso,
+    rerun_from: str | None = None,
+    on_stage: ProgressCallback | None = None,
 ) -> ProcessResult:
     """Fetch a filing's primary document and run the full pipeline over it, updating the
     filing's status. Fetch/pipeline errors are captured (never abort a batch)."""
@@ -122,19 +125,63 @@ def process_filing(
     company = repo.get_company(filing.cik)
     if company is not None:
         ticker = company.ticker
-    if not filing.primary_doc_url:
+    reporter = StageReporter(repo, filing.accession_number, now_fn=now_fn, callback=on_stage)
+    if rerun_from is not None:
+        if rerun_from == "extract" and not repo.list_filing_sections(filing.accession_number):
+            reporter.failed("extract", "analysis rerun requires persisted parsed sections")
+            repo.set_filing_status(filing.accession_number, "failed", processed_at=now_fn())
+            return ProcessResult(
+                filing.accession_number,
+                ticker,
+                False,
+                error="analysis rerun requires persisted parsed sections",
+            )
+        repo.reset_filing_stages(filing.accession_number, stages_from(rerun_from))
+        if rerun_from in {"download", "parse", "extract"}:
+            repo.clear_filing_analysis(filing.accession_number)
+    fetch_required = rerun_from != "extract"
+    if fetch_required and not filing.primary_doc_url:
+        reporter.failed("download", "no primary-document URL indexed")
+        repo.set_filing_status(filing.accession_number, "failed", processed_at=now_fn())
         return ProcessResult(filing.accession_number, ticker, False,
                              error="no primary-document URL indexed")
+    if fetch_required:
+        reporter.running("download", {"form": base_form(filing.form_type)})
     try:
-        html = fetch_html(filing.primary_doc_url)
+        html = fetch_html(filing.primary_doc_url) if fetch_required else None
+        reporter.completed(
+            "download",
+            {
+                "document_bytes": len((html or "").encode("utf-8")),
+                "form": base_form(filing.form_type),
+                "resumed": not fetch_required,
+            },
+            message="Downloaded (reused parsed document)" if not fetch_required else None,
+        )
     except Exception as exc:                                   # noqa: BLE001 — report, don't abort
+        reporter.failed("download", exc, {"form": base_form(filing.form_type)})
         repo.set_filing_status(filing.accession_number, "failed", processed_at=now_fn())
         return ProcessResult(filing.accession_number, ticker, False,
                              error=f"fetch failed: {exc}")
     try:
         fa: FilingAnalysis = orch.process_html(
-            filing=filing, html=html, as_of=filing.filed_at, records=records)
+            filing=filing,
+            html=html,
+            as_of=filing.filed_at,
+            records=records,
+            on_stage=on_stage,
+        )
     except Exception as exc:                                   # noqa: BLE001
+        running = next(
+            (
+                stage
+                for stage in repo.list_filing_stages(filing.accession_number)
+                if stage.status == "running"
+            ),
+            None,
+        )
+        if running is not None:
+            reporter.failed(running.stage, exc)
         repo.set_filing_status(filing.accession_number, "failed", processed_at=now_fn())
         return ProcessResult(filing.accession_number, ticker, False,
                              error=f"pipeline failed: {exc}")
@@ -142,6 +189,74 @@ def process_filing(
     repo.set_filing_status(filing.accession_number, status, processed_at=now_fn())
     return ProcessResult(filing.accession_number, fa.ticker, True,
                          verdict=fa.verification.verdict, manual_review=fa.manual_review)
+
+
+def process_parsing(
+    repo: Repo,
+    filing: Filing,
+    *,
+    fetch_html: HtmlFetcher,
+    now_fn: Callable[[], str] = _now_iso,
+    on_stage: ProgressCallback | None = None,
+) -> ProcessResult:
+    """Rerun only download + deterministic parsing and invalidate stale analysis."""
+    company = repo.get_company(filing.cik)
+    ticker = company.ticker if company else filing.cik
+    reporter = StageReporter(repo, filing.accession_number, now_fn=now_fn, callback=on_stage)
+    repo.reset_filing_stages(filing.accession_number, stages_from("parse"))
+    if not filing.primary_doc_url:
+        error = "no primary-document URL indexed"
+        reporter.failed("download", error)
+        repo.set_filing_status(filing.accession_number, "failed", processed_at=now_fn())
+        return ProcessResult(filing.accession_number, ticker, False, error=error)
+    reporter.running("download", {"form": base_form(filing.form_type)})
+    try:
+        html = fetch_html(filing.primary_doc_url)
+        reporter.completed(
+            "download",
+            {"document_bytes": len(html.encode("utf-8")), "form": base_form(filing.form_type)},
+        )
+        reporter.running("parse")
+        if not route_sections(filing.form_type, html):
+            raise ValueError(
+                f"{filing.form_type} section routing produced no canonical sections"
+            )
+        repo.clear_filing_analysis(filing.accession_number)
+        result = Preprocessor(repo, now_fn=now_fn).preprocess_html(
+            accession_number=filing.accession_number,
+            cik=filing.cik,
+            form_type=filing.form_type,
+            filed_at=filing.filed_at,
+            period_of_report=filing.period_of_report,
+            html=html,
+        )
+        if not result.sections:
+            raise ValueError(
+                f"{filing.form_type} section routing produced no canonical sections"
+            )
+        reporter.completed(
+            "parse",
+            {
+                "detected_form": result.form_family,
+                "document_bytes": len(html.encode("utf-8")),
+                "sections_found": [section.section_key for section in result.sections],
+                "section_count": len(result.sections),
+            },
+        )
+    except Exception as exc:  # noqa: BLE001 - preserve parser diagnostics
+        running = next(
+            (
+                stage
+                for stage in repo.list_filing_stages(filing.accession_number)
+                if stage.status == "running"
+            ),
+            None,
+        )
+        reporter.failed(running.stage if running else "parse", exc)
+        repo.set_filing_status(filing.accession_number, "failed", processed_at=now_fn())
+        return ProcessResult(filing.accession_number, ticker, False, error=str(exc))
+    repo.set_filing_status(filing.accession_number, "sectioned", processed_at=now_fn())
+    return ProcessResult(filing.accession_number, ticker, True, verdict="PARSED")
 
 
 def process_tracked(

@@ -21,8 +21,12 @@ def _client(tmp_path: Path) -> tuple[TestClient, Path]:
 
 def test_web_analysis_request_is_bounded_to_one_filing_by_default():
     assert JobRequest().limit == 1
+    assert JobRequest().mode == "auto"
+    assert JobRequest(mode="parse", accession="a-1").mode == "parse"
     with pytest.raises(ValueError):
         JobRequest(limit=11)
+    with pytest.raises(ValueError):
+        JobRequest(mode="unknown")
 
 
 def test_bootstrap_setup_and_session_key_are_safe(tmp_path, monkeypatch):
@@ -91,6 +95,9 @@ def test_restart_keeps_portfolio_results_but_drops_session_key(tmp_path, monkeyp
     filing = restarted.get("/api/filings/0001683168-24-004848")
     assert filing.status_code == 200
     assert filing.json()["verification"] is not None
+    pipeline = {stage["stage"]: stage["status"] for stage in filing.json()["pipeline"]}
+    assert pipeline["parse"] == "completed"
+    assert pipeline["verify"] == "completed"
 
 
 def test_demo_contract_and_shadow_default_off(tmp_path):

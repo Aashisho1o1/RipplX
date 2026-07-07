@@ -20,6 +20,8 @@ class JobItem(BaseModel):
     state: str
     message: str
     verdict: str | None = None
+    stage: str | None = None
+    diagnostics: dict = Field(default_factory=dict)
 
 
 class JobView(BaseModel):
@@ -66,6 +68,17 @@ class JobRegistry:
     def add_item(self, job_id: str, item: JobItem) -> None:
         with self._lock:
             self._jobs[job_id].items.append(item)
+
+    def upsert_item(self, job_id: str, item: JobItem) -> None:
+        """Update a live stage row in place so polling shows current progress."""
+        with self._lock:
+            items = self._jobs[job_id].items
+            for index, current in enumerate(items):
+                if current.key == item.key:
+                    items[index] = item
+                    break
+            else:
+                items.append(item)
 
     def set_state(self, job_id: str, state: JobState) -> None:
         with self._lock:

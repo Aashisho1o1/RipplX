@@ -29,6 +29,8 @@ broken thesis, and — behind `--signals` — the shadow signal engine.
 RipplX is the local, browser-based interface over the same finwatch trust layer. It uses the
 real SQLite repository, deterministic metrics, verifier, bundled demo, and analysis pipeline;
 the browser never recreates financial logic or parses the Markdown digest.
+Filing pages show persisted progress from download through verification. Failed runs resume
+completed parse/LLM stages, with explicit controls to rerun parsing or analysis independently.
 
 ```bash
 uv sync --extra web

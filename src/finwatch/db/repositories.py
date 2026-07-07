@@ -7,6 +7,7 @@ is_financial, is_amendment) are kept as ``int`` to match the DB exactly.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from collections.abc import Iterable
 
@@ -50,6 +51,17 @@ class Filing(BaseModel):
     fetched_at: str | None = None
     processed_at: str | None = None
     status: str = "fetched"
+
+
+class FilingStageRun(BaseModel):
+    accession_number: str
+    stage: str
+    status: str
+    attempts: int = 0
+    started_at: str | None = None
+    finished_at: str | None = None
+    error: str | None = None
+    diagnostics_json: str = "{}"
 
 
 class XbrlFact(BaseModel):
@@ -508,6 +520,100 @@ class Repo:
             "UPDATE filings SET status = ?, "
             "processed_at = COALESCE(?, processed_at) WHERE accession_number = ?",
             (status, processed_at, accession_number),
+        )
+        self.conn.commit()
+
+    # ---- per-filing pipeline progress -----------------------------------
+    def set_filing_stage(
+        self,
+        accession_number: str,
+        stage: str,
+        status: str,
+        *,
+        at: str,
+        error: str | None = None,
+        diagnostics: dict | None = None,
+    ) -> None:
+        """Persist the current state of one resumable pipeline stage.
+
+        Starting a stage increments its attempt counter. Completion/failure keeps the
+        original start time and records when that attempt finished.
+        """
+        payload = json.dumps(diagnostics or {}, ensure_ascii=False, sort_keys=True)
+        self.conn.execute(
+            """INSERT INTO filing_stage_runs
+                   (accession_number, stage, status, attempts, started_at, finished_at,
+                    error, diagnostics_json)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(accession_number, stage) DO UPDATE SET
+                 status = excluded.status,
+                 attempts = filing_stage_runs.attempts
+                            + CASE WHEN excluded.status = 'running' THEN 1 ELSE 0 END,
+                 started_at = CASE WHEN excluded.status = 'running'
+                                   THEN excluded.started_at
+                                   ELSE filing_stage_runs.started_at END,
+                 finished_at = excluded.finished_at,
+                 error = excluded.error,
+                 diagnostics_json = excluded.diagnostics_json""",
+            (
+                accession_number,
+                stage,
+                status,
+                1 if status == "running" else 0,
+                at if status == "running" else None,
+                None if status == "running" else at,
+                error,
+                payload,
+            ),
+        )
+        self.conn.commit()
+
+    def get_filing_stage(self, accession_number: str, stage: str) -> FilingStageRun | None:
+        row = self.conn.execute(
+            "SELECT * FROM filing_stage_runs WHERE accession_number = ? AND stage = ?",
+            (accession_number, stage),
+        ).fetchone()
+        return None if row is None else FilingStageRun(**dict(row))
+
+    def list_filing_stages(self, accession_number: str) -> list[FilingStageRun]:
+        rows = self.conn.execute(
+            "SELECT * FROM filing_stage_runs WHERE accession_number = ?",
+            (accession_number,),
+        ).fetchall()
+        return [FilingStageRun(**dict(row)) for row in rows]
+
+    def reset_filing_stages(self, accession_number: str, stages: Iterable[str]) -> None:
+        rows = [(accession_number, stage) for stage in stages]
+        self.conn.executemany(
+            """INSERT INTO filing_stage_runs
+                   (accession_number, stage, status, diagnostics_json)
+               VALUES (?, ?, 'pending', '{}')
+               ON CONFLICT(accession_number, stage) DO UPDATE SET
+                 status = 'pending', started_at = NULL, finished_at = NULL,
+                 error = NULL, diagnostics_json = '{}'""",
+            rows,
+        )
+        self.conn.commit()
+
+    def clear_filing_analysis(self, accession_number: str) -> None:
+        """Invalidate analysis derived from sections before an explicit parse/LLM rerun."""
+        ids = [
+            row["id"]
+            for row in self.conn.execute(
+                "SELECT id FROM analyses WHERE accession_number = ?", (accession_number,)
+            ).fetchall()
+        ]
+        if ids:
+            placeholders = ",".join("?" for _ in ids)
+            self.conn.execute(
+                f"DELETE FROM verification_results WHERE analysis_id IN ({placeholders})", ids
+            )
+            self.conn.execute(
+                f"DELETE FROM analysis_claims WHERE analysis_id IN ({placeholders})", ids
+            )
+            self.conn.execute(f"DELETE FROM analyses WHERE id IN ({placeholders})", ids)
+        self.conn.execute(
+            "DELETE FROM signal_shadow_log WHERE accession_number = ?", (accession_number,)
         )
         self.conn.commit()
 

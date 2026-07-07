@@ -145,10 +145,11 @@ Quickstart for the common flow (`init → add/watch → ingest → process → d
 
 ## 6. Database Schema
 
-Authoritative, canonical DDL: `src/finwatch/db/schema.sql` (applied via
-`db/database.py`'s migration runner). Key tables: `companies`, `holdings`, `filings`,
+Authoritative DDL: the v1 base in `src/finwatch/db/schema.sql` plus ordered migration files
+(applied via `db/database.py`'s migration runner). Key tables: `companies`, `holdings`, `filings`,
 `filing_sections` (+ FTS5), `xbrl_facts`, `prices`, `analyses`, `analysis_claims`,
-`computations`, `verification_results`, `signal_shadow_log`, `digests`. Repository layer
+`computations`, `verification_results`, `signal_shadow_log`, `filing_stage_runs`, `digests`.
+Repository layer
 (typed row mappers, no ORM): `src/finwatch/db/repositories.py`.
 
 ---
@@ -363,7 +364,7 @@ sector-relative valuation · earnings-call transcripts · deep symbolic math-as-
 | Module tiers, file tree, data flow, fixed interface contracts | `SYSTEM_DESIGN.md` |
 | Frozen Tier 1 source (verbatim law) | `CORE_CODE.md` |
 | Full v0.2 build spec (everything this file used to hold in full) | `docs/CLAUDE_v0.2_full_spec.md` |
-| DB schema (DDL) | `src/finwatch/db/schema.sql` |
+| DB schema (DDL) | `src/finwatch/db/schema.sql` + `src/finwatch/db/migration_*.sql` |
 | XBRL concept map | `src/finwatch/xbrl/concept_map.yaml` |
 | Metric formulas (full catalog) | `src/finwatch/metrics/formulas.py` |
 | LLM prompts (versioned, verbatim) | `src/finwatch/prompts/*.md` |

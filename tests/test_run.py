@@ -13,6 +13,8 @@ from finwatch.digest import render_digest
 from finwatch.llm.router import FakeLLMClient
 from finwatch.pipeline.run import (
     build_orchestrator,
+    process_filing,
+    process_parsing,
     process_tracked,
     reverify,
     unanalyzed_filings,
@@ -171,6 +173,73 @@ def test_transient_failure_is_retried_and_not_rendered_clean():
     # digest flags it, does not present it as clean
     md = render_digest(repo, since="2024-01-01").markdown
     assert "manual review required" in md
+
+    p1_calls = sum("portfolio manager" not in system and "investment committee" not in system
+                   for system, _ in llm.calls)
+    llm.responder = _responder
+    retry = process_tracked(repo, orch, fetch_html=lambda _u: TENQ, now_fn=lambda: "t")
+    assert retry[0].ok
+    assert len([a for a in repo.list_analyses(ACCN) if a.stage == "P1"]) == 1
+    assert sum("portfolio manager" not in system and "investment committee" not in system
+               for system, _ in llm.calls) == p1_calls
+
+
+def test_parse_only_rerun_invalidates_stale_analysis_and_stops_after_p0():
+    repo = Repo(init_db(":memory:"))
+    _seed(repo)
+    process_tracked(repo, _orch(repo), fetch_html=lambda _u: TENQ, now_fn=lambda: "t")
+    assert repo.latest_analysis(ACCN, "P1") is not None
+
+    result = process_parsing(
+        repo, repo.get_filing(ACCN), fetch_html=lambda _u: TENQ, now_fn=lambda: "t2"
+    )
+
+    assert result.ok and result.verdict == "PARSED"
+    assert repo.list_analyses(ACCN) == []
+    assert repo.get_filing(ACCN).status == "sectioned"
+    progress = {stage.stage: stage.status for stage in repo.list_filing_stages(ACCN)}
+    assert progress["parse"] == "completed"
+    assert progress["extract"] == "pending"
+
+
+def test_analysis_only_rerun_reuses_sections_without_fetching_document():
+    repo = Repo(init_db(":memory:"))
+    _seed(repo)
+    process_tracked(repo, _orch(repo), fetch_html=lambda _u: TENQ, now_fn=lambda: "t")
+
+    def unexpected_fetch(_url):
+        raise AssertionError("analysis-only rerun must not fetch the filing")
+
+    result = process_filing(
+        _orch(repo),
+        repo,
+        repo.get_filing(ACCN),
+        fetch_html=unexpected_fetch,
+        records=[],
+        rerun_from="extract",
+        now_fn=lambda: "t2",
+    )
+
+    assert result.ok
+    assert repo.get_filing_stage(ACCN, "download").status == "completed"
+
+
+def test_failed_parse_rerun_keeps_previous_verified_analysis():
+    repo = Repo(init_db(":memory:"))
+    _seed(repo)
+    process_tracked(repo, _orch(repo), fetch_html=lambda _u: TENQ, now_fn=lambda: "t")
+    previous = repo.latest_analysis(ACCN, "P1")
+
+    result = process_parsing(
+        repo,
+        repo.get_filing(ACCN),
+        fetch_html=lambda _u: "<html><body>not a filing</body></html>",
+        now_fn=lambda: "t2",
+    )
+
+    assert not result.ok
+    assert repo.latest_analysis(ACCN, "P1").id == previous.id
+    assert repo.get_filing_stage(ACCN, "parse").status == "failed"
 
 
 def test_reverify_reruns_from_db_offline():
