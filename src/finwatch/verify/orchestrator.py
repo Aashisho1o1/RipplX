@@ -146,19 +146,6 @@ def persist_report(
     return repo.insert_verification_results(rows)
 
 
-def verify_and_store(
-    bundle: VerifyBundle,
-    repo: Repo,
-    analysis_id: int,
-    *,
-    store: FactStore | None = None,
-    sector: SectorInfo | None = None,
-    created_at: str,
-) -> VerificationReport:
-    """Run the verifier once and persist the report (no regeneration)."""
-    report = run_all(bundle, store, sector)
-    persist_report(repo, analysis_id, report, created_at=created_at)
-    return report
 
 
 # -- VerifyBundle assembly helpers (parts sourced from the DB) ---------------

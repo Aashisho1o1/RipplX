@@ -1,14 +1,12 @@
-"""Stooq CSV parsing, client, and the DB-backed price provider."""
+"""Stooq CSV parsing and client."""
 from __future__ import annotations
 
 from pathlib import Path
 
 import httpx
 
-from finwatch.db import Price, Repo, init_db
 from finwatch.ingest.stooq import (
     StooqClient,
-    StooqPriceProvider,
     parse_stooq_csv,
     stooq_symbol,
 )
@@ -45,16 +43,3 @@ def test_client_fetch_parses_fixture():
     assert rows[0] == ("2024-09-27", 227.79)
     assert rows[-1] == ("2024-11-01", 222.91)
     assert len(rows) == 3
-
-
-def test_price_provider_reads_db():
-    conn = init_db(":memory:")
-    repo = Repo(conn)
-    repo.upsert_prices([
-        Price(ticker="AAA", date="2024-01-02", close=10.0),
-        Price(ticker="AAA", date="2024-01-05", close=11.0),
-    ])
-    pp = StooqPriceProvider(repo)
-    assert pp.close_on_or_before("AAA", "2024-01-06") == 11.0
-    assert pp.close_on_or_before("AAA", "2024-01-03") == 10.0
-    assert pp.close_on_or_before("AAA", "2024-01-01") is None

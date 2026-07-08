@@ -26,7 +26,6 @@ class Config(BaseModel):
     db_path: str = "./data/finwatch.db"
     model_extract: str | None = None
     model_reason: str | None = None
-    price_source: str = "stooq"
 
 
 def load_dotenv(path: Path = DEFAULT_ENV_PATH) -> None:
@@ -60,5 +59,4 @@ def load_config(env_path: Path = DEFAULT_ENV_PATH) -> Config:
         db_path=os.environ.get("FINWATCH_DB", "./data/finwatch.db"),
         model_extract=os.environ.get("FINWATCH_MODEL_EXTRACT") or None,
         model_reason=os.environ.get("FINWATCH_MODEL_REASON") or None,
-        price_source=os.environ.get("FINWATCH_PRICE_SOURCE", "stooq"),
     )

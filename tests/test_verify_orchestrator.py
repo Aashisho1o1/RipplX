@@ -16,7 +16,6 @@ from finwatch.verify import (
     run_all,
     run_with_regeneration,
     section_texts_from_repo,
-    verify_and_store,
 )
 from finwatch.verify.checks import EvidenceClaim, VerifyBundle
 from finwatch.xbrl.normalize import Fact, FactStore
@@ -181,14 +180,6 @@ def test_persist_report_round_trips_detail_and_created_at():
     assert all(r.created_at == "ts-123" for r in rows)  # timestamp column not transposed
 
 
-def test_verify_and_store_runs_and_persists():
-    repo = Repo(init_db(":memory:"))
-    report = verify_and_store(_bundle(CLEAN), repo, analysis_id=7, created_at="t")
-    assert report.verdict in ("PASS", "PASS_WITH_WARNINGS")
-    assert repo.count_verification_results(7) == len(report.results)
-
-
-# ---- bundle-assembly helpers -----------------------------------------------
 def test_fact_values_from_repo():
     repo = Repo(init_db(":memory:"))
     repo.replace_xbrl_facts("1", [

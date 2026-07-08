@@ -17,7 +17,6 @@ def test_load_config_reads_user_agent_from_env(monkeypatch, tmp_path):
     cfg = load_config(env_path=tmp_path / "missing.env")
     assert isinstance(cfg, Config)
     assert cfg.sec_user_agent == "Test User test@example.com"
-    assert cfg.price_source == "stooq"
     assert cfg.db_path == "./data/finwatch.db"
 
 

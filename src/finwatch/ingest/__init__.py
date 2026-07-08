@@ -18,7 +18,6 @@ from finwatch.ingest.service import (
 )
 from finwatch.ingest.stooq import (
     StooqClient,
-    StooqPriceProvider,
     parse_stooq_csv,
     stooq_symbol,
 )
@@ -31,7 +30,6 @@ __all__ = [
     "RetryableHTTPError",
     "normalize_cik",
     "StooqClient",
-    "StooqPriceProvider",
     "parse_stooq_csv",
     "stooq_symbol",
     "TickerRecord",

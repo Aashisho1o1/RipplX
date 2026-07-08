@@ -98,11 +98,11 @@ class P1Extractor:
 
     def run(
         self, *, filing_meta: dict, sections: dict,
-        risk_factor_diff: dict | None = None, xbrl_facts: list | None = None,
+        risk_factor_diff: dict | None = None,
     ) -> tuple[P1Output, int, LLMResponse]:
         inputs = {
             "filing_meta": filing_meta, "sections": sections,
-            "risk_factor_diff": risk_factor_diff, "xbrl_facts": xbrl_facts,
+            "risk_factor_diff": risk_factor_diff,
         }
         return _run_stage(
             llm=self.llm, repo=self.repo, stage="P1", prompt_stage=STAGE_P1,

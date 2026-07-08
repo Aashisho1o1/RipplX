@@ -45,3 +45,6 @@ web/dist/
 *.swp
 .vscode/
 .idea/
+
+# macOS Finder "duplicate" artifacts (e.g. "render 2.py", "App 2")
+*[ 2]*

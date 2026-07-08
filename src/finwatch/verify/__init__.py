@@ -14,7 +14,6 @@ from finwatch.verify.orchestrator import (
     persist_report,
     run_with_regeneration,
     section_texts_from_repo,
-    verify_and_store,
 )
 
 __all__ = [
@@ -25,7 +24,6 @@ __all__ = [
     "EvidenceClaim",
     "run_with_regeneration",
     "VerificationOutcome",
-    "verify_and_store",
     "persist_report",
     "fact_values_from_repo",
     "section_texts_from_repo",

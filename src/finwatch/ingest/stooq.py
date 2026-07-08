@@ -1,15 +1,13 @@
-"""Stooq EOD price fetch + the DB-backed PriceProvider.
+"""Stooq EOD price fetch.
 
 Stooq's free daily CSV endpoint (no key) returns ``Date,Open,High,Low,Close,Volume``
-with ISO dates. Ingest stores full history in the ``prices`` table;
-``StooqPriceProvider.close_on_or_before`` is then a pure DB lookup (no network at
-metrics time), satisfying the ``PriceProvider`` protocol in metrics/formulas.py.
+with ISO dates. Ingest stores full history in the ``prices`` table; the ``Repo``
+class then satisfies the ``PriceProvider`` protocol in metrics/formulas.py via
+``Repo.close_on_or_before`` (a pure DB lookup — no network at metrics time).
 """
 from __future__ import annotations
 
 import httpx
-
-from finwatch.db.repositories import Repo
 
 STOOQ_URL = "https://stooq.com/q/d/l/?s={symbol}&i=d"
 
@@ -64,17 +62,3 @@ class StooqClient:
 
     def close(self) -> None:
         self._client.close()
-
-
-class StooqPriceProvider:
-    """PriceProvider implementation reading the cached ``prices`` table.
-
-    Structurally satisfies metrics.formulas.PriceProvider (a Protocol): given a
-    ticker and ISO date, return the close on-or-before that date, or None.
-    """
-
-    def __init__(self, repo: Repo) -> None:
-        self.repo = repo
-
-    def close_on_or_before(self, ticker: str, date_iso: str) -> float | None:
-        return self.repo.close_on_or_before(ticker, date_iso)

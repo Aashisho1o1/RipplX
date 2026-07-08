@@ -54,10 +54,6 @@ shadow_app = typer.Typer(help="Shadow-signal track record.", no_args_is_help=Tru
 app.add_typer(shadow_app, name="shadow")
 
 
-def _stub(phase: str, what: str = "") -> None:
-    tail = f" ({what})" if what else ""
-    console.print(f"[yellow]not yet implemented[/] — arrives in {phase}{tail}.")
-    raise typer.Exit(code=0)
 
 
 def _version_callback(value: bool) -> None:
