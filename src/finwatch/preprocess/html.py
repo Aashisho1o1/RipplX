@@ -72,7 +72,13 @@ class NormalizedDoc:
 
 
 def _nearest_block(node) -> object:
-    """Identity of the nearest block-level ancestor (for newline boundaries)."""
+    """Nearest block-level ancestor node (for newline boundaries).
+
+    Compared by value equality (``==``/``!=``), never ``is``: selectolax returns
+    a fresh wrapper object on every ``.parent`` access, so two text runs in the
+    same block are identity-distinct but value-equal. Using ``is`` here injects a
+    newline before every run and shreds inline-formatted phrases / inline-XBRL.
+    """
     p = node.parent
     while p is not None:
         if p.tag in _BLOCK_TAGS:
@@ -148,7 +154,7 @@ def html_to_text(html: str) -> NormalizedDoc:
         if skip:
             continue
         block = _nearest_block(node)
-        if block is not prev_block and pos > 0 and not parts[-1].endswith("\n"):
+        if block != prev_block and pos > 0 and not parts[-1].endswith("\n"):
             parts.append("\n")
             pos += 1
         prev_block = block

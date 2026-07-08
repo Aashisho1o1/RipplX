@@ -5,6 +5,7 @@ Hard requirements baked in (CLAUDE.md §4): identify via a non-empty User-Agent
 backoff on 429/403/5xx, and cache aggressively (filings are immutable — fetch once,
 store forever). The httpx client, clock, and sleep are all injectable so tests run
 with zero network and zero real waiting.
+
 """
 from __future__ import annotations
 

@@ -235,6 +235,27 @@ def test_br_tag_injects_line_break_for_header_detection():
     assert re.search(r"(?im)^Item\s+7A\b", doc.text) is not None
 
 
+def test_inline_tags_do_not_split_a_line():
+    # Regression: selectolax returns a fresh wrapper per .parent access, so the
+    # block-boundary check must use value equality (!=), not identity (is not).
+    # A sentence split by inline formatting / inline-XBRL must stay on one line;
+    # only a real block boundary (the second <p>) may inject a newline.
+    doc = html_to_text(
+        "<p>Revenue was $<ix>5,234</ix> million, up from $<ix>4,100</ix> "
+        "on a <b>going concern</b> basis.</p>"
+        "<p>Next paragraph.</p>"
+    )
+    # inline-XBRL numbers stay attached to their currency symbol and sentence
+    assert "$5,234 million" in doc.text
+    assert "up from $4,100" in doc.text
+    # a phrase spanning an inline <b> is not shredded (lexicon regexes rely on this)
+    assert "going concern" in doc.text
+    # the whole first sentence is one line (no injected newlines inside the block)
+    assert "Revenue was $5,234 million, up from $4,100 on a going concern basis." in doc.text
+    # but a genuine block boundary still breaks
+    assert "\nNext paragraph." in doc.text
+
+
 def test_8k_furnishing_is_scoped_per_item():
     # 2.02 filed (no legend in its span), 7.01 furnished (legend in its span)
     html = (
