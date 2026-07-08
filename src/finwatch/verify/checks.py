@@ -1,4 +1,4 @@
-"""Deterministic verifier — the compile pass. TIER 1 — do not modify.
+"""Deterministic verifier — the compile pass. Trust-critical (test-guarded): edit with care, keep the spec tests green.
 
 V1 numeric provenance · V2 accounting identities (applicability-aware) ·
 V3 rule-logic re-derivation · V4 citation integrity · V5 schema & hygiene.

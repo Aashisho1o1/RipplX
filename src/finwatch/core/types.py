@@ -1,4 +1,4 @@
-"""Core shared types and constants. TIER 1 — do not modify."""
+"""Core shared types and constants. Trust-critical (test-guarded): edit with care, keep the spec tests green."""
 from __future__ import annotations
 
 from enum import Enum

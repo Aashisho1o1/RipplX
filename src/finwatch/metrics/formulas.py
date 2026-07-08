@@ -1,4 +1,4 @@
-"""Sector-aware metric formulas. TIER 1 — do not modify.
+"""Sector-aware metric formulas. Trust-critical (test-guarded): edit with care, keep the spec tests green.
 
 Every function returns a MetricResult (envelope.py). Rules:
   * Never raise on missing data — return status=unavailable with the missing list.

@@ -1,7 +1,17 @@
 # finwatch — CORE_CODE.md
-## Pre-written critical code (TIER 1) — transcribe VERBATIM
+## Historical build-time snapshot of the trust layer — NOT live law
 
-**Instructions to the building agent (Claude Code):**
+> **⚠️ Historical only — not authoritative, not kept in sync.** This was the pre-written trust
+> layer (core types, XBRL normalize, metric envelope + formulas, signal matrix, verifier, and
+> their two spec tests) that the build agent transcribed verbatim when finwatch v0.2 was first
+> constructed. The shipped files under `src/finwatch/` and `tests/` are now the **single source
+> of truth** and have already diverged via bug fixes. Do **not** restore code from here, and do
+> **not** mirror changes back into it. Those files are now *test-guarded* (edit freely, keep the
+> executable-spec tests green) — see CLAUDE.md "Trust-critical code" and SYSTEM_DESIGN.md §1/§6.
+> The original build-time instructions below are retained only as a record of how the project
+> was bootstrapped.
+
+**Instructions to the building agent (Claude Code) — historical:**
 
 1. These files were written by the strongest available model and reviewed as the project's
    trust layer. **Transcribe each file byte-for-byte to the exact path shown.** Do not

@@ -1,4 +1,4 @@
-"""Executable spec of the decision matrix. TIER 1 — do not modify.
+"""Executable spec of the decision matrix. Trust-critical (test-guarded): edit with care, keep the spec tests green.
 Self-contained: no network, no DB, no LLM."""
 from __future__ import annotations
 

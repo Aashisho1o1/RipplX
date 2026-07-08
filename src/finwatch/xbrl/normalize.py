@@ -1,4 +1,4 @@
-"""XBRL normalization layer over SEC companyfacts JSON. TIER 1 — do not modify.
+"""XBRL normalization layer over SEC companyfacts JSON. Trust-critical (test-guarded): edit with care, keep the spec tests green.
 
 Design (per CLAUDE.md §8):
   * Concept resolution via priority-ordered tag lists; first tag with usable

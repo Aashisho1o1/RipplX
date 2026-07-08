@@ -1,4 +1,4 @@
-"""Mutation battery — the verifier's Definition of Done. TIER 1 — do not modify.
+"""Mutation battery — the verifier's Definition of Done. Trust-critical (test-guarded): edit with care, keep the spec tests green.
 Builds a known-good bundle, then seeds five corruptions; each must FAIL on the
 correct check id, and the clean bundle must PASS."""
 from __future__ import annotations

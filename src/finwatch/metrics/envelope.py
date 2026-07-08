@@ -1,4 +1,4 @@
-"""Universal metric result envelope. TIER 1 — do not modify.
+"""Universal metric result envelope. Trust-critical (test-guarded): edit with care, keep the spec tests green.
 
 Every metric in the system returns a MetricResult. `status` semantics:
   computed        -> value/components are meaningful

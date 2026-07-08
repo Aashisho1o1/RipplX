@@ -1,4 +1,4 @@
-"""Deterministic signal decision matrix. TIER 1 — do not modify.
+"""Deterministic signal decision matrix. Trust-critical (test-guarded): edit with care, keep the spec tests green.
 
 Pure function: evaluate(record, extraction, impact, metrics) -> Decision.
 No I/O. The verifier's V3 re-runs this function to audit any P3 output, so any

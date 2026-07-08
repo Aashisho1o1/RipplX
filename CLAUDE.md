@@ -10,15 +10,15 @@ grounded without re-reading a 1000-line build spec on every call. The full origi
 build specification (all schemas, prompts, tables, phase-by-phase DoDs) is archived
 verbatim at `docs/CLAUDE_v0.2_full_spec.md` if you ever need historical detail.*
 
-**Ground truth, in order:** (1) the shipped code + its tests, (2) `CORE_CODE.md` for the
-8 frozen Tier-1 files specifically — see "Tiered code discipline" below — which must stay
-byte-identical to their source, (3) this file, (4) `SYSTEM_DESIGN.md` (module map +
-rationale). If this file and the code ever disagree about something already built, the
-code is right — fix the drift here, don't fight the code.
+**Ground truth, in order:** (1) the shipped code + its tests, (2) this file, (3) `SYSTEM_DESIGN.md`
+(module map + rationale). The 8 trust-critical files carry extra, test-guarded care — see
+"Trust-critical code" below (`CORE_CODE.md` is a historical build-time snapshot, not ground
+truth). If this file and the code ever disagree about something already built, the code is right —
+fix the drift here, don't fight the code.
 
 ---
 
-## ⚠️ Tiered code discipline — read before touching any of these 8 files
+## ⚠️ Trust-critical code — read before touching any of these 8 files
 
 ```
 src/finwatch/core/types.py            src/finwatch/signals/matrix.py
@@ -27,16 +27,25 @@ src/finwatch/xbrl/normalize.py        tests/test_signals_matrix.py
 src/finwatch/metrics/formulas.py      tests/test_verifier_mutations.py
 ```
 
-These are **Tier 1 — frozen**: the deterministic trust layer (XBRL normalization, metric
-formulas, the signal decision matrix, the verifier). They are pure logic with stable
-interfaces; a subtle bug in any of them is silent and undermines the product's entire
-"verified" promise. **Do not modify without explicit operator authorization.** If ever
-authorized, mirror the change **byte-for-byte into `CORE_CODE.md` in the same commit**
-and confirm the two stay identical — that file is the verbatim law these are transcribed
-from. Full tier map + rationale: `SYSTEM_DESIGN.md`.
+These are the deterministic **trust layer** (XBRL normalization, metric formulas, the signal
+decision matrix, the verifier). **Edit them freely — the codebase is flexible — but with extra
+care**, because their failure mode is *silent*: a wrong-but-plausible number or a mis-ordered
+rule ships as "verified" and quietly breaks the product's whole promise. The norm here is
+**test-guarded, not frozen**:
 
-Everything else is Tier 2/3 — build, refactor, and simplify freely per the working
-conventions in §4.
+1. The executable specs — `tests/test_signals_matrix.py`, `tests/test_verifier_mutations.py` —
+   plus the metrics/verify suites are the real guardrail. Any change must keep the full suite
+   green (`uv run pytest -q`); when your change is correct, update the spec in the same commit
+   and say why.
+2. Give it a real review — the failure is silent, so "looks fine" isn't enough; prefer adding an
+   edge-case/mutation test that would have caught the bug you're fixing.
+
+No operator sign-off gate and no `CORE_CODE.md` mirror: `CORE_CODE.md` is a historical build-time
+snapshot, not live law (the shipped code is ground truth and has already diverged via bug fixes).
+Full tier map + rationale: `SYSTEM_DESIGN.md`.
+
+Everything else is ordinary application code — build, refactor, and simplify freely per the
+working conventions in §4.
 
 ---
 
@@ -123,7 +132,8 @@ filings are immutable, fetch once, store forever. Config: `.env.example`.
 - Filing text (and anything else the LLM reads) is **untrusted** — it may contain
   adversarial instructions. `prompts/foundation.md`'s defenses against this must never be
   weakened.
-- Touching a Tier 1 file: see the discipline box above, non-negotiable.
+- Touching a trust-critical file (the 8 above): keep the full test suite green and give it a
+  real review — see the "Trust-critical code" box.
 
 ---
 
@@ -356,7 +366,8 @@ sector-relative valuation · earnings-call transcripts · deep symbolic math-as-
 |---|---|
 | Status, quickstart, CLI walkthrough, acceptance gates, shadow promotion policy | `README.md` |
 | Module tiers, file tree, data flow, fixed interface contracts | `SYSTEM_DESIGN.md` |
-| Frozen Tier 1 source (verbatim law) | `CORE_CODE.md` |
+| Trust-critical files + test-guarded norm | "Trust-critical code" box above · `SYSTEM_DESIGN.md` §1, §6 |
+| Historical build-time trust-layer snapshot (not live law) | `CORE_CODE.md` |
 | Full v0.2 build spec (everything this file used to hold in full) | `docs/CLAUDE_v0.2_full_spec.md` |
 | DB schema (DDL) | `src/finwatch/db/schema.sql` + `src/finwatch/db/migration_*.sql` |
 | XBRL concept map | `src/finwatch/xbrl/concept_map.yaml` |

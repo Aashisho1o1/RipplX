@@ -1,22 +1,26 @@
 # finwatch — SYSTEM_DESIGN.md
 ## System Design Plan v0.2 — module map, criticality tiers, and integration contract
 
-This document rides alongside **CLAUDE.md** (the build spec) and **CORE_CODE.md** (pre-written
-critical code). Precedence for the building agent:
+This document rides alongside **CLAUDE.md** (project context) and **CORE_CODE.md** (a historical
+build-time snapshot of the trust layer — no longer live law). Precedence today:
 
-> **CORE_CODE.md (verbatim law) > CLAUDE.md (binding spec) > this document (map & rationale) >
-> agent judgment.**
+> **shipped code + its tests > CLAUDE.md > this document (map & rationale) > agent judgment.**
+> (`CORE_CODE.md` is historical only; the shipped source has since diverged via bug fixes.)
 
 ---
 
 ## 1. Criticality tiers
 
-Every file in the repository belongs to exactly one tier:
+The tiers describe how much *care* a file needs, not how locked it is. **Every file is editable;
+the codebase is flexible.**
 
-- **⚙ TIER 1 — PRE-WRITTEN (transcribe verbatim from CORE_CODE.md).** 
-- **🔧 TIER 2 — GUIDED BUILD.** Build per the detailed specs in CLAUDE.md §§5–7, 10–12, 15–16.
-  Interfaces touching Tier 1 are fixed contracts (see §4 below).
-- **🧱 TIER 3 — FREE BUILD.** Standard engineering; agent's discretion within CLAUDE.md rules
+- **⚙ TIER 1 — TRUST-CRITICAL (test-guarded).** The deterministic trust layer (see §6). Editable
+  like anything else, but its failure mode is silent, so a change must keep the executable-spec
+  tests green and get a real review. These files were originally pre-written and transcribed
+  verbatim from `CORE_CODE.md` at build time; that mirror is now historical, not a constraint.
+- **🔧 TIER 2 — CORE APP CODE.** The interface contracts in §4 are still real — other code relies
+  on them, so change them deliberately and update both sides.
+- **🧱 TIER 3 — STANDARD CODE.** Ordinary engineering within the CLAUDE.md working conventions
   (deps, tests, commit discipline).
 
 ## 2. Annotated file tree
@@ -115,10 +119,13 @@ tables. The RipplX web app lives in the separate `web/` package and consumes str
 projections from `src/finwatch/presentation/` through the local-only `src/finwatch/web/`
 adapter. It calls existing services for writes and never duplicates trust-layer logic.
 
-## 6. Why these five modules were pre-written (rationale for reviewers)
+## 6. Why these modules are trust-critical (rationale for reviewers)
 
-They share three properties: (a) a subtle error is **silent** — wrong-but-plausible numbers,
-a mis-ordered rule, a tolerant-when-it-shouldn't-be matcher; (b) they define the product's
-trust promise ("verified"); (c) they are pure logic with stable interfaces, so pre-writing
-them constrains the rest of the build instead of fighting it. Everything else fails loudly
-and iterates cheaply, which is exactly what a fast general model is for.
+They share two properties that earn the extra, test-guarded care: (a) a subtle error is
+**silent** — wrong-but-plausible numbers, a mis-ordered rule, a tolerant-when-it-shouldn't-be
+matcher; (b) they define the product's trust promise ("verified"). They are pure logic with
+stable interfaces — which is exactly why the executable-spec tests can pin their behavior; the
+tests, not a freeze, are what keep them honest. (Historically they were pre-written and
+transcribed verbatim from `CORE_CODE.md` so the initial build couldn't corrupt them; that
+scaffolding is spent — edit them freely, keep the specs green.) Everything else fails loudly and
+iterates cheaply.
