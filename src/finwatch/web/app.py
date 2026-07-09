@@ -69,6 +69,7 @@ class JobRequest(BaseModel):
     accession: str | None = None
     mode: Literal["auto", "parse", "analysis"] = "auto"
     limit: int = Field(default=1, ge=1, le=10)
+    form: Literal["8-K", "10-Q", "10-K"] | None = None   # None = newest of any form
 
 
 def _since_for_period(period: str) -> str:
@@ -399,7 +400,8 @@ def create_app(*, db_path: str | None = None, web_dist: str | Path | None = None
         return work
 
     def analysis_work(
-        ticker: str | None, limit: int, accession: str | None, mode: str
+        ticker: str | None, limit: int, accession: str | None, mode: str,
+        form: str | None = None,
     ):
         def work(job_id: str, registry: JobRegistry) -> bool:
             from pathlib import Path as FilePath
@@ -456,6 +458,8 @@ def create_app(*, db_path: str | None = None, web_dist: str | Path | None = None
             try:
                 records = holding_records(repo)
                 if accession:
+                    # An explicit accession pins one filing; the form filter is ignored
+                    # here (the accession already determines the form).
                     selected = repo.get_filing(accession)
                     if selected is None:
                         raise RuntimeError(f"Filing {accession} was not found.")
@@ -463,16 +467,17 @@ def create_app(*, db_path: str | None = None, web_dist: str | Path | None = None
                         raise RuntimeError(f"Filing {accession} does not belong to {ticker}.")
                     filings = [selected]
                 else:
-                    # Browser actions process the newest eligible filing(s); CLI backfills
-                    # retain their deliberate oldest-first ordering.
-                    filings = list(reversed(unanalyzed_filings(repo, cik)))[:limit]
+                    # Browser actions process the newest eligible filing(s), optionally
+                    # narrowed to one form; CLI backfills keep their oldest-first order.
+                    wanted = frozenset({form}) if form else None
+                    filings = list(reversed(unanalyzed_filings(repo, cik, forms=wanted)))[:limit]
                 if not filings:
                     registry.add_item(
                         job_id,
                         JobItem(
                             key=ticker.upper() if ticker else "portfolio",
                             state="completed",
-                            message="No unanalyzed 10-K, 10-Q, or 8-K filings.",
+                            message=f"No unanalyzed {form or '10-K, 10-Q, or 8-K'} filings.",
                         ),
                     )
                 for filing in filings:
@@ -562,6 +567,7 @@ def create_app(*, db_path: str | None = None, web_dist: str | Path | None = None
                     payload.limit,
                     _trimmed(payload.accession),
                     payload.mode,
+                    payload.form,
                 ),
             )
         except JobConflictError as exc:

@@ -29,6 +29,20 @@ def test_web_analysis_request_is_bounded_to_one_filing_by_default():
         JobRequest(mode="unknown")
 
 
+def test_web_analysis_request_form_field_is_validated():
+    assert JobRequest().form is None                       # default = any form
+    assert JobRequest(form="10-Q").form == "10-Q"
+    assert JobRequest(form="8-K").form == "8-K"
+    with pytest.raises(ValueError):
+        JobRequest(form="10-X")                            # not a supported form
+
+
+def test_analyze_endpoint_rejects_unknown_form(tmp_path):
+    client, _ = _client(tmp_path)
+    # FastAPI validates the body before the model/key gate, so a bad form is a 422.
+    assert client.post("/api/jobs/analyze", json={"form": "10-X"}).status_code == 422
+
+
 def test_bootstrap_setup_and_session_key_are_safe(tmp_path, monkeypatch):
     monkeypatch.delenv("SEC_USER_AGENT", raising=False)
     client, db_path = _client(tmp_path)

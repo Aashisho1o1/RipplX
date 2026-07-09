@@ -86,13 +86,24 @@ _DONE_STATUS = frozenset({"verified"})
 _ANALYZABLE_FORMS = frozenset({"10-K", "10-Q", "8-K"})
 
 
-def unanalyzed_filings(repo: Repo, cik: str | None = None) -> list[Filing]:
-    """Supported filings not yet analyzed + verified (oldest first for CLI backfills)."""
+def unanalyzed_filings(
+    repo: Repo, cik: str | None = None, forms: frozenset[str] | None = None
+) -> list[Filing]:
+    """Supported filings not yet analyzed + verified (oldest first for CLI backfills).
+
+    ``forms`` optionally narrows the queue to specific base form types (e.g.
+    ``{"10-Q"}``). Matching is on ``base_form`` — case-insensitive and amendment-aware,
+    so requesting ``8-K`` also selects an ``8-K/A``. ``None`` = every analyzable form
+    (unchanged behavior). The ``_ANALYZABLE_FORMS`` gate still applies, so an
+    unsupported request narrows to nothing rather than admitting new forms.
+    """
+    wanted = None if forms is None else {f.strip().upper() for f in forms}
     todo = [
         filing
         for filing in repo.list_filings(cik)
         if filing.status not in _DONE_STATUS
         and base_form(filing.form_type) in _ANALYZABLE_FORMS
+        and (wanted is None or base_form(filing.form_type) in wanted)
     ]
     todo.sort(key=lambda f: (f.filed_at, f.accession_number))
     return todo

@@ -22,3 +22,4 @@ export interface Metrics { ticker: string; owned: boolean; as_of: string; rows: 
 export interface TrackRecord { evaluations: number; posture_counts: Record<Posture, number>; signal_counts: Record<Signal, number>; outcomes_reviewed: number }
 export interface Bootstrap { setup_required: boolean; sec_user_agent: string; period: string; signals: boolean; model_extract: string; model_reason: string; api_key_configured: boolean; api_key_source: string | null; analysis_configured: boolean }
 export interface Job { id: string; kind: "sync" | "analysis"; state: "queued" | "running" | "completed" | "partial" | "failed"; created_at: string; items: { key: string; state: string; message: string; verdict: string | null; stage: string | null; diagnostics: Record<string, unknown> }[]; error: string | null }
+export type FormType = "8-K" | "10-Q" | "10-K";

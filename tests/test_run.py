@@ -130,6 +130,28 @@ def test_analysis_queue_excludes_unsupported_sec_forms():
     assert [filing.form_type for filing in unanalyzed_filings(repo)] == ["10-Q", "8-K/A"]
 
 
+def test_analysis_queue_filters_by_form_type():
+    repo = Repo(init_db(":memory:"))
+    _seed(repo)   # a 10-Q at 2024-08-01
+    repo.upsert_filing(Filing(accession_number="0000789019-24-000081", cik=CIK, form_type="8-K",
+                              filed_at="2024-08-02", primary_doc_url="https://www.sec.gov/8k.htm"))
+    repo.upsert_filing(Filing(accession_number="0000789019-24-000082", cik=CIK, form_type="10-K",
+                              filed_at="2024-08-03", primary_doc_url="https://www.sec.gov/10k.htm"))
+    repo.upsert_filing(Filing(accession_number="0000789019-24-000083", cik=CIK, form_type="8-K/A",
+                              filed_at="2024-08-04", primary_doc_url="https://www.sec.gov/8ka.htm"))
+
+    def queued(form):
+        return [f.form_type for f in unanalyzed_filings(repo, forms=frozenset({form}))]
+
+    # a single requested form narrows the queue; an amendment matches its base form
+    assert queued("8-K") == ["8-K", "8-K/A"]
+    assert queued("10-K") == ["10-K"]
+    assert queued("10-Q") == ["10-Q"]
+    assert queued("8-k") == ["8-K", "8-K/A"]     # case-insensitive
+    # None (default) preserves the full eligible queue, oldest-first
+    assert [f.form_type for f in unanalyzed_filings(repo)] == ["10-Q", "8-K", "10-K", "8-K/A"]
+
+
 def test_process_reports_errors_without_aborting():
     repo = Repo(init_db(":memory:"))
     _seed(repo, url=None)                                       # no primary-doc URL
