@@ -103,3 +103,33 @@ def test_bank_income_ordering_is_skipped_not_failed():
                                   SectorInfo(SectorClass.FINANCIAL, True))
     v2c = [c for c in results if c.check_id == "V2c"]
     assert v2c and v2c[0].verdict == "skipped_not_applicable"
+
+
+# --- V1 whitelist regressions: references/dates must not orphan-fail V1 -------
+# Before these fixes, before.strip() defeated the "Item " whitelist and the date
+# window was too short, so the most material filings (8-K Item 4.02, auditor
+# resignations dated in prose) blocking-failed V1 and were routed to manual review.
+
+def test_item_code_reference_is_not_orphaned_v1():
+    b = make_bundle(rendered="Non-reliance on prior financials (Item 4.02); "
+                             "see also Item 1.03 and Item 2.04.")
+    r = run_all(b, make_store(), SectorInfo(SectorClass.GENERAL, False))
+    assert "V1" not in failing_ids(r), \
+        [x.detail for x in r.results if x.check_id == "V1"]
+
+
+def test_calendar_dates_are_not_orphaned_v1():
+    b = make_bundle(rendered="Auditor resigned effective March 15, 2024; the "
+                             "restatement was disclosed on 2024-09-28.")
+    r = run_all(b, make_store(), SectorInfo(SectorClass.GENERAL, False))
+    assert "V1" not in failing_ids(r), \
+        [x.detail for x in r.results if x.check_id == "V1"]
+
+
+def test_real_orphan_still_fails_v1_next_to_a_date():
+    # Guard the fix in the other direction: the date whitelist stays tight — a
+    # genuine unprovenanced figure sitting beside a date must STILL fail V1.
+    b = make_bundle(rendered="On March 15, 2024 the filing cited $999.9 million "
+                             "of unexplained charges.")
+    r = run_all(b, make_store(), SectorInfo(SectorClass.GENERAL, False))
+    assert "V1" in failing_ids(r)

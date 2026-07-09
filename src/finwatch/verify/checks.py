@@ -78,10 +78,22 @@ _SCALE = {"billion": 1e9, "bn": 1e9, "b": 1e9,
           "million": 1e6, "mn": 1e6, "m": 1e6,
           "thousand": 1e3, "k": 1e3}
 _WHITELIST_AFTER = re.compile(r"^\s*-\s?[KQkq]\b")          # 10-K / 8-K / 10-Q
+# A label immediately before the number that marks it as a reference, not a
+# financial quantity: "Item 2.02", "Rule 10b5-1", "§ 5", "c_0001", "CIK 320193".
+# Matched against the UNSTRIPPED left-context so the mandatory-\s patterns
+# (Item\s / Rule\s / phase\s) actually see the space that precedes the number.
+# (The old M(?=\d$)/V(?=\d$)/F/v branches were inert — the digit they look ahead
+# for lives past the end of `before`, never inside it — so they are dropped.)
 _WHITELIST_BEFORE = re.compile(
-    r"(Item\s|Rule\s|§\s?|M(?=\d$)|V(?=\d$)|F(?=\d$)|c_|claim_|accession|"
-    r"CIK\s?|phase\s|v(?=\d))", re.IGNORECASE)
+    r"(Item\s|Rule\s|§\s?|c_|claim_|accession|CIK\s?|phase\s)", re.IGNORECASE)
 _ISO_DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
+# Written-date parts: a month name immediately before the day, or ', YYYY' right
+# after it — used (with a 1–31 day bound) to whitelist calendar dates.
+_MONTH_BEFORE = re.compile(
+    r"(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|"
+    r"jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|"
+    r"dec(?:ember)?)\.?\s+$", re.IGNORECASE)
+_DAY_YEAR_AFTER = re.compile(r"\s*,\s*(?:19|20)\d{2}\b")
 
 
 class NumberToken(BaseModel):
@@ -91,19 +103,44 @@ class NumberToken(BaseModel):
     position: int
 
 
+def _is_date_part(text: str, m: "re.Match[str]") -> bool:
+    """True when the matched number is a calendar-date component that needs no
+    financial provenance: any field of an ISO date (YYYY-MM-DD), or a day-of-month
+    (1–31) in a written date ('March 15, 2024' / 'March 15' / '15, 2024').
+
+    Kept deliberately tight so it never launders a real financial figure: the day is
+    bounded 1–31 and must sit directly beside a month name or a ', YYYY'."""
+    s, e = m.start(), m.end()
+    # ISO date: the token's span lies fully inside a YYYY-MM-DD occurrence. The
+    # window is wide enough (±10) that the day component still sees the leading year.
+    ws = max(0, s - 10)
+    window = text[ws:e + 10]
+    for dm in _ISO_DATE.finditer(window):
+        if ws + dm.start() <= s and e <= ws + dm.end():
+            return True
+    # Written date: a bare 1- or 2-digit day (1–31) next to a month or ', YYYY'.
+    num = m.group("num")
+    is_day = (m.group("dec") is None and m.group("cur") is None
+              and m.group("suf") is None and num.isdigit()
+              and 1 <= int(num) <= 31)
+    if is_day and (_MONTH_BEFORE.search(text[max(0, s - 12):s])
+                   or _DAY_YEAR_AFTER.match(text[e:e + 8])):
+        return True
+    return False
+
+
 def extract_number_tokens(text: str) -> list[NumberToken]:
     tokens: list[NumberToken] = []
     for m in _NUM.finditer(text):
         s, e = m.start(), m.end()
         raw = text[s:e]
         # whitelists ------------------------------------------------------
-        if _ISO_DATE.match(text[max(0, s - 5):e + 6].strip("() ")):
-            if _ISO_DATE.search(text[max(0, s - 5):e + 6]):
-                continue
+        if _is_date_part(text, m):
+            continue                                    # ISO / written calendar dates
         if _WHITELIST_AFTER.match(text[e:e + 4]):
             continue                                    # form names 10-K etc.
         before = text[max(0, s - 12):s]
-        if _WHITELIST_BEFORE.search(before.strip()):
+        if _WHITELIST_BEFORE.search(before):            # UNSTRIPPED: keeps the 'Item ' space
             continue                                    # Item 2.02, rule ids, claim ids
         num = float(m.group("num").replace(",", "") + (m.group("dec") or ""))
         if (m.group("suf") is None and m.group("cur") is None
