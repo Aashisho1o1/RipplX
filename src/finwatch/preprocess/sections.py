@@ -20,6 +20,12 @@ _ITEM_RE = re.compile(r"(?im)^[ \t]*Item[ \t]+(\d{1,2}[A-Z]?)[.\):\s]")
 _PART_RE = re.compile(r"(?im)^[ \t]*Part[ \t]+(IV|III|II|I)\b")
 # Leading item token of either form ("Item 7." or "Item 2.02"), for header-shape checks.
 _ITEM_TOKEN_RE = re.compile(r"(?i)^Item\s+\d{1,2}[A-Z]?(?:\.\d{2})?[.\):\s]+")
+# A separator run (dash / en- or em-dash / bullet / colon / space) that some filers
+# place between the item token and its title, e.g. "Item 5.02 - Departure of...".
+_SEP_RUN_RE = re.compile(r"^[\s\-–—•:]+")
+# A header line that is ONLY the item token ("Item 7." / "Item 1A."), whose title
+# renders on the following line (SEC's common two-cell table layout after flattening).
+_TENKQ_ITEM_ONLY_RE = re.compile(r"(?i)^Item\s+\d{1,2}[A-Z]?[.\):]?")
 # Item 8 sub-sections (auditor's report + notes), detected within the financials span.
 _AUDITOR_RE = re.compile(
     r"(?im)^.{0,25}Report\s+of\s+Independent\s+Registered\s+Public\s+Accounting\s+Firm"
@@ -73,14 +79,25 @@ def _line_at(text: str, start: int) -> str:
     return text[start : end if end != -1 else len(text)]
 
 
-def _headers(doc: NormalizedDoc, regex: re.Pattern) -> list[_Header]:
-    """Non-link, line-start matches in document order (ToC excluded via is_link)."""
+def _headers(doc: NormalizedDoc, regex: re.Pattern,
+             item_only_re: re.Pattern | None = None) -> list[_Header]:
+    """Non-link, line-start matches in document order (ToC excluded via is_link).
+
+    When ``item_only_re`` is given, a bare item-token header ("Item 7." alone on a
+    line) adopts the following title line via :func:`_resolve_header_title`, so the
+    two-cell 'Item 7.' | 'Management's Discussion...' table layout is not dropped.
+    The header offset is unchanged, so section boundaries/hashes are unaffected.
+    """
     out: list[_Header] = []
     for m in regex.finditer(doc.text):
         if doc.is_link_at(m.start()):
             continue
-        out.append(_Header(m.group(1).upper(), m.start(),
-                           normalize_whitespace_line(_line_at(doc.text, m.start()))))
+        single = normalize_whitespace_line(_line_at(doc.text, m.start()))
+        if item_only_re is not None:
+            title_line = _resolve_header_title(doc.text, m.start(), item_only_re) or single
+        else:
+            title_line = single
+        out.append(_Header(m.group(1).upper(), m.start(), title_line))
     return out
 
 
@@ -94,12 +111,46 @@ def _title_ok(key: str, title_line: str) -> bool:
 
 def _is_header_shape(title_line: str) -> bool:
     """True when the line looks like a real section header rather than a prose
-    cross-reference. Real titles start (right after the item token) with an
-    upper-case word (Title-Case or ALL-CAPS); a sentence like "Item 7 contains
-    additional Management's Discussion..." starts with a lower-case connective."""
+    cross-reference. Real titles start (right after the item token, past any
+    separator run) with an upper-case word (Title-Case or ALL-CAPS); a sentence
+    like "Item 7 contains additional Management's Discussion..." starts with a
+    lower-case connective. A leading separator ("Item 5.02 - Departure...") is
+    skipped so a dash/colon/dash-em between token and title does not drop the item."""
     m = _ITEM_TOKEN_RE.match(title_line)
-    after = (title_line[m.end():] if m else "").strip()
+    if not m:
+        return False
+    after = _SEP_RUN_RE.sub("", title_line[m.end():])
     return bool(after) and after[0].isupper()
+
+
+def _resolve_header_title(text: str, start: int, item_only_re: re.Pattern) -> str | None:
+    """Resolve a header's title, joining SEC's split-line shape where the item
+    token ("Item 7.") renders on its own line and the title follows on the next.
+
+    Returns the (possibly joined) title line, or ``None`` when the line is a prose
+    cross-reference or a bare item token with no following title. Callers always
+    take offsets/hashes from the item-token offset, so joining the title text never
+    moves a section boundary. Shared by the 10-K/10-Q and 8-K splitters.
+    """
+    line_end = text.find("\n", start)
+    line_end = line_end if line_end != -1 else len(text)
+    item_line = normalize_whitespace_line(text[start:line_end])
+    if _is_header_shape(item_line):
+        return item_line
+    if not item_only_re.fullmatch(item_line):
+        return None
+    cursor = line_end + 1
+    for _ in range(3):
+        next_end = text.find("\n", cursor)
+        next_end = next_end if next_end != -1 else len(text)
+        candidate = normalize_whitespace_line(text[cursor:next_end])
+        if candidate:
+            joined = f"{item_line} {candidate}"
+            return joined if _is_header_shape(joined) else None
+        if next_end == len(text):
+            break
+        cursor = next_end + 1
+    return None
 
 
 def _accept(key: str, title_line: str) -> bool:
@@ -135,7 +186,7 @@ def dedupe_largest(sections: list[Section]) -> list[Section]:
 
 
 def split_10k(doc: NormalizedDoc) -> list[Section]:
-    items = _headers(doc, _ITEM_RE)
+    items = _headers(doc, _ITEM_RE, _TENKQ_ITEM_ONLY_RE)
     boundaries = sorted({h.offset for h in items})
     sections: list[Section] = []
     for h in items:
@@ -153,7 +204,7 @@ def split_10k(doc: NormalizedDoc) -> list[Section]:
 
 def split_10q(doc: NormalizedDoc) -> list[Section]:
     parts = _headers(doc, _PART_RE)
-    items = _headers(doc, _ITEM_RE)
+    items = _headers(doc, _ITEM_RE, _TENKQ_ITEM_ONLY_RE)
     boundaries = sorted({h.offset for h in items} | {p.offset for p in parts})
     part_offsets = [p.offset for p in parts]
     sections: list[Section] = []

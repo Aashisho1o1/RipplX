@@ -135,7 +135,14 @@ def run_with_regeneration(
 def persist_report(
     repo: Repo, analysis_id: int, report: VerificationReport, *, created_at: str
 ) -> int:
-    """Persist every CheckResult in the report to ``verification_results``."""
+    """Persist every CheckResult in the report to ``verification_results``.
+
+    A re-verify of the same analysis REPLACES the prior rows (not appends): stale
+    blocking FAILs are cleared first so ``manual_review`` (derived from any-blocking-
+    fail over all rows) reflects only the latest run, and rows don't accumulate on
+    every retry.
+    """
+    repo.clear_verification_results(analysis_id)
     rows = [
         VerificationResult(
             analysis_id=analysis_id, check_id=c.check_id, verdict=c.verdict,

@@ -233,16 +233,20 @@ class FactStore:
 
     def yoy_pair(self, concept: str, kind: str = "annual"
                  ) -> Optional[tuple[ResolvedFact, ResolvedFact]]:
-        """(current, prior) annual pair or (current, same-quarter-last-year)."""
-        if kind == "annual":
-            s = self.annual(concept, 2)
-            return (s[0], s[1]) if len(s) >= 2 else None
-        s = self.quarterly(concept, 8)
-        if not s:
+        """(current, ~one-year-prior) pair, annual or same-quarter-last-year.
+
+        Both branches require the two legs to be ~one year apart (330-400 day
+        spacing). Consumers (revenue_growth, etc.) label the result "YoY", so a
+        fiscal-year change, a transition/stub period, or a missing annual must
+        yield ``None`` (→ unavailable) rather than a mislabeled multi-year delta —
+        the annual branch previously paired the two newest annuals blindly.
+        """
+        series = self.annual(concept, 6) if kind == "annual" else self.quarterly(concept, 8)
+        if not series:
             return None
-        cur = s[0]
+        cur = series[0]
         cur_end = date.fromisoformat(cur.fact.end)
-        for cand in s[1:]:
+        for cand in series[1:]:
             d = (cur_end - date.fromisoformat(cand.fact.end)).days
             if 330 <= d <= 400:
                 return (cur, cand)

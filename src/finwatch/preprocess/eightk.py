@@ -10,11 +10,11 @@ from __future__ import annotations
 import hashlib
 import re
 
-from finwatch.preprocess.html import NormalizedDoc, normalize_whitespace_line
+from finwatch.preprocess.html import NormalizedDoc
 from finwatch.preprocess.sections import (
     Section,
-    _is_header_shape,
     _next_boundary,
+    _resolve_header_title,
     dedupe_largest,
 )
 
@@ -36,30 +36,11 @@ def furnishing_present(text: str) -> bool:
 def _header_title(text: str, start: int) -> str | None:
     """Return a validated 8-K header, including SEC's common split-line shape.
 
-    Many filings render ``Item 5.02.`` in one block and its title in the next.
-    The shared header guard intentionally rejects an item token with no title, so
-    join only the immediate next non-empty, title-cased line before applying it.
+    Delegates to the shared :func:`_resolve_header_title`, which joins the title
+    that renders on the line after a bare ``Item 5.02.`` token before validating
+    its header shape. Kept as a named wrapper for readability at the call site.
     """
-    line_end = text.find("\n", start)
-    line_end = line_end if line_end != -1 else len(text)
-    item_line = normalize_whitespace_line(text[start:line_end])
-    if _is_header_shape(item_line):
-        return item_line
-    if not _ITEM_ONLY_RE.fullmatch(item_line):
-        return None
-
-    cursor = line_end + 1
-    for _ in range(3):
-        next_end = text.find("\n", cursor)
-        next_end = next_end if next_end != -1 else len(text)
-        candidate = normalize_whitespace_line(text[cursor:next_end])
-        if candidate:
-            joined = f"{item_line} {candidate}"
-            return joined if _is_header_shape(joined) else None
-        if next_end == len(text):
-            break
-        cursor = next_end + 1
-    return None
+    return _resolve_header_title(text, start, _ITEM_ONLY_RE)
 
 
 def split_8k(doc: NormalizedDoc) -> list[Section]:

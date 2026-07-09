@@ -126,6 +126,52 @@ def test_dangling_red_flag_claim_ref_is_rejected():
                            "claim_ids": ["c_missing"]}]})
 
 
+def test_dangling_judgment_basis_claim_ref_is_rejected():
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        P1Output.model_validate({**VALID_P1, "claims": [
+            {"claim_id": "c_1", "claim_type": "judgment", "text": "x",
+             "basis_claim_ids": ["c_missing"]}]})
+
+
+def test_dangling_guidance_and_8k_rationale_claim_refs_are_rejected():
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        P1Output.model_validate({**VALID_P1,
+            "guidance_direction": {"value": "lowered", "claim_id": "c_missing"}})
+    with pytest.raises(ValidationError):
+        P1Output.model_validate({**VALID_P1, "classification": {"items_8k": [
+            {"item": "4.02", "base_severity": "high", "final_severity": "high",
+             "adjustment_rationale_claim_id": "c_missing"}],
+            "overall_severity": "high"}})
+
+
+def test_resolvable_judgment_basis_claim_ref_is_accepted():
+    ev = {"claim_id": "c_1", "claim_type": "evidence", "text": "x", "confidence": "high",
+          "provenance": {"accession_number": "a-1", "form_type": "8-K",
+                         "section_key": "item_2_02", "char_start": 0, "char_end": 5,
+                         "text_sha256_prefix": "z", "snippet": "hello"}}
+    jg = {"claim_id": "c_2", "claim_type": "judgment", "text": "y", "basis_claim_ids": ["c_1"]}
+    assert len(P1Output.model_validate({**VALID_P1, "claims": [ev, jg]}).claims) == 2
+
+
+def test_p2_dangling_thesis_judgment_claim_ref_is_rejected():
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        P2Output.model_validate({
+            "accession_number": "a-1",
+            "records_affected": [{
+                "ticker": "T", "owned": True, "impact_class": "direct", "channels": {},
+                "guidance_direction": "maintained", "liquidity_read": "stable",
+                "net_direction": "neutral",
+                "thesis_check": {"verdict": "broken", "judgment_claim_id": "c_missing"},
+                "net_read": {"text": "noise"}, "confidence": "medium"}],
+            "claims": [], "portfolio_level_notes": None})
+
+
 def test_unknown_fields_are_forbidden():
     from pydantic import ValidationError
 

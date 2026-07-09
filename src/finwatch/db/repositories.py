@@ -700,6 +700,15 @@ class Repo:
         self.conn.commit()
         return len(rows)
 
+    def clear_verification_results(self, analysis_id: int) -> int:
+        """Delete all prior verification rows for one analysis so that a re-verify
+        REPLACES rather than appends — stale blocking FAILs must not linger and make
+        ``manual_review`` sticky once a re-run passes."""
+        cur = self.conn.execute(
+            "DELETE FROM verification_results WHERE analysis_id = ?", (analysis_id,))
+        self.conn.commit()
+        return cur.rowcount
+
     def list_verification_results(self, analysis_id: int) -> list[VerificationResult]:
         rows = self.conn.execute(
             "SELECT * FROM verification_results WHERE analysis_id = ? ORDER BY id",

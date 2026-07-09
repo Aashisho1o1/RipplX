@@ -242,6 +242,30 @@ def test_f13_unpriced_holding_makes_portfolio_weights_unavailable():
     assert svc._portfolio_market_value("2024-06-01") == 2000.0      # both priced
 
 
+def test_position_metrics_withheld_on_historical_replay():
+    from finwatch.db import Company, Holding, Price, Repo, init_db
+    from finwatch.metrics.service import MetricsService
+
+    repo = Repo(init_db(":memory:"))
+    repo.upsert_company(Company(cik="1", ticker="AAA", sic_code="7372", is_financial=0,
+                                added_at="t"))
+    repo.upsert_holding(Holding(cik="1", ticker="AAA", owned=1, shares=10, cost_basis=1.0,
+                                target_weight_pct=10.0, added_at="t"))
+    repo.upsert_prices([Price(ticker="AAA", date="2023-01-01", close=100.0),
+                        Price(ticker="AAA", date="2025-05-01", close=100.0)])
+    svc = MetricsService(repo, repo, lambda _c: {"facts": {}}, now_fn=lambda: "2025-06-01")
+
+    # Recent as_of (within a quarter of 'now') -> current weights are a fair proxy.
+    recent = svc.compute("1", as_of="2025-05-15")
+    assert "position_metrics" in recent.results
+
+    # Historical replay (2+ years before 'now') -> withhold position/weight metrics so
+    # anachronistic current weights never feed M5/M7 or pollute the shadow-log record.
+    old = svc.compute("1", as_of="2023-01-15")
+    assert "position_metrics" not in old.results
+    assert "rebalance_check" not in old.results
+
+
 # ---- F15: golden gate scores recall through the real severity-gated adapter --
 def test_f15_recall_uses_critical_code_severity_gate():
     from finwatch.pipeline.adapters import critical_code
@@ -320,3 +344,117 @@ def test_f12_falls_back_to_current_shares_with_low_confidence():
     assert r.status.value == "computed"
     assert r.components["history_capital_structure"] == "current_fallback"
     assert r.confidence == "low"
+
+
+# ---- YoY annual pairing requires ~1yr spacing (no mislabeled multi-year delta) ----
+def test_yoy_annual_pair_requires_one_year_spacing():
+    from finwatch.xbrl.normalize import FactStore
+
+    def dur(start, end, val):
+        return {"start": start, "end": end, "val": val, "filed": end, "form": "10-K"}
+
+    # Contiguous fiscal years -> the two newest annuals ARE the YoY pair.
+    contiguous = {"cik": "1", "facts": {"us-gaap": {"Revenues": {"units": {"USD": [
+        dur("2022-01-01", "2022-12-31", 180),
+        dur("2023-01-01", "2023-12-31", 200)]}}}}}
+    pair = FactStore.from_companyfacts(contiguous).yoy_pair("revenue", "annual")
+    assert pair is not None
+    assert (pair[0].fact.value, pair[1].fact.value) == (200.0, 180.0)
+
+    # Fiscal-year change: the newest full FY ends 2025-06-30, the prior full FY ends
+    # 2023-12-31 (the ~6-month transition stub is sub-annual and excluded from annual()).
+    # Those two annuals are ~18 months apart; pairing them blindly would compute an
+    # 18-month change labelled "YoY". The spacing guard must return None (unavailable).
+    gapped = {"cik": "1", "facts": {"us-gaap": {"Revenues": {"units": {"USD": [
+        dur("2023-01-01", "2023-12-31", 180),
+        dur("2024-07-01", "2025-06-30", 240)]}}}}}
+    assert FactStore.from_companyfacts(gapped).yoy_pair("revenue", "annual") is None
+
+
+# ---- V1 scale-branch gating: a coarse suffixed number cannot cross-scale-match ----
+def _v1(text, m):
+    bundle = VerifyBundle(rendered_text=text, metrics=m, disclaimer_text=DISCLAIMER,
+                          trade_action=None)
+    return next(c for c in run_all(bundle).results if c.check_id == "V1").verdict
+
+
+def test_v1_coarse_billion_does_not_match_unrelated_fact_via_x100():
+    m = MetricsBundle()
+    m.results["exposure"] = _mr("exposure", value=30_000_000.0)     # unrelated $30M fact
+    # "$3 billion" (3e9) must NOT verify against a $30M fact via the ×100 branch.
+    assert _v1("Exposure of roughly $3 billion.", m) == "fail"
+    # ...but a genuine ~$3B fact still verifies it (coarse rounding is real provenance).
+    m2 = MetricsBundle()
+    m2.results["exposure"] = _mr("exposure", value=2_700_000_000.0)  # $2.7B rounds to $3B
+    assert _v1("Exposure of roughly $3 billion.", m2) == "pass"
+
+
+def test_v1_percent_token_still_matches_ratio_fact_via_x100():
+    m = MetricsBundle()
+    m.results["rev_growth"] = _mr("rev_growth", value=0.081)         # ratio leaf
+    assert _v1("Revenue grew 8.1%.", m) == "pass"
+
+
+def test_v1_comma_grouped_count_in_year_range_is_not_whitelisted_as_year():
+    # "2,000" (comma-grouped) is a count, not a year: it is provenance-checked.
+    toks = extract_number_tokens("The restructuring affects roughly 2,000 employees.")
+    assert any(abs(t.value - 2000.0) < 1e-9 for t in toks)
+    # A genuine bare fiscal year is still whitelisted (year context before it).
+    assert all(t.value != 2024.0 for t in extract_number_tokens("In fiscal 2024 revenue rose."))
+
+
+def test_v1_reference_whitelist_is_anchored_not_substring():
+    # A real count that merely appears near an 'Item N' reference (not immediately
+    # preceded by the keyword) must still be provenance-checked.
+    assert any(abs(t.value - 5.0) < 1e-9
+               for t in extract_number_tokens("Item 2, and 5 sites were affected"))
+    # An actual reference code (keyword immediately before it) is still whitelisted.
+    assert all(t.value != 2.0 for t in extract_number_tokens("see Item 2 of the report"))
+
+
+# ---- Piotroski f5: unpaired-but-present debt must not be credited as deleveraging ----
+def _piotroski_cf(lt_debt_instants):
+    def dur(y, val):
+        return {"start": f"{y}-01-01", "end": f"{y}-12-31", "val": val,
+                "filed": f"{y + 1}-02-01", "form": "10-K"}
+
+    def inst(end, val):
+        return {"end": end, "val": val, "filed": end, "form": "10-K"}
+
+    facts = {
+        "NetIncomeLoss": {"units": {"USD": [dur(2023, 100), dur(2024, 120)]}},
+        "Assets": {"units": {"USD": [inst("2023-12-31", 1000), inst("2024-12-31", 1100)]}},
+        "NetCashProvidedByUsedInOperatingActivities":
+            {"units": {"USD": [dur(2023, 150), dur(2024, 170)]}},
+        "Revenues": {"units": {"USD": [dur(2023, 900), dur(2024, 1000)]}},
+    }
+    if lt_debt_instants:
+        facts["LongTermDebtNoncurrent"] = {
+            "units": {"USD": [inst(e, v) for e, v in lt_debt_instants]}}
+    return {"cik": "1", "facts": {"us-gaap": facts}}
+
+
+def test_f5_present_but_unpaired_debt_is_skipped_not_awarded():
+    from finwatch.core.types import sector_from_sic
+    from finwatch.metrics.formulas import piotroski_f
+    from finwatch.xbrl.normalize import FactStore
+
+    # LT debt exists (one instant) but has no year-prior pair -> f5 must be skipped,
+    # NOT awarded (the old code credited a deleveraging point on missing data).
+    store = FactStore.from_companyfacts(_piotroski_cf([("2024-12-31", 400)]))
+    r = piotroski_f(store, sector_from_sic("3711"), "2025-06-01")
+    assert r.status.value == "computed"
+    assert r.components["f5_leverage_decreased"] == "skipped"
+    assert r.components.get("f5_note") == "lt_debt_present_but_unpaired_skipped"
+
+
+def test_f5_truly_absent_debt_still_counts_as_pass():
+    from finwatch.core.types import sector_from_sic
+    from finwatch.metrics.formulas import piotroski_f
+    from finwatch.xbrl.normalize import FactStore
+
+    store = FactStore.from_companyfacts(_piotroski_cf([]))
+    r = piotroski_f(store, sector_from_sic("3711"), "2025-06-01")
+    assert r.status.value == "computed"
+    assert r.components["f5_leverage_decreased"] is True
+    assert r.components.get("f5_note") == "no_lt_debt_reported_treated_as_pass"

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
 from finwatch.core.types import SectorInfo, sector_from_sic
 from finwatch.db.repositories import Computation, Holding, Repo
@@ -92,13 +92,20 @@ class MetricsService:
             as_of_facts(self.companyfacts_provider(cik), as_of))
         return store, build_sector(company.sic_code), company
 
+    # Beyond ~a quarter, current-state holdings are no longer a fair proxy for the
+    # point-in-time position, so weight/position metrics are withheld (see below).
+    _POSITION_STALE_DAYS = 92
+
     def compute(self, cik: str, *, as_of: str) -> MetricsBundle:
         store, sector, company = self._store_and_sector(cik, as_of)
 
         holding_row = self.repo.get_holding_by_cik(cik)
         holding = None
         portfolio_mv = None
-        if holding_row is not None and holding_row.owned:
+        # Position/weight metrics are CURRENT-STATE (no holdings history is stored), so
+        # only attach the holding on a live/recent run. On a historical backfill or
+        # shadow replay they would be anachronistic and pollute M5/M7 + the shadow log.
+        if holding_row is not None and holding_row.owned and not self._is_historical(as_of):
             holding = _to_metric_holding(holding_row)
             portfolio_mv = self._portfolio_market_value(as_of)
 
@@ -106,6 +113,18 @@ class MetricsService:
             store, sector, ticker=company.ticker, price_provider=self.price_provider,
             as_of=as_of, holding=holding, portfolio_market_value=portfolio_mv,
         )
+
+    def _is_historical(self, as_of: str) -> bool:
+        """True when ``as_of`` is materially before 'now' — a backfill or shadow-log
+        replay, where current-state holdings no longer represent the point-in-time
+        position. A malformed/absent date (e.g. a test sentinel now_fn) is treated as
+        live, so weight metrics still compute in those paths."""
+        try:
+            as_of_day = date.fromisoformat((as_of or "")[:10])
+            now_day = date.fromisoformat((self._now_fn() or "")[:10])
+        except ValueError:
+            return False
+        return (now_day - as_of_day).days > self._POSITION_STALE_DAYS
 
     def data_quality(self, cik: str, *, as_of: str, form_type: str) -> list[CheckResult]:
         """V2 accounting-identity audit for a filing (F10) — separate from the LLM gate."""

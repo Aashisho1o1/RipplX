@@ -25,6 +25,7 @@ from tenacity import (
 
 SEC_TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
 SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK{cik}.json"
+SUBMISSIONS_PAGE_URL = "https://data.sec.gov/submissions/{name}"
 COMPANYFACTS_URL = "https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json"
 
 DEFAULT_MAX_REQUESTS_PER_SEC = 8  # SEC policy ceiling
@@ -185,6 +186,18 @@ class EdgarClient:
             SUBMISSIONS_URL.format(cik=c),
             cache_name=f"submissions_CIK{c}.json",
             force_refresh=force_refresh,
+        )
+
+    def submissions_page(self, name: str) -> dict:
+        """An older paginated submissions page (``subs['filings']['files'][i]['name']``).
+
+        SEC caps ``filings.recent`` at ~1000 rows; filings older than that roll off into
+        these pages, which are effectively immutable once written — so cache forever.
+        """
+        return self.get_json(
+            SUBMISSIONS_PAGE_URL.format(name=name),
+            cache_name=f"submissions_page_{name}",
+            force_refresh=False,
         )
 
     def companyfacts(self, cik: int | str, *, force_refresh: bool = True) -> dict:

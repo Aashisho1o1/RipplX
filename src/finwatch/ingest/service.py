@@ -217,14 +217,41 @@ class IngestService:
     def _index_filings(
         self, cik: str, subs: dict, backfill_quarters: int | None
     ) -> tuple[int, int]:
-        recent = (subs.get("filings") or {}).get("recent") or {}
-        accns = recent.get("accessionNumber") or []
-        forms = recent.get("form") or []
-        fdates = recent.get("filingDate") or []
-        rdates = recent.get("reportDate") or []
-        pdocs = recent.get("primaryDocument") or []
         cutoff = self._cutoff(backfill_quarters)
         cik_int = str(int(cik))
+        filings = subs.get("filings") or {}
+        indexed, new = self._index_filing_arrays(
+            cik, cik_int, filings.get("recent") or {}, cutoff)
+        # 'recent' caps at ~1000 most-recent filings; older ones (which for a prolific
+        # filer can still fall inside the backfill window) live in paginated 'files'
+        # pages. Fetch every page whose date range overlaps the window so an in-window
+        # 10-Q/8-K is never silently dropped. Pages are effectively immutable (cached).
+        for page in (filings.get("files") or []):
+            name = page.get("name")
+            if not name:
+                continue
+            filed_to = page.get("filingTo") or ""
+            if cutoff and filed_to and filed_to < cutoff:
+                continue                       # whole page predates the backfill window
+            try:
+                page_data = self.edgar.submissions_page(name)
+            except Exception:  # noqa: BLE001 — one bad page must not abort the rest
+                continue
+            pi, pn = self._index_filing_arrays(cik, cik_int, page_data, cutoff)
+            indexed += pi
+            new += pn
+        return indexed, new
+
+    def _index_filing_arrays(
+        self, cik: str, cik_int: str, arrays: dict, cutoff: str | None
+    ) -> tuple[int, int]:
+        """Index one block of the SEC parallel-array filing index (the 'recent' block
+        or one paginated 'files' page — both share the same array shape)."""
+        accns = arrays.get("accessionNumber") or []
+        forms = arrays.get("form") or []
+        fdates = arrays.get("filingDate") or []
+        rdates = arrays.get("reportDate") or []
+        pdocs = arrays.get("primaryDocument") or []
         indexed = new = 0
         for i, accn in enumerate(accns):
             form = forms[i] if i < len(forms) else ""

@@ -84,16 +84,31 @@ _WHITELIST_AFTER = re.compile(r"^\s*-\s?[KQkq]\b")          # 10-K / 8-K / 10-Q
 # (Item\s / Rule\s / phase\s) actually see the space that precedes the number.
 # (The old M(?=\d$)/V(?=\d$)/F/v branches were inert — the digit they look ahead
 # for lives past the end of `before`, never inside it — so they are dropped.)
+# A label that marks the number as a reference code, not a financial quantity:
+# "Item 2.02", "Rule 10b5-1", "§ 5", "accession ...", "CIK ...", "phase 3". Anchored
+# to the END of the left-context ($) so the keyword must sit immediately before the
+# number — a free substring like "phase, 3.2 billion of goodwill" no longer launders
+# a real quantity. (c_/claim_ ids are already excluded upstream by the _NUM
+# lookbehind, which rejects a digit preceded by '_'.)
 _WHITELIST_BEFORE = re.compile(
-    r"(Item\s|Rule\s|§\s?|c_|claim_|accession|CIK\s?|phase\s)", re.IGNORECASE)
+    r"(?:Item|Rule|§|accession|CIK|phase|paragraph|note|section)\s{0,3}$",
+    re.IGNORECASE)
 _ISO_DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
-# Written-date parts: a month name immediately before the day, or ', YYYY' right
-# after it — used (with a 1–31 day bound) to whitelist calendar dates.
+# Written-date parts: a month name immediately before the day AND a year right after
+# it — BOTH required, so a bare "March 15 stores" (a real count) is not whitelisted.
 _MONTH_BEFORE = re.compile(
     r"(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|"
     r"jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|"
     r"dec(?:ember)?)\.?\s+$", re.IGNORECASE)
-_DAY_YEAR_AFTER = re.compile(r"\s*,\s*(?:19|20)\d{2}\b")
+_YEAR_AFTER = re.compile(r"^\s*,?\s*(?:of\s+)?(?:19|20)\d{2}\b", re.IGNORECASE)
+# Context that reads a bare 4-digit number as a calendar/fiscal year rather than a
+# count: a year word/preposition before it, the ', YYYY' date-year comma, a
+# quarter/annual token after it, or a clause boundary (sentence-initial year).
+_YEAR_CONTEXT_BEFORE = re.compile(
+    r"(?:fiscal|fy|year|years|in|on|by|of|for|to|since|during|through|until|"
+    r"before|after|ended|ending|as\s+of|calendar)\s*$", re.IGNORECASE)
+_YEAR_DATE_BEFORE = re.compile(r",\s*$")
+_QUARTER_YEAR_AFTER = re.compile(r"^\s*(?:quarter|annual|fiscal|[Qq][1-4])\b")
 
 
 class NumberToken(BaseModel):
@@ -101,15 +116,19 @@ class NumberToken(BaseModel):
     value: float
     tolerance: float
     position: int
+    is_percent: bool = False   # token carried a '%' — may match a ratio fact ×100
+    has_suffix: bool = False   # token carried billion/million/... — already base-unit
 
 
 def _is_date_part(text: str, m: "re.Match[str]") -> bool:
     """True when the matched number is a calendar-date component that needs no
     financial provenance: any field of an ISO date (YYYY-MM-DD), or a day-of-month
-    (1–31) in a written date ('March 15, 2024' / 'March 15' / '15, 2024').
+    (1–31) in a written date that carries BOTH a month name before it AND a year
+    after it ('March 15, 2024' / 'March 15 2024').
 
     Kept deliberately tight so it never launders a real financial figure: the day is
-    bounded 1–31 and must sit directly beside a month name or a ', YYYY'."""
+    bounded 1–31, and a month name alone is no longer sufficient — a following year
+    is required — so 'March 15 stores' (a count) is not treated as a date."""
     s, e = m.start(), m.end()
     # ISO date: the token's span lies fully inside a YYYY-MM-DD occurrence. The
     # window is wide enough (±10) that the day component still sees the leading year.
@@ -118,13 +137,13 @@ def _is_date_part(text: str, m: "re.Match[str]") -> bool:
     for dm in _ISO_DATE.finditer(window):
         if ws + dm.start() <= s and e <= ws + dm.end():
             return True
-    # Written date: a bare 1- or 2-digit day (1–31) next to a month or ', YYYY'.
+    # Written date: a bare 1- or 2-digit day (1–31) with a month BEFORE and year AFTER.
     num = m.group("num")
     is_day = (m.group("dec") is None and m.group("cur") is None
-              and m.group("suf") is None and num.isdigit()
-              and 1 <= int(num) <= 31)
-    if is_day and (_MONTH_BEFORE.search(text[max(0, s - 12):s])
-                   or _DAY_YEAR_AFTER.match(text[e:e + 8])):
+              and m.group("suf") is None and m.group("lead_neg") is None
+              and num.isdigit() and 1 <= int(num) <= 31)
+    if (is_day and _MONTH_BEFORE.search(text[max(0, s - 12):s])
+            and _YEAR_AFTER.match(text[e:e + 12])):
         return True
     return False
 
@@ -139,23 +158,40 @@ def extract_number_tokens(text: str) -> list[NumberToken]:
             continue                                    # ISO / written calendar dates
         if _WHITELIST_AFTER.match(text[e:e + 4]):
             continue                                    # form names 10-K etc.
-        before = text[max(0, s - 12):s]
-        if _WHITELIST_BEFORE.search(before):            # UNSTRIPPED: keeps the 'Item ' space
-            continue                                    # Item 2.02, rule ids, claim ids
-        num = float(m.group("num").replace(",", "") + (m.group("dec") or ""))
-        if (m.group("suf") is None and m.group("cur") is None
-                and m.group("pct") is None and m.group("dec") is None
-                and 1900 <= num <= 2100):
-            continue                                    # bare years
+        before = text[max(0, s - 16):s]
+        # A reference code (Item 2.02, phase 3, ...) never carries currency/suffix/%;
+        # the keyword must sit immediately before the number (anchored), so a real
+        # quantity that merely *follows* such a word is not exempted.
+        is_quantity = (m.group("cur") is not None or m.group("suf") is not None
+                       or m.group("pct") is not None)
+        if not is_quantity and _WHITELIST_BEFORE.search(before):
+            continue                                    # Item 2.02, rule ids, phase 3
+        raw_num = m.group("num")
+        num = float(raw_num.replace(",", "") + (m.group("dec") or ""))
+        is_bare_year = (m.group("suf") is None and m.group("cur") is None
+                        and m.group("pct") is None and m.group("dec") is None
+                        and m.group("lead_neg") is None and m.group("neg") is None
+                        and "," not in raw_num and len(raw_num) == 4
+                        and 1900 <= num <= 2100)
+        if is_bare_year:
+            # Whitelist only when it actually reads as a year. A comma-grouped value
+            # ('2,000') never reaches here (comma → excluded above), so a fabricated
+            # thousands-formatted count in this range falls through to provenance.
+            clause = before.rstrip()
+            standalone = clause == "" or clause[-1] in ".;:!?—–-("
+            if (_YEAR_CONTEXT_BEFORE.search(before) or _YEAR_DATE_BEFORE.search(before)
+                    or _QUARTER_YEAR_AFTER.match(text[e:e + 10]) or standalone):
+                continue                                # bare fiscal/calendar year
         scale = _SCALE.get((m.group("suf") or "").lower(), 1.0)
         value = num * scale
         if m.group("neg") or m.group("lead_neg"):
             value = -value
         dec_places = len(m.group("dec")) - 1 if m.group("dec") else 0
         tol = 0.5 * (10 ** -dec_places) * scale
-        tokens.append(NumberToken(raw=raw, value=value,
-                                  tolerance=max(tol, abs(value) * 1e-9),
-                                  position=s))
+        tokens.append(NumberToken(
+            raw=raw, value=value, tolerance=max(tol, abs(value) * 1e-9), position=s,
+            is_percent=m.group("pct") is not None,
+            has_suffix=m.group("suf") is not None))
     return tokens
 
 
@@ -170,12 +206,29 @@ def _candidates(bundle: VerifyBundle) -> list[float]:
 
 
 def _matches(tok: NumberToken, cands: list[float]) -> bool:
+    """A rendered number is provenance-backed if it matches a candidate directly,
+    within relative precision, or via a *type-appropriate* re-expression:
+
+    - ``× 100`` ONLY for a %-token (a ratio fact 0.081 rendered as "8.1%");
+    - ``÷ 1eN`` ONLY for an unsuffixed token (a table number shown in thousands /
+      millions / billions against a base-unit fact) — a suffixed token like
+      "$3 billion" is already at base scale and must match a candidate near it.
+
+    The scale branches were previously applied to every token unconditionally, so a
+    coarse "$3 billion" could rubber-stamp against an unrelated ~$30M fact via ×100.
+    """
     for c in cands:
-        for scaled in (c, c / 1e3, c / 1e6, c / 1e9, c * 100.0):  # % re-expression
-            if abs(tok.value - scaled) <= tok.tolerance * 1.0001:
-                return True
+        if abs(tok.value - c) <= tok.tolerance * 1.0001:
+            return True
         if abs(c) > 0 and abs(tok.value - c) / abs(c) <= 5e-4:
             return True
+        if tok.is_percent:
+            if abs(tok.value - c * 100.0) <= tok.tolerance * 1.0001:
+                return True
+        elif not tok.has_suffix:
+            for scaled in (c / 1e3, c / 1e6, c / 1e9):
+                if abs(tok.value - scaled) <= tok.tolerance * 1.0001:
+                    return True
     return False
 
 

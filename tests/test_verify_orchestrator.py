@@ -180,6 +180,22 @@ def test_persist_report_round_trips_detail_and_created_at():
     assert all(r.created_at == "ts-123" for r in rows)  # timestamp column not transposed
 
 
+def test_persist_report_replaces_prior_rows_on_reverify():
+    # A blocking FAIL then a clean re-verify of the SAME analysis must leave only the
+    # latest run's rows — no accumulation, and no stale FAIL keeping manual_review sticky.
+    repo = Repo(init_db(":memory:"))
+    persist_report(repo, analysis_id=1, report=run_all(_bundle(FORBIDDEN)), created_at="t1")
+    assert any(r.verdict == "fail" and r.severity == "blocking"
+               for r in repo.list_verification_results(1))
+
+    clean = run_all(_bundle(CLEAN))
+    persist_report(repo, analysis_id=1, report=clean, created_at="t2")
+    rows = repo.list_verification_results(1)
+    assert len(rows) == len(clean.results)                          # replaced, not appended
+    assert all(r.created_at == "t2" for r in rows)                  # only the latest run
+    assert not any(r.verdict == "fail" and r.severity == "blocking" for r in rows)  # not sticky
+
+
 def test_fact_values_from_repo():
     repo = Repo(init_db(":memory:"))
     repo.replace_xbrl_facts("1", [

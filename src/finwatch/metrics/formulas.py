@@ -244,9 +244,15 @@ def piotroski_f(store: FactStore, sector: SectorInfo, as_of: str) -> MetricResul
         lev_p = ld_p.fact.value / ta_p.fact.value if ta_p.fact.value else None
         sig("f5_leverage_decreased",
             None if lev_c is None or lev_p is None else lev_c < lev_p)
-    else:
-        sig("f5_leverage_decreased", True)  # no LT debt reported ≈ no leverage increase
+    elif not store.instant("lt_debt", 1):
+        sig("f5_leverage_decreased", True)  # truly no LT debt reported ≈ no leverage increase
         comps["f5_note"] = "no_lt_debt_reported_treated_as_pass"
+    else:
+        # LT debt IS reported but no ~1yr-prior pair resolves (e.g. a single-instant
+        # priority tag masking a fallback tag's history). Do not award the point on
+        # missing data — skip the signal so it is neither counted nor credited.
+        sig("f5_leverage_decreased", None)
+        comps["f5_note"] = "lt_debt_present_but_unpaired_skipped"
 
     if sector.is_financial:
         comps["f6_current_ratio_improved"] = "skipped_financial"

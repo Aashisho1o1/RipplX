@@ -81,6 +81,35 @@ def test_amendment_flag_detected(ingest_service):
     assert ingest_service.repo.get_filing("x-2").is_amendment == 1
 
 
+def test_index_filings_reads_paginated_files_pages(ingest_service):
+    # 'recent' holds the newest filing; an older but in-window 10-Q lives on a 'files'
+    # page. The indexer must fetch in-window pages and skip pages older than the window.
+    subs = {"filings": {
+        "recent": {
+            "accessionNumber": ["r-1"], "form": ["8-K"], "filingDate": ["2024-06-01"],
+            "reportDate": ["2024-06-01"], "primaryDocument": ["r.htm"]},
+        "files": [
+            {"name": "CIK0000000009-submissions-001.json",
+             "filingFrom": "2023-01-01", "filingTo": "2024-01-31"},   # overlaps window
+            {"name": "CIK0000000009-submissions-002.json",
+             "filingFrom": "2010-01-01", "filingTo": "2011-12-31"},   # predates window
+        ]}}
+    page_001 = {"accessionNumber": ["p-1"], "form": ["10-Q"], "filingDate": ["2024-01-15"],
+                "reportDate": ["2023-12-31"], "primaryDocument": ["p.htm"]}
+    fetched: list[str] = []
+
+    def fake_page(name):
+        fetched.append(name)
+        return page_001 if name.endswith("001.json") else {}
+
+    ingest_service.edgar.submissions_page = fake_page
+    indexed, new = ingest_service._index_filings("0000000009", subs, backfill_quarters=8)
+
+    assert new == 2                                              # r-1 (recent) + p-1 (page 001)
+    assert ingest_service.repo.get_filing("p-1").form_type == "10-Q"
+    assert fetched == ["CIK0000000009-submissions-001.json"]     # out-of-window page not fetched
+
+
 def test_companyfacts_to_rows_splits_instant_vs_duration():
     cf = {"facts": {"us-gaap": {
         "Assets": {"units": {"USD": [

@@ -160,16 +160,28 @@ class P1Output(BaseModel):
 
     @model_validator(mode="after")
     def _claim_refs_resolve(self):
-        # Every claim_id cited by a red flag or material item must be a declared claim.
+        # Every claim_id cited ANYWHERE must resolve to a declared claim — not just
+        # red-flag/material-item refs but also judgment basis_claim_ids, the
+        # guidance_direction claim, and each 8-K adjustment rationale. Otherwise an
+        # (LLM- or injection-authored) judgment could rest on a fabricated evidence id.
         ids = {c.claim_id for c in self.claims}
+
+        def _check(cid, where):
+            if cid is not None and cid not in ids:
+                raise ValueError(f"{where} cites unknown claim_id {cid!r}")
+
         for rf in self.red_flags:
             for cid in rf.claim_ids:
-                if cid not in ids:
-                    raise ValueError(f"red_flag {rf.flag!r} cites unknown claim_id {cid!r}")
+                _check(cid, f"red_flag {rf.flag!r}")
         for mi in self.material_items:
             for cid in mi.claim_ids:
-                if cid not in ids:
-                    raise ValueError(f"material_item cites unknown claim_id {cid!r}")
+                _check(cid, "material_item")
+        for c in self.claims:
+            for cid in (c.basis_claim_ids or ()):
+                _check(cid, f"judgment claim {c.claim_id!r} basis")
+        _check(self.guidance_direction.claim_id, "guidance_direction")
+        for it in self.classification.items_8k:
+            _check(it.adjustment_rationale_claim_id, f"item_8k {it.item!r}")
         return self
 
 
@@ -211,6 +223,24 @@ class P2Output(BaseModel):
     @classmethod
     def _unique_claims(cls, v):
         return _require_unique_claim_ids(v)
+
+    @model_validator(mode="after")
+    def _claim_refs_resolve(self):
+        # As with P1: judgment basis_claim_ids and each record's thesis_check /
+        # net_read judgment_claim_id must resolve to a declared claim.
+        ids = {c.claim_id for c in self.claims}
+
+        def _check(cid, where):
+            if cid is not None and cid not in ids:
+                raise ValueError(f"{where} cites unknown claim_id {cid!r}")
+
+        for c in self.claims:
+            for cid in (c.basis_claim_ids or ()):
+                _check(cid, f"judgment claim {c.claim_id!r} basis")
+        for rec in self.records_affected:
+            _check(rec.thesis_check.judgment_claim_id, f"{rec.ticker} thesis_check")
+            _check(rec.net_read.judgment_claim_id, f"{rec.ticker} net_read")
+        return self
 
 
 # ---- P3: signal rationale (§13.3; consumed in Phase 6) ---------------------

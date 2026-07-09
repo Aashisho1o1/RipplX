@@ -286,6 +286,58 @@ def test_8k_item_number_and_title_may_be_on_separate_lines():
     assert "Departure of Directors" in sections["item_5_02"].title
 
 
+def test_8k_dash_separated_single_line_item_header_is_sectioned():
+    # SEC filers commonly separate the item token from its title with a dash on one
+    # line: "Item 5.02 - Departure...". The header must still be recognised.
+    for sep in ("-", "–", "—", ":"):
+        html = (
+            "<html><body>"
+            f"<p><b>Item 5.02 {sep} Departure of Directors or Certain Officers.</b></p>"
+            "<p>A director will not stand for re-election.</p>"
+            "</body></html>"
+        )
+        sections = {s.section_key: s for s in split_8k(html_to_text(html))}
+        assert "item_5_02" in sections, f"dropped with separator {sep!r}"
+        assert "Departure of Directors" in sections["item_5_02"].title
+
+
+def test_10k_item_number_and_title_may_be_on_separate_lines():
+    # Two-cell table layout: "Item 7." in one cell, its title in the next, so after
+    # flattening the token and title are on separate lines. MD&A must not be dropped.
+    html = (
+        "<html><body>"
+        "<div>Item 7.</div>"
+        "<div>Management's Discussion and Analysis of Financial Condition "
+        "and Results of Operations.</div>"
+        "<p>Net sales increased 8% year over year driven by services.</p>"
+        "<div>Item 7A.</div>"
+        "<div>Quantitative and Qualitative Disclosures About Market Risk.</div>"
+        "<p>We are exposed to interest rate risk.</p>"
+        "</body></html>"
+    )
+    secs = {s.section_key: s for s in split_10k(html_to_text(html))}
+    assert "mdna" in secs, "split-line 'Item 7.' header dropped MD&A"
+    assert "Management" in secs["mdna"].title
+    assert "Net sales increased" in secs["mdna"].text
+    assert "market_risk" in secs  # the split-line 'Item 7A.' also routes
+
+
+def test_10q_item_number_and_title_may_be_on_separate_lines():
+    html = (
+        "<html><body>"
+        "<div>Part I - Financial Information</div>"
+        "<div>Item 2.</div>"
+        "<div>Management's Discussion and Analysis of Financial Condition "
+        "and Results of Operations.</div>"
+        "<p>Net sales increased 8% year over year.</p>"
+        "</body></html>"
+    )
+    secs = {s.section_key: s for s in split_10q(html_to_text(html))}
+    assert "mdna" in secs, "split-line Part I 'Item 2.' header dropped MD&A"
+    assert "Management" in secs["mdna"].title
+    assert "Net sales increased" in secs["mdna"].text
+
+
 def test_diff_modified_survives_mid_block_insertion():
     prior = (
         "Risk A is about markets being volatile and hard to predict.\n"
