@@ -90,6 +90,16 @@ def test_metrics_endpoint_rejects_malformed_as_of_date(tmp_path):
     assert response.json()["error"]["code"] == "validation_error"
 
 
+def test_get_and_delete_path_params_reject_malformed_input(tmp_path):
+    client, _ = _client(tmp_path)
+    assert client.get("/api/filings/not-an-accession").status_code == 422
+    assert client.get("/api/companies/BAD!TICKER/metrics").status_code == 422
+    assert client.delete("/api/holdings/BAD!TICKER").status_code == 422
+    assert client.get("/api/jobs/not-a-valid-job-id").status_code == 422
+    # a well-formed but unknown accession passes validation and 404s at lookup
+    assert client.get("/api/filings/0000000001-24-000001").status_code == 404
+
+
 def test_bootstrap_setup_and_session_key_are_safe(tmp_path, monkeypatch):
     monkeypatch.delenv("SEC_USER_AGENT", raising=False)
     monkeypatch.setenv("FINWATCH_MODEL", "openai/test")

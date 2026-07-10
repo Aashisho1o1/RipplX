@@ -81,6 +81,24 @@ def test_remote_host_allowlist_applies_before_api_use(tmp_path):
     assert response.status_code == 400
 
 
+def test_demo_parameter_is_ignored_in_remote_mode(tmp_path):
+    # LOW-6: the bundled demo dataset is a local-only convenience; ?demo=true must not
+    # serve sample data on a hosted deployment.
+    app = create_app(
+        db_path=str(tmp_path / "db.sqlite"),
+        web_dist=tmp_path / "missing",
+        remote=True,
+        auth_token=TOKEN,
+        allowed_hosts=["alpha.example"],
+    )
+    client = TestClient(app, base_url="https://alpha.example")
+    response = client.get(
+        "/api/brief?demo=true", headers={"Authorization": f"Bearer {TOKEN}"}
+    )
+    assert response.status_code == 200
+    assert response.json()["sample_data"] is False
+
+
 def test_local_api_remains_auth_free(tmp_path):
     app = create_app(db_path=str(tmp_path / "db.sqlite"), web_dist=tmp_path / "missing")
     assert TestClient(app).get("/api/bootstrap").status_code == 200

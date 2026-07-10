@@ -29,6 +29,11 @@ from finwatch.web.security import LOCAL_ALLOWED_HOSTS, remote_allowed_hosts, rem
 
 REQUEST_BODY_LIMIT_BYTES = 1024 * 1024
 MAX_TRACKED_TICKERS = 25
+# Path/body parameter shapes (parameterized queries already prevent injection; these
+# reject malformed input early and keep GET/DELETE consistent with the POST models).
+_TICKER_PATTERN = r"^[A-Za-z][A-Za-z0-9.-]*$"
+_ACCESSION_PATTERN = r"^\d{10}-\d{2}-\d{6}$"
+_JOB_ID_PATTERN = r"^[0-9a-f]{32}$"
 _REQUEST_TOO_LARGE_BODY = (
     b'{"error":{"code":"request_too_large",'
     b'"message":"Request body exceeds the 1 MiB limit."}}'
@@ -116,7 +121,7 @@ class ApiProblem(Exception):
 class HoldingCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    ticker: str = Field(min_length=1, max_length=15, pattern=r"^[A-Za-z][A-Za-z0-9.-]*$")
+    ticker: str = Field(min_length=1, max_length=15, pattern=_TICKER_PATTERN)
 
 
 class SettingsUpdate(BaseModel):
@@ -134,7 +139,7 @@ class JobRequest(BaseModel):
         default=None,
         min_length=1,
         max_length=15,
-        pattern=r"^[A-Za-z][A-Za-z0-9.-]*$",
+        pattern=_TICKER_PATTERN,
     )
 
 
@@ -168,6 +173,7 @@ def create_app(
 ):
     try:
         from fastapi import FastAPI
+        from fastapi import Path as PathParam
         from fastapi.exceptions import RequestValidationError
         from fastapi.middleware.cors import CORSMiddleware
         from fastapi.middleware.trustedhost import TrustedHostMiddleware
@@ -366,6 +372,7 @@ def create_app(
 
     @app.get("/api/brief")
     def brief(demo: bool = False):
+        demo = demo and not remote  # demo dataset is a local-only convenience (LOW-6)
         with repo_context(demo) as repo:
             if demo:
                 since_value = DEMO_SINCE
@@ -378,7 +385,10 @@ def create_app(
             )
 
     @app.get("/api/filings/{accession}")
-    def filing_detail(accession: str, demo: bool = False):
+    def filing_detail(
+        accession: str = PathParam(pattern=_ACCESSION_PATTERN), demo: bool = False
+    ):
+        demo = demo and not remote
         with repo_context(demo) as repo:
             result = PresentationService(repo).filing(accession)
             if result is None:
@@ -430,14 +440,19 @@ def create_app(
             return next(row for row in rows if row.ticker == company.ticker)
 
     @app.delete("/api/holdings/{ticker}", status_code=204)
-    def delete_holding(ticker: str):
+    def delete_holding(ticker: str = PathParam(pattern=_TICKER_PATTERN, max_length=15)):
         with repo_context() as repo:
             company = repo.get_company_by_ticker(ticker)
             if company is None or not repo.delete_holding(company.cik):
                 raise ApiProblem(404, "holding_not_found", "Holding not found.")
 
     @app.get("/api/companies/{ticker}/metrics")
-    def company_metrics(ticker: str, as_of: date | None = None, demo: bool = False):
+    def company_metrics(
+        ticker: str = PathParam(pattern=_TICKER_PATTERN, max_length=15),
+        as_of: date | None = None,
+        demo: bool = False,
+    ):
+        demo = demo and not remote
         selected_date = as_of.isoformat() if as_of else date.today().isoformat()
         with repo_context(demo) as repo:
             result = PresentationService(repo).metrics(ticker, as_of=selected_date)
@@ -640,7 +655,7 @@ def create_app(
             raise ApiProblem(409, "job_conflict", str(exc)) from exc
 
     @app.get("/api/jobs/{job_id}")
-    def get_job(job_id: str):
+    def get_job(job_id: str = PathParam(pattern=_JOB_ID_PATTERN)):
         job = app.state.jobs.get(job_id)
         if job is None:
             raise ApiProblem(404, "job_not_found", "Job not found.")

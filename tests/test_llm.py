@@ -226,6 +226,24 @@ def test_p1_rejects_numbers_in_headlines_and_severity_inconsistency():
         })
 
 
+def test_finding_headline_rejects_gerund_trade_advice_and_number_words():
+    # UX1 seam (P1 schema): the expanded policy must reject gerund/positive-recommendation
+    # advice and the added number words in an authored headline, not just the old verbs.
+    from pydantic import ValidationError
+
+    for headline in (
+        "We recommend buying the shares",
+        "Investors should consider adding shares",
+        "Revenue quadrupled this year",
+    ):
+        with pytest.raises(ValidationError):
+            P1Output.model_validate({
+                **VALID_P1,
+                "classification": {"overall_severity": "medium"},
+                "findings": [_finding(headline=headline)],
+            })
+
+
 def test_p2_dangling_thesis_judgment_claim_ref_is_rejected():
     from pydantic import ValidationError
 
