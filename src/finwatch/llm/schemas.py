@@ -86,12 +86,14 @@ class Claim(BaseModel):
 
     @model_validator(mode="after")
     def _claim_graph(self):
-        # Foundation R2: evidence claims are verbatim-anchored (need provenance).
-        # Judgment claims must cite basis, but WHERE that basis lives is stage-specific,
-        # so presence/resolution is enforced per stage: a P1 judgment grounds on evidence
-        # in the SAME analysis (enforced in P1Output._claim_refs_resolve); a P2 synthesis
-        # judgment grounds on P1's evidence — a separate, already-verified analysis — so it
-        # is not required inline here (see P2Output._claim_refs_resolve).
+        # Foundation R2: evidence claims are verbatim-anchored (need provenance). Judgment
+        # claims SHOULD cite basis_claim_ids, but that is best-effort audit metadata — it is
+        # never checked by V1-V5 (only persisted), and real models routinely omit it — so its
+        # ABSENCE is not a hard failure here or per-stage. When basis IS provided it must
+        # resolve to a declared claim (enforced in P1Output/P2Output): a P1 judgment resolves
+        # within its own analysis; a P2 synthesis judgment grounds on P1's separate,
+        # already-verified analysis and is therefore not resolved inline. Fact-safety (no
+        # LLM-sourced numbers) is guaranteed independently by V1 + R1, not by basis_claim_ids.
         if self.claim_type == "evidence" and self.provenance is None:
             raise ValueError(f"evidence claim {self.claim_id!r} missing provenance (foundation R2)")
         return self
@@ -179,10 +181,8 @@ class P1Output(BaseModel):
             for cid in mi.claim_ids:
                 _check(cid, "material_item")
         for c in self.claims:
-            # P1 is self-contained: a judgment must cite basis, and it must resolve here.
-            if c.claim_type == "judgment" and not c.basis_claim_ids:
-                raise ValueError(
-                    f"judgment claim {c.claim_id!r} missing basis_claim_ids (foundation R2)")
+            # basis_claim_ids is best-effort (see Claim._claim_graph): an absent basis does
+            # NOT fail extraction, but when present every id must resolve to a declared claim.
             for cid in (c.basis_claim_ids or ()):
                 _check(cid, f"judgment claim {c.claim_id!r} basis")
         _check(self.guidance_direction.claim_id, "guidance_direction")

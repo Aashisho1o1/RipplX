@@ -109,12 +109,14 @@ def test_evidence_claim_without_provenance_is_rejected():
             {"claim_id": "c_1", "claim_type": "evidence", "text": "x"}]})   # no provenance
 
 
-def test_judgment_claim_without_basis_is_rejected():
-    from pydantic import ValidationError
-
-    with pytest.raises(ValidationError):
-        P1Output.model_validate({**VALID_P1, "claims": [
-            {"claim_id": "c_1", "claim_type": "judgment", "text": "x"}]})   # no basis_claim_ids
+def test_judgment_claim_without_basis_is_accepted_best_effort():
+    # basis_claim_ids is best-effort audit metadata (never checked by V1-V5); real models
+    # routinely omit it on judgment claims, so its absence must NOT fail extraction. This is
+    # the exact shape that previously hard-failed the JPM 10-K's P1. Fact-safety (no
+    # LLM-sourced numbers) is guaranteed by V1 + R1, independent of basis_claim_ids.
+    out = P1Output.model_validate({**VALID_P1, "claims": [
+        {"claim_id": "c_1", "claim_type": "judgment", "text": "x"}]})   # no basis_claim_ids
+    assert out.claims[0].basis_claim_ids is None
 
 
 def test_dangling_red_flag_claim_ref_is_rejected():
