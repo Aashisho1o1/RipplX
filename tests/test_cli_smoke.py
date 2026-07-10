@@ -25,7 +25,7 @@ def test_every_command_exposes_help():
                 "eval", "verify", "demo"):
         result = runner.invoke(app, [cmd, "--help"])
         assert result.exit_code == 0, f"{cmd} --help failed: {result.output}"
-    assert runner.invoke(app, ["shadow", "report", "--help"]).exit_code == 0
+    assert runner.invoke(app, ["shadow", "report", "--help"]).exit_code != 0
 
 
 def test_init_hard_fails_without_user_agent(monkeypatch, tmp_path):

@@ -13,15 +13,13 @@ from datetime import UTC, datetime
 
 from finwatch.core.types import DISCLAIMER
 from finwatch.db.repositories import Filing, Repo
-from finwatch.llm.schemas import P1Output, P2Output, P3Output
+from finwatch.llm.schemas import P1Output, P2Output
 from finwatch.llm.stages import P1Extractor, P2Explainer
 from finwatch.metrics.envelope import MetricsBundle
 from finwatch.metrics.service import MetricsService
-from finwatch.pipeline.adapters import to_extraction_summary, to_impact_summary, to_record
 from finwatch.pipeline.progress import ProgressCallback, StageReporter
 from finwatch.preprocess.diff import RiskFactorDiff
 from finwatch.preprocess.preprocessor import Preprocessor
-from finwatch.signals.engine import SignalEngine, SignalResult
 from finwatch.verify.checks import EvidenceClaim, VerificationReport, VerifyBundle
 from finwatch.verify.orchestrator import (
     fact_values_from_repo,
@@ -43,7 +41,6 @@ class FilingAnalysis:
     p2: P2Output | None
     verification: VerificationReport
     manual_review: bool
-    signal: SignalResult | None = None
     starter_metrics: list = field(default_factory=list)
 
 
@@ -73,19 +70,11 @@ def assemble_verify_bundle(
     fact_values: list[float],
     *,
     disclaimer: str = DISCLAIMER,
-    decision=None,
-    record=None,
-    extraction=None,
-    impact=None,
-    p3: P3Output | None = None,
 ) -> VerifyBundle:
     """Build the VerifyBundle from the analysis. The rendered text is the verifiable
-    analysis summary (red flags, net reads, verbatim evidence snippets, AND the P3
-    rationale/counter-evidence prose that the digest emits under --signals) — its numbers
-    come from evidence snippets and metrics, which are V1's candidate pool. Including P3
-    prose closes the V5 gap where a malicious rationale ("guaranteed", a price target)
-    would otherwise reach the digest unscanned. When a P3 decision is supplied, V3 also
-    re-derives it from the same inputs to audit the signal."""
+    analysis summary (red flags, net reads, and verbatim evidence snippets). Its numbers
+    must come from evidence snippets or deterministic metrics, which are V1's candidate
+    pool. P3 is outside the launch pipeline, so V3 intentionally returns not-applicable."""
     assert disclaimer is not None, "verify bundle requires disclaimer_text (V5)"
     lines: list[str] = []
     for rf in p1.red_flags:
@@ -95,11 +84,6 @@ def assemble_verify_bundle(
     if p2 is not None:
         for rec in p2.records_affected:
             lines.append(rec.net_read.text)
-    if p3 is not None:
-        # Every user-visible P3 field goes through V1/V5 (see render.py _shadow_block).
-        lines.append(p3.rationale)
-        lines.append(p3.counter_evidence)
-        lines.extend(p3.what_would_change_this)
     evidence: list[EvidenceClaim] = []
     for c in p1.claims:
         if c.claim_type == "evidence" and c.provenance is not None:
@@ -116,10 +100,6 @@ def assemble_verify_bundle(
         fact_store_values=fact_values,
         evidence_claims=evidence,
         section_texts=section_texts,
-        decision=decision,      # present for owned records -> V3 re-derivation runs
-        record=record,
-        extraction=extraction,
-        impact=impact,
         trade_action=None,
         disclaimer_text=disclaimer,
     )
@@ -135,7 +115,6 @@ class Orchestrator:
         metrics_service: MetricsService,
         *,
         companyfacts_provider: Callable[[str], dict],
-        signal_engine: SignalEngine | None = None,
         now_fn: Callable[[], str] | None = None,
         disclaimer: str = DISCLAIMER,
     ) -> None:
@@ -145,7 +124,6 @@ class Orchestrator:
         self.p2 = p2
         self.metrics_service = metrics_service
         self.companyfacts_provider = companyfacts_provider
-        self.signal_engine = signal_engine
         self._now_fn = now_fn or (lambda: datetime.now(UTC).isoformat())
         self.disclaimer = disclaimer
 
@@ -317,53 +295,7 @@ class Orchestrator:
         else:
             reporter.skipped("impact", "Impact assessment not required for this filing")
 
-        # --- P3: signal engine (owned records only; shadow mode) ----------
-        signal = None
-        decision = record = extraction_sum = impact_sum = None
-        holding = self.repo.get_holding_by_cik(filing.cik)
-        if self.signal_engine is not None and holding is not None and holding.owned:
-            record = to_record(holding, metrics)
-            extraction_sum = to_extraction_summary(p1_out)
-            impact_sum = to_impact_summary(p2_out, ticker)
-            signal = (
-                self.signal_engine.restore(
-                    record=record,
-                    extraction=extraction_sum,
-                    impact=impact_sum,
-                    metrics=metrics,
-                    accession_number=filing.accession_number,
-                )
-                if reporter.is_complete("signal")
-                else None
-            )
-            if signal is not None:
-                reporter.completed(
-                    "signal",
-                    {"analysis_id": signal.analysis_id, "resumed": True},
-                    message="Signal evaluated (reused stored analysis)",
-                )
-            else:
-                signal = run_stage(
-                    "signal",
-                    lambda: self.signal_engine.run(
-                        record=record,
-                        extraction=extraction_sum,
-                        impact=impact_sum,
-                        metrics=metrics,
-                        accession_number=filing.accession_number,
-                        ticker=ticker,
-                        as_of=as_of,
-                    ),
-                    lambda result: {
-                        "analysis_id": result.analysis_id,
-                        "posture": result.decision.posture,
-                    },
-                )
-            decision = signal.decision
-        else:
-            reporter.skipped("signal", "Signal evaluation applies only to owned holdings")
-
-        # --- verify: LLM-gate (V1/V4/V5 + V3) WITH regeneration ---------------
+        # --- verify: launch-output gate (V1/V4/V5; V3 is not applicable) ------
         # This gate covers the failure modes regenerating an LLM stage can fix.
         reporter.running("verify")
         bundle = assemble_verify_bundle(
@@ -371,8 +303,6 @@ class Orchestrator:
             section_texts_from_repo(self.repo, filing.accession_number),
             fact_values_from_repo(self.repo, filing.cik),
             disclaimer=self.disclaimer,
-            decision=decision, record=record, extraction=extraction_sum, impact=impact_sum,
-            p3=signal.p3 if signal is not None else None,
         )
         # A recorded/deterministic response cannot self-repair, so give up immediately
         # and route to manual review; a live pipeline supplies a real stage re-run here.
@@ -396,5 +326,5 @@ class Orchestrator:
         return FilingAnalysis(
             accession_number=filing.accession_number, ticker=ticker, p1=p1_out,
             p1_analysis_id=p1_aid, metrics=metrics, p2=p2_out,
-            verification=report, manual_review=report.verdict == "FAIL", signal=signal,
+            verification=report, manual_review=report.verdict == "FAIL",
         )

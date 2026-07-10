@@ -8,7 +8,6 @@ import { OwnedWatchTag } from "../components/OwnedWatchTag";
 import { PosturePill } from "../components/PosturePill";
 import { RedFlagRow } from "../components/RedFlagRow";
 import { SeverityBadge } from "../components/SeverityBadge";
-import { ShadowRegion } from "../components/ShadowRegion";
 import { useBootstrap } from "../context/BootstrapContext";
 import { useResource } from "../hooks/useResource";
 import type { FilingDetail, Job, Verification } from "../types";
@@ -20,10 +19,10 @@ export function FilingPage() {
   const { bootstrap } = useBootstrap();
   const demo = new URLSearchParams(location.search).get("demo") === "1";
   const load = useCallback(
-    (signal: AbortSignal) => api<FilingDetail>(`/api/filings/${accession}?demo=${demo}&include_signals=${bootstrap.signals}`, { signal }),
-    [accession, demo, bootstrap.signals],
+    (signal: AbortSignal) => api<FilingDetail>(`/api/filings/${accession}?demo=${demo}`, { signal }),
+    [accession, demo],
   );
-  const resource = useResource(load, [accession, demo, bootstrap.signals]);
+  const resource = useResource(load, [accession, demo]);
   const [verification, setVerification] = useState<Verification | null>(null);
   const [verifyError, setVerifyError] = useState("");
   const [job, setJob] = useState<Job | null>(null);
@@ -77,7 +76,6 @@ export function FilingPage() {
       <h1 className="page-title">{filing.ticker} — {filing.form} filed {filing.filed}</h1>
       <div className="filing-heading">
         <SeverityBadge severity={filing.severity} />
-        {filing.posture ? <PosturePill posture={filing.posture} /> : <span className="mono faint">watch — company-level read, no signal</span>}
         <OwnedWatchTag owned={filing.owned} />
       </div>
     </header>
@@ -108,7 +106,6 @@ export function FilingPage() {
     {filing.owned && <section className="section"><h2 className="section-kicker">Thesis impact</h2>{detail.thesis_impact.length ? detail.thesis_impact.map(row => <p key={row.ticker}><strong>{row.ticker}:</strong> {row.no_thesis ? "No thesis provided — RipplX degrades gracefully without one." : `thesis ${row.verdict}`}</p>) : <p className="empty-line">No thesis impact assessed.</p>}</section>}
     <section className="section"><div className="page-header"><h2 className="section-kicker">Verified numbers</h2><Link className="button" to={`/companies/${filing.ticker}${demo ? "?demo=1" : ""}`}>Full company view</Link></div>{detail.verified_numbers?.empty ? <p className="empty-line">{detail.verified_numbers.empty}</p> : detail.verified_numbers ? <MetricTable rows={detail.verified_numbers.rows} /> : <p className="empty-line">no verified financials yet (XBRL facts insufficient or not yet ingested).</p>}</section>
     {!demo && <section className="section audit"><div className="page-header"><h2 className="section-kicker">Verification audit</h2><button className="button" onClick={reverify}>Re-verify</button></div>{verifyError && <div className="field-error">{verifyError}</div>}{audit ? <><PosturePill posture={audit.verdict === "FAIL" ? "critical_review" : audit.verdict === "PASS_WITH_WARNINGS" ? "risk_review" : "monitor"} /><div className="channels">{audit.checks.map(check => <span className="channel" key={check.check_id}>{check.check_id}: {check.verdict}</span>)}</div></> : <p className="empty-line">No verification result yet.</p>}</section>}
-    {detail.shadow_signal && <ShadowRegion signals={[detail.shadow_signal]} />}
     <DisclaimerFooter text={detail.disclaimer} />
   </main>;
 }

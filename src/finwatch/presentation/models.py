@@ -13,7 +13,6 @@ Posture = Literal[
 ]
 Severity = Literal["CRITICAL", "HIGH", "MEDIUM", "LOW"]
 MetricState = Literal["computed", "unavailable", "not_applicable"]
-Signal = Literal["STRONG_REVIEW_SELL", "TRIM", "HOLD", "ACCUMULATE"]
 
 
 class MaterialItemView(BaseModel):
@@ -36,7 +35,6 @@ class FilingItemView(BaseModel):
     form: str
     filed: str
     severity: Severity
-    posture: Posture | None = None
     watch_label: str | None = None
     material_items: list[MaterialItemView] = Field(default_factory=list)
     flags: list[RedFlagView] = Field(default_factory=list)
@@ -82,17 +80,6 @@ class IssuerMetricsView(BaseModel):
     empty: str | None = None
 
 
-class ShadowSignalView(BaseModel):
-    ticker: str
-    signal: Signal
-    posture: Posture
-    rules_fired: list[str] = Field(default_factory=list)
-    rationale: str | None = None
-    counter_evidence: str | None = None
-    what_would_change_this: list[str] = Field(default_factory=list)
-    rationale_withheld: bool = False
-
-
 class BriefPeriodView(BaseModel):
     covered: str
     filings_in_window: int
@@ -115,7 +102,6 @@ class BriefView(BaseModel):
     verified_numbers: list[IssuerMetricsView] = Field(default_factory=list)
     open_questions: list[str] = Field(default_factory=list)
     boring_filings: str | None = None
-    shadow_signals: list[ShadowSignalView] = Field(default_factory=list)
     tracked_but_unanalyzed: bool = False
     disclaimer: str = DISCLAIMER
     sample_data: bool = False
@@ -148,7 +134,6 @@ class FilingDetailView(BaseModel):
     thesis_impact: list[ThesisImpactView] = Field(default_factory=list)
     verified_numbers: IssuerMetricsView | None = None
     verification: VerificationView | None = None
-    shadow_signal: ShadowSignalView | None = None
     insufficient_reason: str | None = None
     pipeline: list[PipelineStageView] = Field(default_factory=list)
     disclaimer: str = DISCLAIMER
@@ -163,7 +148,6 @@ class HoldingView(BaseModel):
     target_weight_pct: float | None = None
     horizon: str | None = None
     thesis: str | None = None
-    posture: Posture | None = None
     severity: Severity | None = None
     last_filing: str | None = None
     compressed_verified_read: str | None = None
@@ -181,10 +165,3 @@ class MetricsView(BaseModel):
     rows: list[MetricRowView] = Field(default_factory=list)
     empty: str | None = None
     before_first_filing: bool = False
-
-
-class TrackRecordView(BaseModel):
-    evaluations: int
-    posture_counts: dict[Posture, int]
-    signal_counts: dict[Signal, int]
-    outcomes_reviewed: int

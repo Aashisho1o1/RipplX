@@ -10,7 +10,6 @@ from fastapi.testclient import TestClient  # noqa: E402
 from finwatch.db import Repo, init_db
 from finwatch.demo import build_demo_db
 from finwatch.web.app import JobRequest, _compute_synced_metrics, create_app
-from finwatch.web.runtime import SETTING_SIGNALS
 
 
 def _client(tmp_path: Path) -> tuple[TestClient, Path]:
@@ -114,27 +113,22 @@ def test_restart_keeps_portfolio_results_but_drops_session_key(tmp_path, monkeyp
     assert pipeline["verify"] == "completed"
 
 
-def test_demo_contract_and_shadow_default_off(tmp_path):
+def test_demo_contract_has_no_shadow_surface(tmp_path):
     client, _ = _client(tmp_path)
     response = client.get("/api/brief?demo=true&include_signals=true")
     assert response.status_code == 200
     body = response.json()
     assert body["sample_data"] is True
     assert body["critical_red_flags"][0]["flags"][0]["edgar_url"].startswith("https://")
-    assert body["shadow_signals"]  # demo explicitly requested signals
-
-    live = client.get("/api/brief?include_signals=true").json()
-    assert live["shadow_signals"] == []
+    assert "shadow_signals" not in body
+    assert "signals" not in client.get("/api/bootstrap").json()
 
 
-def test_live_shadow_requires_persisted_opt_in(tmp_path):
-    client, db_path = _client(tmp_path)
-    conn = init_db(str(db_path))
-    try:
-        Repo(conn).set_setting(SETTING_SIGNALS, "true")
-    finally:
-        conn.close()
-    assert client.get("/api/bootstrap").json()["signals"] is True
+def test_removed_track_record_api_returns_json_404(tmp_path):
+    client, _ = _client(tmp_path)
+    response = client.get("/api/track-record")
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "api_route_not_found"
 
 
 def test_mutation_rejects_foreign_origin(tmp_path):
@@ -142,7 +136,7 @@ def test_mutation_rejects_foreign_origin(tmp_path):
     response = client.put(
         "/api/settings",
         headers={"Origin": "https://malicious.example"},
-        json={"signals": True},
+        json={"period": "30d"},
     )
     assert response.status_code == 403
     assert response.json()["error"]["code"] == "origin_not_allowed"

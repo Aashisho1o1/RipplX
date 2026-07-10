@@ -2,14 +2,14 @@
 
 A new user must see real output in under 60 seconds without any key (CLAUDE.md §5).
 This builds an in-memory DB, seeds a small demo portfolio, and runs the REAL
-orchestrator (P0 → P1 → metrics → P2 → verify → P3) over five bundled filings — the
+orchestrator (P0 → P1 → metrics → P2 → verify) over five bundled filings — the
 LLM is a ``DemoLLM`` that replays recorded stage outputs, so nothing hits the network.
 The rendered digest is therefore produced by exactly the same code path as a live run.
 
 Portfolio (deliberately covers every digest section):
-  MSFT (owned)  routine 10-Q      → verified numbers + monitor posture + boring line
-  DPLS (owned)  going-concern 10-K→ critical red flag, thesis broken, STRONG_REVIEW_SELL
-  TWKS (watch)  non-reliance 8-K  → critical red flag, no signal (watch-only)
+  MSFT (owned)  routine 10-Q      → verified numbers + boring line
+  DPLS (owned)  going-concern 10-K→ critical red flag + thesis impact
+  TWKS (watch)  non-reliance 8-K  → critical red flag
   AAPL (watch)  clean 10-Q + 8-K  → routine, silence
 """
 from __future__ import annotations
@@ -25,7 +25,6 @@ from finwatch.llm.stages import P1Extractor, P2Explainer
 from finwatch.metrics.service import MetricsService
 from finwatch.pipeline.orchestrator import Orchestrator
 from finwatch.preprocess.preprocessor import Preprocessor
-from finwatch.signals.engine import SignalEngine
 
 _HERE = Path(__file__).resolve().parent
 _DATA = _HERE / "data"
@@ -36,8 +35,7 @@ _NOW = "2024-08-05T00:00:00+00:00"
 
 
 class DemoLLM:
-    """Replays recorded stage outputs. ``stage_outputs`` is set per filing before each
-    ``process_html`` call, so P1/P2/P3 each return that filing's recorded JSON verbatim."""
+    """Replays recorded P1/P2 outputs for the current filing."""
 
     def __init__(self) -> None:
         self.model = _MODEL
@@ -45,9 +43,7 @@ class DemoLLM:
 
     def complete(self, *, system: str, user: str, temperature: float = 0.0,
                  json_mode: bool = True) -> LLMResponse:
-        if "chair the investment committee" in system:
-            stage = "P3"
-        elif "portfolio manager and risk officer" in system:
+        if "portfolio manager and risk officer" in system:
             stage = "P2"
         else:
             stage = "P1"
@@ -68,14 +64,11 @@ class _Case:
     html_path: Path
     p1_path: Path
     p2_path: Path | None = None
-    p3_path: Path | None = None
 
     def stage_outputs(self) -> dict[str, str]:
         out = {"P1": self.p1_path.read_text()}
         if self.p2_path is not None:
             out["P2"] = self.p2_path.read_text()
-        if self.p3_path is not None:
-            out["P3"] = self.p3_path.read_text()
         return out
 
 
@@ -87,14 +80,13 @@ def _sec_index(cik: str, accn: str) -> str:
 _CASES: list[_Case] = [
     _Case(accn="0000789019-24-000070", cik=_MSFT_CIK, ticker="MSFT", form="10-Q",
           filed="2024-08-01", primary_doc=_sec_index(_MSFT_CIK, "0000789019-24-000070"),
-          html_path=_DATA / "msft_10q.html", p1_path=_DATA / "msft_10q.p1.json",
-          p3_path=_DATA / "monitor.p3.json"),
+          html_path=_DATA / "msft_10q.html", p1_path=_DATA / "msft_10q.p1.json"),
     _Case(accn="0001683168-24-004848", cik="0000866439", ticker="DPLS", form="10-K",
           filed="2024-08-02",
           primary_doc="https://www.sec.gov/Archives/edgar/data/866439/000168316824004848/darkpulse_i10k-123123.htm",
           html_path=_GOLDEN / "going_concern_10k" / "filing.html",
           p1_path=_GOLDEN / "going_concern_10k" / "recorded_p1.json",
-          p2_path=_DATA / "going_concern.p2.json", p3_path=_DATA / "going_concern.p3.json"),
+          p2_path=_DATA / "going_concern.p2.json"),
     _Case(accn="0001866550-24-000006", cik="0001866550", ticker="TWKS", form="8-K",
           filed="2024-08-02",
           primary_doc="https://www.sec.gov/Archives/edgar/data/1866550/000186655024000006/twks-20240206.htm",
@@ -147,8 +139,7 @@ def _companyfacts(cik: str) -> dict:
 
 
 def build_demo_db(db_path: str = ":memory:") -> sqlite3.Connection:
-    """Build a DB with the full demo run persisted (analyses, metrics, verification,
-    shadow log) — everything the digest renders from. Defaults to in-memory."""
+    """Build a DB with the launch demo run persisted. Defaults to in-memory."""
     conn = init_db(db_path)
     repo = Repo(conn)
     for c in _COMPANIES:
@@ -162,12 +153,11 @@ def build_demo_db(db_path: str = ":memory:") -> sqlite3.Connection:
     llm = DemoLLM()
     metrics = MetricsService(repo, price_provider=repo, companyfacts_provider=_companyfacts,
                              now_fn=now_fn)
-    engine = SignalEngine(repo, llm, price_provider=repo, model_label=_MODEL, now_fn=now_fn)
     orch = Orchestrator(
         repo, Preprocessor(repo, now_fn=now_fn),
         P1Extractor(llm, repo, model_label=_MODEL, now_fn=now_fn),
         P2Explainer(llm, repo, model_label=_MODEL, now_fn=now_fn),
-        metrics, companyfacts_provider=_companyfacts, signal_engine=engine, now_fn=now_fn)
+        metrics, companyfacts_provider=_companyfacts, now_fn=now_fn)
 
     records = [
         {"ticker": h.ticker, "owned": bool(h.owned), "shares": h.shares,

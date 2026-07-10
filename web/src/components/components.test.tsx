@@ -2,7 +2,6 @@ import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { MetricTable } from "./MetricTable";
 import { PosturePill } from "./PosturePill";
-import { ShadowRegion } from "./ShadowRegion";
 
 describe("trust vocabulary", () => {
   it("renders posture values without synonyms", () => {
@@ -19,16 +18,5 @@ describe("trust vocabulary", () => {
     expect(screen.getByLabelText("Computed from SEC XBRL facts")).toHaveTextContent("✓");
     expect(screen.getByLabelText("Data missing")).toHaveTextContent("—");
     expect(screen.getByLabelText("Not applicable for this issuer")).toHaveTextContent("—");
-  });
-
-  it("always wraps hypothetical signals in the unvalidated banner", () => {
-    render(<ShadowRegion signals={[{
-      ticker: "MSFT", signal: "HOLD", posture: "monitor", rules_fired: ["M8"],
-      rationale: "Routine filing.", counter_evidence: "Valuation may still be stretched.",
-      what_would_change_this: ["A later red flag"], rationale_withheld: false,
-    }]} />);
-    expect(screen.getByText(/Unvalidated shadow output/)).toBeInTheDocument();
-    expect(screen.getByText("HOLD")).toBeInTheDocument();
-    expect(screen.getByText(/not a trade instruction/)).toBeInTheDocument();
   });
 });

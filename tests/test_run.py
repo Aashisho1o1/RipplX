@@ -1,7 +1,7 @@
 """Production pipeline runner (F1): add -> ingest(seeded) -> process -> digest, offline.
 
 Drives pipeline/run.py with a FakeLLMClient and a fixture HTML fetcher — no network — the
-same code path the CLI `process`/`analyze`/`verify` commands use with real clients.
+    same code path the CLI `process`/`analyze`/`verify` commands use with real clients.
 """
 from __future__ import annotations
 
@@ -47,21 +47,9 @@ _P2 = json.dumps({
         "net_read": {"text": "Services growth supports the thesis."}, "confidence": "medium"}],
     "claims": [], "portfolio_level_notes": None,
 })
-_P3 = json.dumps({
-    "ticker": "MSFT", "accession_number": ACCN, "review_posture": "monitor",
-    "trade_action": None, "hypothetical_signal": "HOLD", "rules_fired": [],
-    "rules_skipped": [], "computed_inputs": [], "rationale": "No material change this quarter.",
-    "counter_evidence": "Valuation is elevated.", "what_would_change_this": ["A guidance cut."],
-    "confidence": "medium",
-    "disclaimer": ("Educational analysis of public information for the portfolio owner's "
-                   "own decision-making. Not individualized investment advice. "
-                   "Data may be incomplete or delayed."),
-})
-
-
 def _responder(system, _user):
     if "chair the investment committee" in system:
-        return _P3
+        raise AssertionError("P3 must not run in the launch pipeline")
     if "portfolio manager and risk officer" in system:
         return _P2
     return _P1
@@ -95,7 +83,8 @@ def test_process_tracked_runs_pipeline_persists_and_digest_renders():
     assert results[0].verdict in ("PASS", "PASS_WITH_WARNINGS")
 
     # every stage persisted; filing marked processed; digest now has content
-    assert {a.stage for a in repo.list_analyses(ACCN)} == {"P1", "P2", "P3"}
+    assert {a.stage for a in repo.list_analyses(ACCN)} == {"P1", "P2"}
+    assert repo.count_shadow_log() == 0
     assert repo.get_filing(ACCN).status in ("verified", "analyzed")
     assert repo.get_filing(ACCN).processed_at == "t"
     md = render_digest(repo, since="2024-01-01").markdown
@@ -169,7 +158,7 @@ def test_process_reports_errors_without_aborting():
 
 
 def test_transient_failure_is_retried_and_not_rendered_clean():
-    # Remediation-review regression: P1 commits before P2/P3, so a transient error in a later
+    # Remediation-review regression: P1 commits before P2, so a transient error in a later
     # stage must (a) mark the filing 'failed' and retry it next run — never permanently skip a
     # filing that has a P1 — and (b) NOT render the half-analyzed filing as a clean result.
     repo = Repo(init_db(":memory:"))
@@ -178,8 +167,6 @@ def test_transient_failure_is_retried_and_not_rendered_clean():
     def flaky(system, _user):
         if "portfolio manager and risk officer" in system:
             raise RuntimeError("rate limited (429)")     # P2 blows up after P1 committed
-        if "chair the investment committee" in system:
-            return _P3
         return _P1
 
     llm = FakeLLMClient(responder=flaky)

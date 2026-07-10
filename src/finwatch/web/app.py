@@ -21,7 +21,6 @@ from finwatch.web.runtime import (
     SETTING_MODEL_EXTRACT,
     SETTING_MODEL_REASON,
     SETTING_PERIOD,
-    SETTING_SIGNALS,
     SETTING_USER_AGENT,
     RuntimeSecrets,
     resolve_settings,
@@ -58,7 +57,6 @@ class HoldingUpdate(BaseModel):
 class SettingsUpdate(BaseModel):
     sec_user_agent: str | None = None
     period: Literal["30d", "60d", "90d", "180d", "1y"] | None = None
-    signals: bool | None = None
     model_extract: str | None = None
     model_reason: str | None = None
     api_key: str | None = None
@@ -161,7 +159,6 @@ def create_app(*, db_path: str | None = None, web_dist: str | Path | None = None
             "setup_required": not bool(settings.sec_user_agent),
             "sec_user_agent": settings.sec_user_agent or "",
             "period": settings.period,
-            "signals": settings.signals,
             "model_extract": settings.model_extract or "",
             "model_reason": settings.model_reason or "",
             "api_key_configured": settings.api_key_configured,
@@ -181,7 +178,6 @@ def create_app(*, db_path: str | None = None, web_dist: str | Path | None = None
         demo: bool = False,
         since: str | None = None,
         until: str | None = None,
-        include_signals: bool = False,
     ):
         with repo_context(demo) as repo:
             if demo:
@@ -189,22 +185,16 @@ def create_app(*, db_path: str | None = None, web_dist: str | Path | None = None
             else:
                 settings = resolve_settings(repo, app.state.secrets)
                 since = since or _since_for_period(settings.period)
-                include_signals = include_signals and settings.signals
             return PresentationService(repo).brief(
                 since=since,
                 until=until,
-                include_signals=include_signals,
                 sample_data=demo,
             )
 
     @app.get("/api/filings/{accession}")
-    def filing_detail(accession: str, demo: bool = False, include_signals: bool = False):
+    def filing_detail(accession: str, demo: bool = False):
         with repo_context(demo) as repo:
-            if not demo:
-                include_signals = (
-                    include_signals and resolve_settings(repo, app.state.secrets).signals
-                )
-            result = PresentationService(repo).filing(accession, include_signals=include_signals)
+            result = PresentationService(repo).filing(accession)
             if result is None:
                 raise ApiProblem(404, "filing_not_found", "Filing not found.")
             return result
@@ -309,11 +299,6 @@ def create_app(*, db_path: str | None = None, web_dist: str | Path | None = None
                 raise ApiProblem(404, "company_not_found", "Company not found.")
             return result
 
-    @app.get("/api/track-record")
-    def track_record(demo: bool = False):
-        with repo_context(demo) as repo:
-            return PresentationService(repo).track_record()
-
     @app.get("/api/settings")
     def get_settings():
         with repo_context() as repo:
@@ -333,8 +318,6 @@ def create_app(*, db_path: str | None = None, web_dist: str | Path | None = None
                 repo.set_setting(SETTING_USER_AGENT, user_agent)
             if payload.period is not None:
                 repo.set_setting(SETTING_PERIOD, payload.period)
-            if payload.signals is not None:
-                repo.set_setting(SETTING_SIGNALS, str(payload.signals).lower())
             if "model_extract" in payload.model_fields_set:
                 repo.set_setting(SETTING_MODEL_EXTRACT, _trimmed(payload.model_extract) or "")
             if "model_reason" in payload.model_fields_set:
@@ -579,6 +562,10 @@ def create_app(*, db_path: str | None = None, web_dist: str | Path | None = None
         if job is None:
             raise ApiProblem(404, "job_not_found", "Job not found.")
         return job
+
+    @app.get("/api/{path:path}", include_in_schema=False)
+    def unknown_api(path: str):
+        raise ApiProblem(404, "api_route_not_found", f"API route /api/{path} was not found.")
 
     if dist.exists():
         assets = dist / "assets"

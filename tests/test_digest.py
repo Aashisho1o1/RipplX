@@ -1,6 +1,6 @@
 """Phase 7 — digest renderer + zero-key demo.
 
-The demo drives the REAL pipeline (P0→P1→metrics→P2→verify→P3) over bundled fixtures,
+The demo drives the REAL launch pipeline (P0→P1→metrics→P2→verify) over bundled fixtures,
 so one end-to-end test exercises every digest section; focused unit tests cover window
 filtering, the no-thesis note, and metric degradation.
 """
@@ -15,6 +15,7 @@ from finwatch.db import (
     Filing,
     Holding,
     Repo,
+    SignalShadowLog,
     init_db,
 )
 from finwatch.demo import DEMO_SINCE, build_demo_db
@@ -22,10 +23,10 @@ from finwatch.digest import render_digest
 
 
 # ---- end-to-end demo -------------------------------------------------------
-def _demo_markdown(include_signals=False):
+def _demo_markdown():
     conn = build_demo_db()
     try:
-        return render_digest(Repo(conn), since=DEMO_SINCE, include_signals=include_signals)
+        return render_digest(Repo(conn), since=DEMO_SINCE)
     finally:
         conn.close()
 
@@ -47,9 +48,8 @@ def test_demo_runs_fast_and_covers_every_section():
 
 def test_demo_critical_flags_are_claim_backed_with_edgar_links():
     md = _demo_markdown().markdown
-    # DPLS owned going-concern → critical_review posture; TWKS watch → no signal
-    assert "DPLS — 10-K" in md and "critical_review" in md
-    assert "TWKS — 8-K" in md and "watch — company-level read, no signal" in md
+    assert "DPLS — 10-K" in md and "· CRITICAL" in md
+    assert "TWKS — 8-K" in md and md.count("· CRITICAL") >= 2
     assert "**going_concern** (critical)" in md
     assert "https://www.sec.gov/Archives/" in md          # EDGAR citation link
     assert "going concern" in md.lower()                  # verbatim evidence snippet
@@ -71,14 +71,37 @@ def test_demo_thesis_and_boring_and_disclaimer():
     assert "Not individualized investment advice." in md
 
 
-def test_signals_flag_gates_the_shadow_block():
-    plain = _demo_markdown(include_signals=False).markdown
-    withsig = _demo_markdown(include_signals=True).markdown
-    assert "## Shadow signals" not in plain               # OFF by default
-    assert "trade_action" not in plain
-    assert "## Shadow signals" in withsig
-    assert "Unvalidated shadow output" in withsig
-    assert "STRONG_REVIEW_SELL" in withsig and "HOLD" in withsig
+def test_legacy_p3_and_shadow_rows_are_never_rendered():
+    conn = build_demo_db()
+    try:
+        repo = Repo(conn)
+        accession = "0001683168-24-004848"
+        repo.insert_analysis(Analysis(
+            accession_number=accession,
+            ticker="DPLS",
+            stage="P3",
+            model="legacy/model",
+            prompt_version="legacy",
+            output_json=json.dumps({"rationale": "LEGACY_P3_SECRET"}),
+            created_at="t",
+        ))
+        repo.insert_shadow_log(SignalShadowLog(
+            accession_number=accession,
+            ticker="DPLS",
+            review_posture="critical_review",
+            hypothetical_signal="STRONG_REVIEW_SELL",
+            rules_fired_json="[]",
+            rules_skipped_json="[]",
+            computed_inputs_json="[]",
+            created_at="t",
+        ))
+        md = render_digest(repo, since=DEMO_SINCE).markdown
+    finally:
+        conn.close()
+
+    assert "Shadow signals" not in md
+    assert "STRONG_REVIEW_SELL" not in md
+    assert "LEGACY_P3_SECRET" not in md
 
 
 # ---- focused renderer unit tests -------------------------------------------
@@ -174,10 +197,8 @@ def test_cli_demo_needs_no_api_key_or_user_agent(monkeypatch):
     result = CliRunner().invoke(app, ["demo"])
     assert result.exit_code == 0
     assert "# finwatch digest" in result.output and "Critical red flags" in result.output
-    assert "## Shadow signals" not in result.output       # gated OFF by default
-
-    withsig = CliRunner().invoke(app, ["demo", "--signals"])
-    assert withsig.exit_code == 0 and "## Shadow signals" in withsig.output
+    assert "Shadow signals" not in result.output
+    assert CliRunner().invoke(app, ["demo", "--signals"]).exit_code != 0
 
 
 def test_cli_digest_writes_file_and_persists_digest_row(monkeypatch, tmp_path):

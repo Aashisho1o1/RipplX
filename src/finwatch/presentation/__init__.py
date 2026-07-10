@@ -5,7 +5,6 @@ from finwatch.presentation.models import (
     FilingDetailView,
     HoldingsView,
     MetricsView,
-    TrackRecordView,
 )
 from finwatch.presentation.service import PresentationService
 
@@ -15,5 +14,4 @@ __all__ = [
     "HoldingsView",
     "MetricsView",
     "PresentationService",
-    "TrackRecordView",
 ]

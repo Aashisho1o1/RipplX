@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-from collections import Counter
 
 from finwatch.db.repositories import Computation, Filing, Holding, Repo
 from finwatch.metrics.envelope import MetricResult
@@ -24,9 +23,7 @@ from finwatch.presentation.models import (
     MetricsView,
     PipelineStageView,
     RedFlagView,
-    ShadowSignalView,
     ThesisImpactView,
-    TrackRecordView,
     VerificationCheckView,
     VerificationView,
     WhatChangedView,
@@ -74,15 +71,6 @@ FLAG_LABELS = {
     "material_weakness_with_restatement_risk": "Material weakness",
     "cyber_1_05_critical_tier": "Critical cyber incident",
 }
-POSTURE_ORDER = {
-    "critical_review": 0,
-    "risk_review": 1,
-    "monitor": 2,
-    "positive_support": 3,
-    "insufficient_data": 4,
-}
-
-
 def _date(value: str | None) -> str:
     return (value or "")[:10]
 
@@ -128,9 +116,6 @@ class PresentationService:
 
     def _filing_item(self, view: FilingProjection) -> FilingItemView:
         p1 = view.p1
-        posture = (
-            view.p3.review_posture if view.p3 and view.holding and view.holding.owned else None
-        )
         flags = []
         if p1:
             for flag in p1.red_flags:
@@ -151,10 +136,9 @@ class PresentationService:
             form=view.filing.form_type,
             filed=_date(view.filing.filed_at),
             severity=_severity(view.severity),
-            posture=posture,
             watch_label=None
             if view.holding and view.holding.owned
-            else "watch — company-level read, no signal",
+            else "watch — company-level filing read",
             material_items=[
                 MaterialItemView(headline=item.headline, event_type=item.event_type)
                 for item in (p1.material_items if p1 else [])
@@ -262,29 +246,11 @@ class PresentationService:
             ticker=holding.ticker, owned=bool(holding.owned), rows=rows, empty=empty
         )
 
-    def _shadow(self, view: FilingProjection) -> ShadowSignalView | None:
-        if not view.p3 or not view.holding or not view.holding.owned:
-            return None
-        p3 = view.p3
-        if p3.hypothetical_signal not in {"STRONG_REVIEW_SELL", "TRIM", "HOLD", "ACCUMULATE"}:
-            return None
-        return ShadowSignalView(
-            ticker=p3.ticker,
-            signal=p3.hypothetical_signal,
-            posture=p3.review_posture,
-            rules_fired=p3.rules_fired,
-            rationale=None if view.manual_review else p3.rationale,
-            counter_evidence=None if view.manual_review else p3.counter_evidence,
-            what_would_change_this=[] if view.manual_review else p3.what_would_change_this,
-            rationale_withheld=view.manual_review,
-        )
-
     def brief(
         self,
         *,
         since: str | None = None,
         until: str | None = None,
-        include_signals: bool = False,
         sample_data: bool = False,
     ) -> BriefView:
         holdings = self.repo.list_holdings()
@@ -300,10 +266,7 @@ class PresentationService:
         ]
         owned = sorted(holding.ticker for holding in holdings if holding.owned)
         watching = sorted(holding.ticker for holding in holdings if not holding.owned)
-        posture_candidates = [view.p3.review_posture for view in analyzed if view.p3]
-        answer_posture = (
-            min(posture_candidates, key=lambda p: POSTURE_ORDER[p]) if posture_candidates else None
-        )
+        answer_posture = None
         if manual:
             answer = "One filing needs manual review before conclusions are shown."
             answer_posture = "risk_review"
@@ -315,7 +278,7 @@ class PresentationService:
             answer_posture = "risk_review"
         elif analyzed:
             answer = f"Nothing important changed. {len(boring)} routine filings reviewed."
-            answer_posture = answer_posture or "monitor"
+            answer_posture = "monitor"
         elif holdings:
             answer = "No material findings yet — Sync filings or Run analysis."
         else:
@@ -327,11 +290,6 @@ class PresentationService:
         questions = []
         for view in analyzed:
             questions.extend(f"{view.ticker}: {gap}" for gap in view.p1.gaps)
-            if view.p3:
-                questions.extend(
-                    f"{view.ticker}: rule {row.rule} not evaluated — {row.reason}"
-                    for row in view.p3.rules_skipped
-                )
             questions.extend(
                 f"{view.ticker}: data-quality check {check_id} — {detail}"
                 for check_id, detail in view.data_quality
@@ -340,11 +298,6 @@ class PresentationService:
                 questions.append(
                     f"{view.ticker}: automated verification failed — manual review required"
                 )
-        shadow = (
-            [signal for view in analyzed if (signal := self._shadow(view))]
-            if include_signals
-            else []
-        )
         return BriefView(
             period=BriefPeriodView(
                 covered=f"{since or 'inception'} → {until or 'now'}",
@@ -360,12 +313,11 @@ class PresentationService:
             verified_numbers=[self._issuer_metrics(h) for h in holdings if h.owned],
             open_questions=questions,
             boring_filings=boring_line,
-            shadow_signals=shadow,
             tracked_but_unanalyzed=bool(holdings and not analyzed),
             sample_data=sample_data,
         )
 
-    def filing(self, accession: str, *, include_signals: bool = False) -> FilingDetailView | None:
+    def filing(self, accession: str) -> FilingDetailView | None:
         filing = self.repo.get_filing(accession)
         if not filing:
             return None
@@ -407,11 +359,6 @@ class PresentationService:
             if self.repo.latest_computations(view.ticker)
             else "pending",
             "impact": "completed" if view.p2 else "skipped" if view.p1 else "pending",
-            "signal": "completed"
-            if view.p3
-            else "skipped"
-            if holding is None or not holding.owned
-            else "pending",
             "verify": "completed" if verification else "pending",
         }
         pipeline = []
@@ -439,7 +386,6 @@ class PresentationService:
             thesis_impact=self._thesis(view),
             verified_numbers=self._issuer_metrics(holding) if holding else None,
             verification=verification,
-            shadow_signal=self._shadow(view) if include_signals else None,
             insufficient_reason=insufficient_reason,
             pipeline=pipeline,
         )
@@ -449,11 +395,10 @@ class PresentationService:
         for holding in self.repo.list_holdings():
             filings = self.repo.list_filings(holding.cik)
             latest = filings[0] if filings else None
-            posture = severity = None
+            severity = None
             if latest:
                 view = load_filing_projection(self.repo, latest)
                 severity = _severity(view.severity) if view.p1 else None
-                posture = view.p3.review_posture if holding.owned and view.p3 else None
             metrics = self._issuer_metrics(holding)
             computed = [row for row in metrics.rows if row.state == "computed"]
             compressed = None
@@ -491,16 +436,12 @@ class PresentationService:
                     target_weight_pct=holding.target_weight_pct,
                     horizon=holding.horizon,
                     thesis=holding.thesis,
-                    posture=posture,
                     severity=severity,
                     last_filing=_date(latest.filed_at) if latest else None,
                     compressed_verified_read=compressed,
                 )
             )
-        owned = sorted(
-            (row for row in result if row.owned),
-            key=lambda row: POSTURE_ORDER.get(row.posture or "insufficient_data", 4),
-        )
+        owned = sorted((row for row in result if row.owned), key=lambda row: row.ticker)
         watching = sorted((row for row in result if not row.owned), key=lambda row: row.ticker)
         return HoldingsView(owned=owned, watching=watching)
 
@@ -529,17 +470,4 @@ class PresentationService:
             rows=rows,
             empty=empty,
             before_first_filing=before_first,
-        )
-
-    def track_record(self) -> TrackRecordView:
-        rows = self.repo.list_shadow_log()
-        postures = Counter(row.review_posture for row in rows)
-        signals = Counter(row.hypothetical_signal for row in rows)
-        return TrackRecordView(
-            evaluations=len(rows),
-            posture_counts={name: postures[name] for name in POSTURE_ORDER},
-            signal_counts={
-                name: signals[name] for name in ("HOLD", "STRONG_REVIEW_SELL", "TRIM", "ACCUMULATE")
-            },
-            outcomes_reviewed=sum(1 for row in rows if row.outcome_reviewed_at),
         )

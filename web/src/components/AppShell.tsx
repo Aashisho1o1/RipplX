@@ -3,7 +3,6 @@ import { NavLink, Outlet, useLocation } from "react-router-dom";
 const links = [
   ["/brief", "The Brief", "Digest & alerts"],
   ["/holdings", "Holdings", "Portfolio & watch"],
-  ["/track-record", "Track record", "Signal audit"],
 ] as const;
 
 export function AppShell() {

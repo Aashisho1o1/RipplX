@@ -2,7 +2,7 @@
 and drives it over ingested filings.
 
 `finwatch ingest` only indexes filings + XBRL + prices; this is the step that actually
-runs P0→P1→metrics→P2→verify→P3 and persists the analyses the digest renders from
+runs P0→P1→metrics→P2→verify and persists the analyses the digest renders from
 (closing the gap where the production CLI never reached the pipeline). Everything here is
 dependency-injected so tests drive it with a FakeLLMClient and a fixture fetcher — no
 network — while the CLI passes LiteLLM clients and EdgarClient.
@@ -26,7 +26,6 @@ from finwatch.pipeline.orchestrator import (
 from finwatch.pipeline.progress import ProgressCallback, StageReporter, stages_from
 from finwatch.preprocess.forms import base_form
 from finwatch.preprocess.preprocessor import Preprocessor, route_sections
-from finwatch.signals.engine import SignalEngine
 from finwatch.verify.checks import VerificationReport, run_all
 from finwatch.verify.orchestrator import (
     fact_values_from_repo,
@@ -53,18 +52,19 @@ def build_orchestrator(
     model_reason: str | None = None,
     now_fn: Callable[[], str] | None = None,
 ) -> Orchestrator:
-    """Wire the full production Orchestrator. P1 uses the extract model; P2 + the P3
-    rationale use the reason model (SignalEngine)."""
+    """Wire the launch pipeline. P1 uses the extract model and P2 uses the reason model.
+
+    P3/shadow signals are deliberately not constructed or executed in the prototype launch
+    path. The research implementation remains isolated under ``finwatch.signals`` until user
+    evidence justifies bringing it back.
+    """
     now_fn = now_fn or _now_iso
     metrics = MetricsService(repo, price_provider, companyfacts_provider, now_fn=now_fn)
-    engine = SignalEngine(repo, llm_reason, price_provider=price_provider,
-                          model_label=model_reason, now_fn=now_fn)
     return Orchestrator(
         repo, Preprocessor(repo, now_fn=now_fn),
         P1Extractor(llm_extract, repo, model_label=model_extract, now_fn=now_fn),
         P2Explainer(llm_reason, repo, model_label=model_reason, now_fn=now_fn),
-        metrics, companyfacts_provider=companyfacts_provider, signal_engine=engine,
-        now_fn=now_fn)
+        metrics, companyfacts_provider=companyfacts_provider, now_fn=now_fn)
 
 
 def holding_records(repo: Repo) -> list[dict]:
@@ -79,7 +79,7 @@ def holding_records(repo: Repo) -> list[dict]:
 
 # A filing is "done" only once the pipeline completed and the verifier ran. Anything else —
 # never started ('fetched'/'sectioned') or errored mid-pipeline ('failed') — is retried, so a
-# transient P2/P3/network error does not permanently strand a half-analyzed filing (its P1 is
+# transient P2/network error does not permanently strand a half-analyzed filing (its P1 is
 # committed before later stages run, so a P1-present check would wrongly skip it forever).
 # Manual-review (``analyzed``) filings remain retryable; only a verified filing is done.
 _DONE_STATUS = frozenset({"verified"})

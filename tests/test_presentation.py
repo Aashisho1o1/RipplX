@@ -6,9 +6,7 @@ from finwatch.presentation import PresentationService
 def test_demo_projection_preserves_digest_order_and_trust_data():
     conn = build_demo_db()
     try:
-        view = PresentationService(Repo(conn)).brief(
-            since=DEMO_SINCE, include_signals=False, sample_data=True
-        )
+        view = PresentationService(Repo(conn)).brief(since=DEMO_SINCE, sample_data=True)
     finally:
         conn.close()
 
@@ -18,7 +16,6 @@ def test_demo_projection_preserves_digest_order_and_trust_data():
     assert [item.ticker for item in view.critical_red_flags] == ["TWKS", "DPLS"]
     assert view.critical_red_flags[1].flags[0].quote
     assert [row.ticker for row in view.verified_numbers] == ["DPLS", "MSFT"]
-    assert view.shadow_signals == []
     assert view.boring_filings == (
         "3 routine filing(s) with no material findings (AAPL 8-K, MSFT 10-Q, AAPL 10-Q)."
     )

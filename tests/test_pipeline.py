@@ -88,13 +88,13 @@ def test_pipeline_end_to_end_passes_and_persists():
     assert progress["parse"].status == "completed"
     assert '"mdna"' in progress["parse"].diagnostics_json
     assert progress["extract"].status == "completed"
-    assert progress["signal"].status == "skipped"
+    assert "signal" not in progress
     assert progress["verify"].status == "completed"
 
 
-def test_pipeline_runs_v2_data_quality_and_skips_v3_without_decision():
-    # V2 accounting identities now run as a data-quality audit (F10); V3 is skipped when
-    # there is no P3 decision (no owned holding persisted here).
+def test_pipeline_runs_v2_data_quality_and_marks_v3_not_applicable():
+    # V2 accounting identities remain active. V3 is explicitly not applicable because
+    # the launch pipeline never constructs a P3 decision.
     repo = Repo(init_db(":memory:"))
     _seed(repo)
     fa = _orchestrator(repo).process_html(
@@ -123,21 +123,8 @@ def test_p2_gate_on_severity_and_red_flags():
     assert not p2_gate(p1("routine", []))
 
 
-_P3_JSON = json.dumps({
-    "ticker": "MSFT", "accession_number": ACCN, "review_posture": "monitor",
-    "trade_action": None, "hypothetical_signal": "HOLD", "rules_fired": [],
-    "rules_skipped": [], "computed_inputs": [], "rationale": "No material change.",
-    "counter_evidence": "Valuation is elevated.", "what_would_change_this": ["A guidance cut."],
-    "confidence": "medium",
-    "disclaimer": ("Educational analysis of public information for the portfolio owner's "
-                   "own decision-making. Not individualized investment advice. "
-                   "Data may be incomplete or delayed."),
-})
-
-
-def test_pipeline_runs_p3_v3_and_shadow_log_for_owned_record():
+def test_launch_pipeline_never_calls_p3_or_writes_shadow_rows():
     from finwatch.db import Holding
-    from finwatch.signals.engine import SignalEngine
 
     repo = Repo(init_db(":memory:"))
     _seed(repo)
@@ -146,94 +133,27 @@ def test_pipeline_runs_p3_v3_and_shadow_log_for_owned_record():
 
     def responder(s, _u):
         if "chair the investment committee" in s:
-            return _P3_JSON
+            raise AssertionError("P3 must not run in the launch pipeline")
         if "portfolio manager and risk officer" in s:
             return P2_JSON
         return P1_JSON
 
     llm = FakeLLMClient(responder=responder)
-    eng = SignalEngine(repo, llm, price_provider=_FakePrice(), model_label="fake/m",
-                       now_fn=lambda: "t")
     orch = Orchestrator(
         repo, Preprocessor(repo, now_fn=lambda: "t"),
         P1Extractor(llm, repo, model_label="fake/m", now_fn=lambda: "t"),
         P2Explainer(llm, repo, model_label="fake/m", now_fn=lambda: "t"),
         MetricsService(repo, _FakePrice(), lambda _c: MSFT_CF, now_fn=lambda: "t"),
-        companyfacts_provider=lambda _c: MSFT_CF, signal_engine=eng, now_fn=lambda: "t")
+        companyfacts_provider=lambda _c: MSFT_CF, now_fn=lambda: "t")
 
     records = [{"ticker": "MSFT", "owned": True, "shares": 100, "cost_basis": 300.0,
                 "target_weight_pct": 10.0, "thesis": "cloud"}]
     fa = orch.process_html(filing=repo.get_filing(ACCN), html=TENQ, as_of="2025-05-01",
                            records=records)
 
-    assert fa.signal is not None
-    assert {a.stage for a in repo.list_analyses(ACCN)} == {"P1", "P2", "P3"}
-    assert repo.count_shadow_log() == 1
+    assert {a.stage for a in repo.list_analyses(ACCN)} == {"P1", "P2"}
+    assert repo.count_shadow_log() == 0
+    assert all("chair the investment committee" not in system for system, _ in llm.calls)
     v3 = next(c for c in fa.verification.results if c.check_id == "V3")
-    assert v3.verdict == "pass"                              # DoD: V3 exact-match
+    assert v3.verdict == "skipped_not_applicable"
     assert fa.verification.verdict in ("PASS", "PASS_WITH_WARNINGS")
-
-
-def test_malicious_p3_prose_fails_verification_and_digest_withholds_it():
-    # F2: P3 rationale/counter-evidence/what-would-change now flow through the verifier;
-    # forbidden vocab / price-target prose → blocking V5 fail → digest never shows it.
-    from finwatch.db import Holding
-    from finwatch.digest import render_digest
-    from finwatch.signals.engine import SignalEngine
-
-    repo = Repo(init_db(":memory:"))
-    _seed(repo)
-    repo.upsert_holding(Holding(cik=CIK, ticker="MSFT", owned=1, shares=100, cost_basis=300.0,
-                                target_weight_pct=10.0, thesis="cloud", added_at="t"))
-    evil = json.loads(_P3_JSON)
-    evil["rationale"] = "Guaranteed profit — our price target of $999 means you should buy now."
-    evil_json = json.dumps(evil)
-
-    def responder(s, _u):
-        if "chair the investment committee" in s:
-            return evil_json
-        if "portfolio manager and risk officer" in s:
-            return P2_JSON
-        return P1_JSON
-
-    llm = FakeLLMClient(responder=responder)
-    eng = SignalEngine(repo, llm, price_provider=_FakePrice(), model_label="fake/m",
-                       now_fn=lambda: "t")
-    orch = Orchestrator(
-        repo, Preprocessor(repo, now_fn=lambda: "t"),
-        P1Extractor(llm, repo, model_label="fake/m", now_fn=lambda: "t"),
-        P2Explainer(llm, repo, model_label="fake/m", now_fn=lambda: "t"),
-        MetricsService(repo, _FakePrice(), lambda _c: MSFT_CF, now_fn=lambda: "t"),
-        companyfacts_provider=lambda _c: MSFT_CF, signal_engine=eng, now_fn=lambda: "t")
-    records = [{"ticker": "MSFT", "owned": True, "shares": 100, "cost_basis": 300.0,
-                "target_weight_pct": 10.0, "thesis": "cloud"}]
-    fa = orch.process_html(filing=repo.get_filing(ACCN), html=TENQ, as_of="2025-05-01",
-                           records=records)
-
-    assert fa.manual_review                                  # V5 caught it
-    assert sum("chair the investment committee" in system for system, _ in llm.calls) == 2
-    assert any(c.check_id == "V5" and c.verdict == "fail" for c in fa.verification.results)
-    md = render_digest(repo, since="2024-01-01", include_signals=True).markdown
-    assert "Guaranteed profit" not in md and "$999" not in md
-    assert "rationale withheld" in md
-
-
-def test_cli_shadow_report(monkeypatch, tmp_path):
-    from typer.testing import CliRunner
-
-    from finwatch.cli import app
-    from finwatch.db import Repo, SignalShadowLog, init_db
-
-    db = tmp_path / "fw.db"
-    conn = init_db(str(db))
-    Repo(conn).insert_shadow_log(SignalShadowLog(
-        accession_number="a-1", ticker="MSFT", review_posture="risk_review",
-        hypothetical_signal="TRIM", rules_fired_json="[]", rules_skipped_json="[]",
-        computed_inputs_json="[]", created_at="t"))
-    conn.close()
-
-    monkeypatch.setenv("SEC_USER_AGENT", "Test t@e.com")
-    monkeypatch.setenv("FINWATCH_DB", str(db))
-    result = CliRunner().invoke(app, ["shadow", "report"])
-    assert result.exit_code == 0
-    assert "risk_review=1" in result.output and "UNVALIDATED" in result.output

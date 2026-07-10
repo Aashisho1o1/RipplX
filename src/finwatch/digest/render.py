@@ -2,19 +2,17 @@
 
 Reads ONLY the DB — every digest is reproducible with no LLM calls at render time.
 Sections, in order: header · critical red flags · what changed · thesis impact ·
-verified numbers · open questions · boring filings · (‑‑signals) shadow signals.
+verified numbers · open questions · boring filings.
 
-Design posture matches the product: postures not trade actions; silence on boring
-filings is a feature; every rendered number traces to a persisted computation or a
-verbatim evidence snippet; missing P2/P3 degrades gracefully.
+Silence on boring filings is a feature; every rendered number traces to a persisted
+computation or a verbatim evidence snippet; missing P2 degrades gracefully.
 """
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, field
 
-from finwatch.db.repositories import Filing, Holding, Repo, SignalShadowLog
+from finwatch.db.repositories import Filing, Holding, Repo
 from finwatch.llm.schemas import P1Output
 from finwatch.metrics.envelope import MetricResult, MetricsBundle
 from finwatch.presentation.formatting import format_metric_value as _format_metric_value
@@ -155,16 +153,9 @@ def _critical_section(critical: list[_FilingView]) -> list[str]:
         out += ["_None. No critical or high-severity findings in this window._", ""]
         return out
     for v in critical:
-        posture = (
-            v.p3.review_posture
-            if v.p3
-            else "watch — company-level read, no signal"
-            if v.holding and not v.holding.owned
-            else v.severity
-        )
         out.append(
             f"### {v.ticker} — {v.filing.form_type} filed {_date(v.filing.filed_at)} "
-            f"· {v.severity.upper()} · {posture}"
+            f"· {v.severity.upper()}"
         )
         for mi in v.p1.material_items:
             if mi.severity in _CRITICAL_SEVERITIES:
@@ -349,9 +340,6 @@ def _open_questions_section(views: list[_FilingView]) -> list[str]:
         if v.p1 is not None:
             for gap in v.p1.gaps:
                 items.append(f"- {v.ticker}: {gap}")
-        if v.p3 is not None:
-            for sk in v.p3.rules_skipped:
-                items.append(f"- {v.ticker}: rule {sk.rule} not evaluated — {sk.reason}")
         for check_id, detail in v.data_quality:
             items.append(f"- {v.ticker}: data-quality check {check_id} — {detail}")
         if v.manual_review:
@@ -376,61 +364,12 @@ def _boring_section(boring: list[_FilingView]) -> list[str]:
     ]
 
 
-def _shadow_section(
-    repo: Repo, accessions: set[str], views_by_accn: dict[str, _FilingView]
-) -> list[str]:
-    out = [
-        "## Shadow signals",
-        "",
-        "> ⚠ **Unvalidated shadow output — educational only, not a trade instruction.** "
-        "These hypothetical signals are logged to build an auditable track record; they are "
-        "off by default and shown only with `--signals`.",
-        "",
-    ]
-    rows = [r for r in repo.list_shadow_log() if r.accession_number in accessions]
-    if not rows:
-        out.append("_No shadow evaluations in this window._")
-        out.append("")
-        return out
-    for row in rows:
-        out += _shadow_block(row, views_by_accn.get(row.accession_number))
-    return out
-
-
-def _shadow_block(row: SignalShadowLog, view: _FilingView | None) -> list[str]:
-    out = [
-        f"### {row.ticker} — hypothetical signal: **{row.hypothetical_signal}** "
-        f"(posture {row.review_posture})"
-    ]
-    try:
-        fired = json.loads(row.rules_fired_json)
-    except json.JSONDecodeError:
-        fired = []
-    if fired:
-        out.append(f"- Rules fired: {', '.join(fired)}")
-    if view is not None and view.manual_review:
-        # The P3 prose failed deterministic verification (V1/V5) — never render it.
-        out.append(
-            "- ⚠ rationale withheld — automated verification failed (manual review required)."
-        )
-    elif view is not None and view.p3 is not None:
-        p3 = view.p3
-        out.append(f"- Rationale: {p3.rationale}")
-        if p3.counter_evidence:
-            out.append(f"- Counter-evidence: {p3.counter_evidence}")
-        if p3.what_would_change_this:
-            out.append("- What would change this: " + "; ".join(p3.what_would_change_this))
-    out.append("")
-    return out
-
-
 # ------------------------------------------------------------------- entry ---
 def render_digest(
     repo: Repo,
     *,
     since: str | None = None,
     until: str | None = None,
-    include_signals: bool = False,
 ) -> DigestRender:
     """Render the markdown digest for filings filed within [since, until] from the DB."""
     holdings = repo.list_holdings()
@@ -454,10 +393,6 @@ def render_digest(
     lines += _verified_numbers_section(repo, holdings)
     lines += _open_questions_section(analyzed)
     lines += _boring_section(boring)
-    if include_signals:
-        accns = {v.filing.accession_number for v in analyzed}
-        lines += _shadow_section(repo, accns, {v.filing.accession_number: v for v in analyzed})
-
     from finwatch.core.types import DISCLAIMER
 
     lines += ["---", "", f"_{DISCLAIMER}_", ""]

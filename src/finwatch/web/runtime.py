@@ -10,7 +10,6 @@ from finwatch.db.repositories import Repo
 
 SETTING_USER_AGENT = "web.sec_user_agent"
 SETTING_PERIOD = "web.period"
-SETTING_SIGNALS = "web.signals"
 SETTING_MODEL_EXTRACT = "web.model_extract"
 SETTING_MODEL_REASON = "web.model_reason"
 
@@ -19,7 +18,6 @@ SETTING_MODEL_REASON = "web.model_reason"
 class ResolvedSettings:
     sec_user_agent: str | None
     period: str
-    signals: bool
     model_extract: str | None
     model_reason: str | None
     api_key_configured: bool
@@ -63,7 +61,6 @@ def resolve_settings(repo: Repo, secrets: RuntimeSecrets) -> ResolvedSettings:
     return ResolvedSettings(
         sec_user_agent=repo.get_setting(SETTING_USER_AGENT) or os.environ.get("SEC_USER_AGENT"),
         period=repo.get_setting(SETTING_PERIOD) or "90d",
-        signals=(repo.get_setting(SETTING_SIGNALS) or "false").lower() == "true",
         model_extract=extract or None,
         model_reason=reason or extract or None,
         api_key_configured=bool(session_key or environment_key),

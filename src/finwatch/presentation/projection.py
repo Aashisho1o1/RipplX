@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from finwatch.db.repositories import Company, Filing, Holding, Repo
-from finwatch.llm.schemas import Claim, P1Output, P2Output, P3Output
+from finwatch.llm.schemas import Claim, P1Output, P2Output
 
 
 @dataclass
@@ -15,7 +15,6 @@ class FilingProjection:
     holding: Holding | None
     p1: P1Output | None
     p2: P2Output | None
-    p3: P3Output | None
     claims: dict[str, Claim]
     manual_review: bool
     data_quality: list[tuple[str, str]] = field(default_factory=list)
@@ -36,10 +35,8 @@ class FilingProjection:
 def load_filing_projection(repo: Repo, filing: Filing) -> FilingProjection:
     p1a = repo.latest_analysis(filing.accession_number, "P1")
     p2a = repo.latest_analysis(filing.accession_number, "P2")
-    p3a = repo.latest_analysis(filing.accession_number, "P3")
     p1 = P1Output.model_validate_json(p1a.output_json) if p1a else None
     p2 = P2Output.model_validate_json(p2a.output_json) if p2a else None
-    p3 = P3Output.model_validate_json(p3a.output_json) if p3a else None
     claims = {claim.claim_id: claim for claim in p1.claims} if p1 else {}
     manual_review = filing.status == "failed"
     data_quality: list[tuple[str, str]] = []
@@ -57,7 +54,6 @@ def load_filing_projection(repo: Repo, filing: Filing) -> FilingProjection:
         holding=repo.get_holding_by_cik(filing.cik),
         p1=p1,
         p2=p2,
-        p3=p3,
         claims=claims,
         manual_review=manual_review,
         data_quality=data_quality,

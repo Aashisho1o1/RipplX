@@ -50,12 +50,6 @@ app = typer.Typer(
     no_args_is_help=True,
     add_completion=False,
 )
-shadow_app = typer.Typer(help="Shadow-signal track record.", no_args_is_help=True)
-app.add_typer(shadow_app, name="shadow")
-
-
-
-
 def _version_callback(value: bool) -> None:
     if value:
         console.print(f"finwatch {__version__}")
@@ -156,7 +150,7 @@ def add(
 def watch(
     ticker: str = typer.Argument(..., help="Ticker to track without ownership."),
 ) -> None:
-    """Track a company without ownership (company-level read, no signal)."""
+    """Track a company without ownership context."""
     cfg = _config_or_exit()
     conn, service = build_service(cfg)
     try:
@@ -312,7 +306,7 @@ def process(
     ),
     limit: int | None = typer.Option(None, "--limit", help="Max filings to process this run."),
 ) -> None:
-    """Run the analysis pipeline (P0→P1→metrics→P2→verify→P3) over ingested-but-not-yet-
+    """Run the analysis pipeline (P0→P1→metrics→P2→verify) over ingested-but-not-yet-
     analyzed filings, persisting the analyses the digest renders from."""
     from finwatch.db import Repo, init_db
 
@@ -420,12 +414,9 @@ def digest(
     until: str | None = typer.Option(
         None, "--until", help="Only include filings up to this date (YYYY-MM-DD)."
     ),
-    signals: bool = typer.Option(
-        False, "--signals", help="Also render the (unvalidated) shadow-signal block."
-    ),
     out: str | None = typer.Option(None, "--out", help="Also write the markdown to this path."),
 ) -> None:
-    """Render the markdown digest from the DB (``--signals`` gated, OFF by default)."""
+    """Render the verified markdown digest from the DB."""
     import json as _json
     from datetime import UTC, datetime
 
@@ -436,7 +427,7 @@ def digest(
     conn = init_db(cfg.db_path)
     try:
         repo = Repo(conn)
-        result = render_digest(repo, since=since, until=until, include_signals=signals)
+        result = render_digest(repo, since=since, until=until)
         run_at = datetime.now(UTC).isoformat()
         if out:
             from pathlib import Path
@@ -519,11 +510,7 @@ def verify(
 
 
 @app.command()
-def demo(
-    signals: bool = typer.Option(
-        False, "--signals", help="Also render the (unvalidated) shadow-signal block."
-    ),
-) -> None:
+def demo() -> None:
     """Run the full pipeline on bundled filings with ZERO API keys, then print a digest."""
     from finwatch.db import Repo
     from finwatch.demo import DEMO_SINCE, build_demo_db
@@ -531,29 +518,10 @@ def demo(
 
     conn = build_demo_db()
     try:
-        result = render_digest(Repo(conn), since=DEMO_SINCE, include_signals=signals)
+        result = render_digest(Repo(conn), since=DEMO_SINCE)
     finally:
         conn.close()
     console.print(result.markdown)
-    if not signals:
-        console.print(
-            "\n[dim]Re-run with [bold]finwatch demo --signals[/] to see the "
-            "unvalidated shadow-signal block.[/]"
-        )
-
-
-@shadow_app.command("report")
-def shadow_report() -> None:
-    """Show the shadow-signal track record."""
-    from finwatch.db import Repo, init_db
-    from finwatch.signals.engine import render_shadow_report
-
-    cfg = _config_or_exit()
-    conn = init_db(cfg.db_path)
-    try:
-        console.print(render_shadow_report(Repo(conn).list_shadow_log()))
-    finally:
-        conn.close()
 
 
 if __name__ == "__main__":  # pragma: no cover
