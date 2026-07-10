@@ -157,6 +157,36 @@ def _accept(key: str, title_line: str) -> bool:
     return _title_ok(key, title_line) and _is_header_shape(title_line)
 
 
+_PART_TOKEN_RE = re.compile(r"(?i)^Part\s+(IV|III|II|I)\b[.\):\s]*")
+
+
+def _is_boundary_header(title_line: str) -> bool:
+    """True when an ``Item`` match is a real structural header — either header-shaped
+    (item token + a Title-Case/ALL-CAPS title on the same or joined line) or a bare
+    item token whose title renders on a later line — rather than a prose cross-reference
+    like "Item 8 contains our audited financial statements...". Only such offsets may
+    terminate a section; a prose reference must NOT truncate the section it sits inside
+    (M4). Every ``_accept``-ed header is also a boundary header (``_accept`` implies
+    ``_is_header_shape``)."""
+    return (
+        _is_header_shape(title_line)
+        or _TENKQ_ITEM_ONLY_RE.fullmatch(title_line) is not None
+    )
+
+
+def _is_part_header_shape(title_line: str) -> bool:
+    """True when a ``Part`` match is a real Part header ("Part I", "PART II — OTHER
+    INFORMATION") rather than a prose sentence ("Part II of this report discusses...").
+    A real header is only the Part token, or the token followed by a Title-Case/ALL-CAPS
+    title; a lower-case continuation marks prose. Unvalidated Part markers must not act
+    as boundaries or reassign an item to the wrong Part (M4)."""
+    m = _PART_TOKEN_RE.match(title_line)
+    if not m:
+        return False
+    after = _SEP_RUN_RE.sub("", title_line[m.end():])
+    return after == "" or after[0].isupper()
+
+
 def _make_section(doc: NormalizedDoc, key: str, header: _Header, end: int,
                   is_furnished: bool) -> Section:
     text = doc.text[header.offset : end]
@@ -187,7 +217,9 @@ def dedupe_largest(sections: list[Section]) -> list[Section]:
 
 def split_10k(doc: NormalizedDoc) -> list[Section]:
     items = _headers(doc, _ITEM_RE, _TENKQ_ITEM_ONLY_RE)
-    boundaries = sorted({h.offset for h in items})
+    # Only validated structural headers may bound a section, so a prose "Item N ..."
+    # cross-reference inside a body cannot truncate that body (M4).
+    boundaries = sorted({h.offset for h in items if _is_boundary_header(h.title_line)})
     sections: list[Section] = []
     for h in items:
         key = TENK_MAP.get(h.value)
@@ -203,9 +235,12 @@ def split_10k(doc: NormalizedDoc) -> list[Section]:
 
 
 def split_10q(doc: NormalizedDoc) -> list[Section]:
-    parts = _headers(doc, _PART_RE)
+    # Only validated Part headers may act as boundaries or reassign an item's Part;
+    # a prose "Part II ..." reference must not move Item 2 out of Part I (M4).
+    parts = [p for p in _headers(doc, _PART_RE) if _is_part_header_shape(p.title_line)]
     items = _headers(doc, _ITEM_RE, _TENKQ_ITEM_ONLY_RE)
-    boundaries = sorted({h.offset for h in items} | {p.offset for p in parts})
+    item_bounds = {h.offset for h in items if _is_boundary_header(h.title_line)}
+    boundaries = sorted(item_bounds | {p.offset for p in parts})
     part_offsets = [p.offset for p in parts]
     sections: list[Section] = []
     for h in items:

@@ -31,8 +31,17 @@ def test_remote_app_refuses_missing_or_weak_security_configuration(tmp_path):
         )
     with pytest.raises(RuntimeError, match="ALLOWED_HOSTS"):
         create_app(remote=True, auth_token=TOKEN, allowed_hosts=[], **kwargs)
-    with pytest.raises(RuntimeError, match=r"never '\*'"):
-        create_app(remote=True, auth_token=TOKEN, allowed_hosts=["*"], **kwargs)
+    # A bare "*", a leading-"*." wildcard (which Starlette's TrustedHostMiddleware
+    # treats as a real subdomain match), and leading-dot patterns must all be
+    # rejected — the exact-host guarantee (AGENTS.md §12) forbids any wildcard.
+    for bad_hosts in (
+        ["*"],
+        ["*.example.com"],
+        [".example.com"],
+        ["alpha.example", "*.evil.com"],
+    ):
+        with pytest.raises(RuntimeError, match="wildcards"):
+            create_app(remote=True, auth_token=TOKEN, allowed_hosts=bad_hosts, **kwargs)
 
 
 def test_remote_api_requires_bearer_token_but_health_is_public(tmp_path):

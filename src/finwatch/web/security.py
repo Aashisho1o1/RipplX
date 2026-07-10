@@ -17,9 +17,18 @@ def remote_allowed_hosts(explicit: list[str] | None = None) -> list[str]:
         raise RuntimeError(
             "Remote serving requires FINWATCH_ALLOWED_HOSTS (comma-separated hostnames)."
         )
-    if any(host == "*" or "://" in host or "/" in host for host in hosts):
+    # Starlette's TrustedHostMiddleware treats a leading "*." as a real wildcard
+    # subdomain match, so "*.example.com" would silently admit every subdomain —
+    # breaking the exact-host guarantee (AGENTS.md §12). Reject ANY "*" (not just the
+    # bare "*"), plus leading-dot patterns (which never match a real Host header and
+    # only invite the same confusion) and URLs.
+    if any(
+        "*" in host or host.startswith(".") or "://" in host or "/" in host
+        for host in hosts
+    ):
         raise RuntimeError(
-            "FINWATCH_ALLOWED_HOSTS must contain explicit hostnames, never '*' or URLs."
+            "FINWATCH_ALLOWED_HOSTS must contain explicit hostnames, never "
+            "wildcards ('*' or '*.domain'), leading-dot patterns, or URLs."
         )
     return hosts
 

@@ -4,6 +4,7 @@ import pytest
 from pydantic import ValidationError
 
 from finwatch.core.types import MetricStatus, sector_from_sic
+from finwatch.ingest.service import companyfacts_to_rows
 from finwatch.metrics.envelope import MetricResult
 from finwatch.metrics.formulas import (
     ANNUAL_FRESHNESS_DAYS,
@@ -17,6 +18,60 @@ from finwatch.xbrl.normalize import Fact, FactStore
 
 AS_OF = "2025-05-01"
 GENERAL = sector_from_sic("7372")
+
+
+def _cf_revenues(entries: list[dict]) -> dict:
+    return {"facts": {"us-gaap": {"Revenues": {"units": {"USD": entries}}}}}
+
+
+def test_companyfacts_nonfinite_or_nonnumeric_value_skips_only_that_entry():
+    # One corrupt value must not abort the whole issuer's parse (nor be persisted).
+    cf = _cf_revenues([
+        {"val": 100.0, "start": "2023-01-01", "end": "2023-12-31", "filed": "2024-02-01"},
+        {"val": float("nan"), "start": "2022-01-01", "end": "2022-12-31", "filed": "2023-02-01"},
+        {"val": float("inf"), "start": "2021-01-01", "end": "2021-12-31", "filed": "2022-02-01"},
+        {"val": "N/A", "start": "2020-01-01", "end": "2020-12-31", "filed": "2021-02-01"},
+        {"val": True, "start": "2019-01-01", "end": "2019-12-31", "filed": "2020-02-01"},
+        {"val": 90.0, "start": "2018-01-01", "end": "2018-12-31", "filed": "2019-02-01"},
+    ])
+
+    store = FactStore.from_companyfacts(cf)  # must NOT raise
+    kept = sorted(r.fact.value for r in store.annual("revenue", n=10))
+    # parity: the DB row builder keeps exactly the same clean values.
+    rows = companyfacts_to_rows(cf, "0000000001")
+
+    assert kept == [90.0, 100.0]
+    assert sorted(r.value for r in rows) == [90.0, 100.0]
+
+
+def test_bad_newest_revenue_is_unavailable_not_stale_growth():
+    # FY2024 (the genuinely-current annual) has a corrupt value; older years are clean.
+    # Skipping the bad newest and pairing FY2023 vs FY2022 would render a plausible but
+    # STALE growth number as if current. The poison guard must fail closed instead.
+    cf = _cf_revenues([
+        {"val": float("nan"), "start": "2024-01-01", "end": "2024-12-31", "filed": "2025-02-01"},
+        {"val": 120.0, "start": "2023-01-01", "end": "2023-12-31", "filed": "2024-02-01"},
+        {"val": 100.0, "start": "2022-01-01", "end": "2022-12-31", "filed": "2023-02-01"},
+    ])
+    store = FactStore.from_companyfacts(cf)
+
+    # as_of within the 550-day annual window of the (stale) FY2023 leg, so only the
+    # poison guard — not the freshness gate — can prevent a computed growth number.
+    result = revenue_growth(store, GENERAL, "2025-03-01")
+
+    assert result.status == MetricStatus.UNAVAILABLE
+    assert result.value is None
+
+
+def test_clean_newest_revenue_still_computes_growth():
+    # Control for the poison guard: with a clean FY2024, revenue_growth computes normally.
+    cf = _cf_revenues([
+        {"val": 132.0, "start": "2024-01-01", "end": "2024-12-31", "filed": "2025-02-01"},
+        {"val": 120.0, "start": "2023-01-01", "end": "2023-12-31", "filed": "2024-02-01"},
+    ])
+    result = revenue_growth(FactStore.from_companyfacts(cf), GENERAL, "2025-03-01")
+
+    assert result.status == MetricStatus.COMPUTED
 
 
 def _instant(tag: str, value: float, end: str = "2024-12-31") -> Fact:

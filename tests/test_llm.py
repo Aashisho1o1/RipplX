@@ -376,6 +376,30 @@ def test_p1_extractor_repairs_one_schema_invalid_response():
     assert len(llm.calls) == 2
 
 
+def test_schema_repair_prompt_does_not_leak_validation_error_text_to_model():
+    # LOW-9: pydantic's ValidationError names the exact failed constraint (here it
+    # echoes the bad input value). That detail must NOT be fed back to the model on the
+    # repair attempt — the schema alone drives a good-faith repair. Adversarial filing
+    # content should not get a precise hint about how validation failed.
+    repo = Repo(init_db(":memory:"))
+    sentinel = "ZZZSENTINEL"
+
+    def respond(_system, user):
+        if '"_schema_repair"' in user:
+            return json.dumps(VALID_P1)
+        return json.dumps({**VALID_P1, "extraction_confidence": sentinel})
+
+    llm = FakeLLMClient(responder=respond)
+    P1Extractor(llm, repo).run(
+        filing_meta={"accession_number": "a-1", "ticker": "T"}, sections={})
+
+    assert len(llm.calls) == 2
+    repair_user = llm.calls[1][1]
+    assert "_schema_repair" in repair_user and "json_schema" in repair_user
+    assert "validation_error" not in repair_user
+    assert sentinel not in repair_user
+
+
 def test_more_than_three_findings_is_stage_error_and_leaves_no_orphan_row():
     # The launch cap is part of schema validation and runs before any DB write.
     repo = Repo(init_db(":memory:"))
