@@ -1,0 +1,21 @@
+{
+  "accession_number": "0001437749-24-022743",
+  "ticker": "BSET",
+  "form_type": "8-K",
+  "classification": {"overall_severity": "critical"},
+  "findings": [{
+    "headline": "Cyber incident disrupted business operations",
+    "severity": "critical",
+    "critical_flag": "cyber_1_05_critical_tier",
+    "evidence": [{
+      "accession_number": "0001437749-24-022743",
+      "form_type": "8-K",
+      "section_key": "item_1_05",
+      "char_start": 63,
+      "char_end": 136,
+      "snippet": "disrupted the Company's business operations by encrypting some data files"
+    }]
+  }],
+  "extraction_confidence": "high",
+  "gaps": []
+}

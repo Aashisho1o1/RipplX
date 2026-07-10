@@ -2,13 +2,13 @@
 
 A new user must see real output in under 60 seconds without any key (CLAUDE.md §5).
 This builds an in-memory DB, seeds a small demo portfolio, and runs the REAL
-orchestrator (P0 → P1 → metrics → P2 → verify) over five bundled filings — the
+orchestrator (P0 → P1 → starter metrics → verify) over five bundled filings — the
 LLM is a ``DemoLLM`` that replays recorded stage outputs, so nothing hits the network.
 The rendered digest is therefore produced by exactly the same code path as a live run.
 
 Portfolio (deliberately covers every digest section):
-  MSFT (owned)  routine 10-Q      → verified numbers + boring line
-  DPLS (owned)  going-concern 10-K→ critical red flag + thesis impact
+  MSFT (owned)  material 10-Q     → one evidence-backed change + verified numbers
+  DPLS (owned)  going-concern 10-K→ evidence-backed critical findings
   TWKS (watch)  non-reliance 8-K  → critical red flag
   AAPL (watch)  clean 10-Q + 8-K  → routine, silence
 """
@@ -20,8 +20,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from finwatch.db import Company, Filing, Holding, Repo, init_db
-from finwatch.llm.router import LLMResponse
-from finwatch.llm.stages import P1Extractor, P2Explainer
+from finwatch.llm.router import LAUNCH_MAX_OUTPUT_TOKENS, LLMResponse
+from finwatch.llm.stages import P1Extractor
 from finwatch.metrics.service import MetricsService
 from finwatch.pipeline.orchestrator import Orchestrator
 from finwatch.preprocess.preprocessor import Preprocessor
@@ -30,23 +30,28 @@ _HERE = Path(__file__).resolve().parent
 _DATA = _HERE / "data"
 _GOLDEN = _HERE.parent / "evals" / "golden_set"
 _MSFT_CIK = "0000789019"
+_MSFT_ACCN = "0000950170-24-048288"
 _MODEL = "demo/recorded"
 _NOW = "2024-08-05T00:00:00+00:00"
 
 
 class DemoLLM:
-    """Replays recorded P1/P2 outputs for the current filing."""
+    """Replays one recorded P1 output for the current filing."""
 
     def __init__(self) -> None:
         self.model = _MODEL
         self.stage_outputs: dict[str, str] = {}
 
-    def complete(self, *, system: str, user: str, temperature: float = 0.0,
-                 json_mode: bool = True) -> LLMResponse:
-        if "portfolio manager and risk officer" in system:
-            stage = "P2"
-        else:
-            stage = "P1"
+    def complete(
+        self,
+        *,
+        system: str,
+        user: str,
+        temperature: float = 0.0,
+        json_mode: bool = True,
+        max_tokens: int = LAUNCH_MAX_OUTPUT_TOKENS,
+    ) -> LLMResponse:
+        stage = "P1"
         text = self.stage_outputs.get(stage)
         if text is None:
             raise RuntimeError(f"demo: no recorded {stage} output for the current filing")
@@ -63,43 +68,34 @@ class _Case:
     primary_doc: str
     html_path: Path
     p1_path: Path
-    p2_path: Path | None = None
 
     def stage_outputs(self) -> dict[str, str]:
-        out = {"P1": self.p1_path.read_text()}
-        if self.p2_path is not None:
-            out["P2"] = self.p2_path.read_text()
-        return out
-
-
-def _sec_index(cik: str, accn: str) -> str:
-    return (f"https://www.sec.gov/Archives/edgar/data/{int(cik)}/"
-            f"{accn.replace('-', '')}/{accn}-index.htm")
+        return {"P1": self.p1_path.read_text()}
 
 
 _CASES: list[_Case] = [
-    _Case(accn="0000789019-24-000070", cik=_MSFT_CIK, ticker="MSFT", form="10-Q",
-          filed="2024-08-01", primary_doc=_sec_index(_MSFT_CIK, "0000789019-24-000070"),
+    _Case(accn=_MSFT_ACCN, cik=_MSFT_CIK, ticker="MSFT", form="10-Q",
+          filed="2024-04-25",
+          primary_doc=("https://www.sec.gov/Archives/edgar/data/789019/"
+                       "000095017024048288/msft-20240331.htm"),
           html_path=_DATA / "msft_10q.html", p1_path=_DATA / "msft_10q.p1.json"),
     _Case(accn="0001683168-24-004848", cik="0000866439", ticker="DPLS", form="10-K",
-          filed="2024-08-02",
+          filed="2024-07-15",
           primary_doc="https://www.sec.gov/Archives/edgar/data/866439/000168316824004848/darkpulse_i10k-123123.htm",
           html_path=_GOLDEN / "going_concern_10k" / "filing.html",
-          p1_path=_GOLDEN / "going_concern_10k" / "recorded_p1.json",
-          p2_path=_DATA / "going_concern.p2.json"),
+          p1_path=_GOLDEN / "going_concern_10k" / "recorded_p1.json"),
     _Case(accn="0001866550-24-000006", cik="0001866550", ticker="TWKS", form="8-K",
-          filed="2024-08-02",
+          filed="2024-02-12",
           primary_doc="https://www.sec.gov/Archives/edgar/data/1866550/000186655024000006/twks-20240206.htm",
           html_path=_GOLDEN / "non_reliance_8k" / "filing.html",
-          p1_path=_GOLDEN / "non_reliance_8k" / "recorded_p1.json",
-          p2_path=_DATA / "non_reliance.p2.json"),
+          p1_path=_GOLDEN / "non_reliance_8k" / "recorded_p1.json"),
     _Case(accn="0000320193-24-000081", cik="0000320193", ticker="AAPL", form="10-Q",
           filed="2024-08-01",
           primary_doc="https://www.sec.gov/Archives/edgar/data/320193/000032019324000081/aapl-20240629.htm",
           html_path=_GOLDEN / "clean_10q" / "filing.html",
           p1_path=_GOLDEN / "clean_10q" / "recorded_p1.json"),
     _Case(accn="0000320193-26-000011", cik="0000320193", ticker="AAPL", form="8-K",
-          filed="2024-08-03",
+          filed="2026-04-30",
           primary_doc="https://www.sec.gov/Archives/edgar/data/320193/000032019326000011/aapl-20260430.htm",
           html_path=_GOLDEN / "furnished_earnings_8k" / "filing.html",
           p1_path=_GOLDEN / "furnished_earnings_8k" / "recorded_p1.json"),
@@ -117,15 +113,8 @@ _COMPANIES = [
 ]
 
 _HOLDINGS = [
-    Holding(cik=_MSFT_CIK, ticker="MSFT", owned=1, shares=40, cost_basis=300.0,
-            target_weight_pct=25.0, horizon="5y+",
-            thesis=("Cloud and AI drive durable double-digit growth; margins and buybacks "
-                    "compound it."),
-            added_at=_NOW),
-    Holding(cik="0000866439", ticker="DPLS", owned=1, shares=5000, cost_basis=1.20,
-            target_weight_pct=5.0, horizon="1-3y",
-            thesis="Deep-value turnaround: new contract wins restore positive operating cash flow.",
-            added_at=_NOW),
+    Holding(cik=_MSFT_CIK, ticker="MSFT", owned=1, added_at=_NOW),
+    Holding(cik="0000866439", ticker="DPLS", owned=1, added_at=_NOW),
     Holding(cik="0001866550", ticker="TWKS", owned=0, added_at=_NOW),
     Holding(cik="0000320193", ticker="AAPL", owned=0, added_at=_NOW),
 ]
@@ -155,13 +144,7 @@ def build_demo_db(db_path: str = ":memory:") -> sqlite3.Connection:
     orch = Orchestrator(
         repo, Preprocessor(repo, now_fn=now_fn),
         P1Extractor(llm, repo, model_label=_MODEL, now_fn=now_fn),
-        P2Explainer(llm, repo, model_label=_MODEL, now_fn=now_fn),
-        metrics, companyfacts_provider=_companyfacts, now_fn=now_fn)
-
-    records = [
-        {"ticker": h.ticker, "owned": bool(h.owned)}
-        for h in repo.list_holdings()
-    ]
+        metrics, now_fn=now_fn)
     for case in _CASES:
         filing = Filing(accession_number=case.accn, cik=case.cik, form_type=case.form,
                         filed_at=case.filed, primary_doc_url=case.primary_doc)
@@ -171,7 +154,6 @@ def build_demo_db(db_path: str = ":memory:") -> sqlite3.Connection:
             filing=filing,
             html=case.html_path.read_text(),
             as_of=case.filed,
-            records=records,
         )
         repo.set_filing_status(
             case.accn,
@@ -181,4 +163,4 @@ def build_demo_db(db_path: str = ":memory:") -> sqlite3.Connection:
     return conn
 
 
-DEMO_SINCE = "2024-08-01"
+DEMO_SINCE = "2024-01-01"

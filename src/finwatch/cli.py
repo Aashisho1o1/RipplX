@@ -355,15 +355,9 @@ def metrics(
 
 @app.command()
 def digest(
-    since: str | None = typer.Option(
-        None, "--since", help="Only include filings since this date (YYYY-MM-DD)."
-    ),
-    until: str | None = typer.Option(
-        None, "--until", help="Only include filings up to this date (YYYY-MM-DD)."
-    ),
     out: str | None = typer.Option(None, "--out", help="Also write the markdown to this path."),
 ) -> None:
-    """Render the verified markdown digest from the DB."""
+    """Render the current verified markdown digest from the DB."""
     import json as _json
     from datetime import UTC, datetime
 
@@ -374,7 +368,7 @@ def digest(
     conn = init_db(cfg.db_path)
     try:
         repo = Repo(conn)
-        result = render_digest(repo, since=since, until=until)
+        result = render_digest(repo)
         run_at = datetime.now(UTC).isoformat()
         if out:
             from pathlib import Path
@@ -385,8 +379,8 @@ def digest(
             repo.insert_digest(
                 Digest(
                     run_at=run_at,
-                    since=since,
-                    until=until,
+                    since=None,
+                    until=None,
                     markdown_path=out,
                     filings_json=_json.dumps(result.accessions),
                 )

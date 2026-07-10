@@ -14,9 +14,12 @@ class GoldenCase:
     cik: str
     ticker: str
     form_type: str
+    filed_at: str
     primary_doc: str
     category: str                       # 'critical' | 'boring'
     expected_critical_flags: list[str] = field(default_factory=list)
+    expected_min_findings: int = 0
+    expected_max_findings: int = 3
 
 
 def _golden_dir():

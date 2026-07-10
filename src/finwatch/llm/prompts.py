@@ -9,13 +9,13 @@ from __future__ import annotations
 
 import importlib.resources
 
-PROMPT_SUITE_VERSION = "v1"
+PROMPT_SUITE_VERSION = "v2"
 _FOUNDATION_PLACEHOLDER = "[FOUNDATION BLOCK]"
 
 STAGE_P1 = "P1_extractor"
 STAGE_P2 = "P2_impact"
 STAGE_P3 = "P3_rationale"
-_STAGE_VERSIONS = {STAGE_P1: "v2"}
+_STAGE_VERSIONS = {STAGE_P1: "v3"}
 
 
 def _read(name: str) -> str:

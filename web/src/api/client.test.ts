@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { AUTH_TOKEN_STORAGE_KEY, api } from "./client";
+import { api, clearAuthToken, storeAuthToken } from "./client";
 
 describe("api", () => {
-  afterEach(() => { window.sessionStorage.clear(); vi.unstubAllGlobals(); });
+  afterEach(() => { clearAuthToken(); vi.unstubAllGlobals(); });
 
   it("reports an unconnected API instead of leaking a JSON parse error", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("<!doctype html>", {
@@ -17,7 +17,7 @@ describe("api", () => {
   });
 
   it("sends the hosted access token only through the authorization header", async () => {
-    window.sessionStorage.setItem(AUTH_TOKEN_STORAGE_KEY, "alpha-secret");
+    storeAuthToken("alpha-secret");
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ ok: true }), {
       headers: { "Content-Type": "application/json" },
       status: 200,

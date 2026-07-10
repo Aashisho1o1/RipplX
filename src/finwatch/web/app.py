@@ -7,13 +7,14 @@ import secrets
 from contextlib import contextmanager
 from datetime import date, timedelta
 from pathlib import Path
+from threading import Lock
 from typing import Any, Literal
 from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from finwatch.config import Config
-from finwatch.db import Repo, init_db
+from finwatch.db import Repo, connect, init_db
 from finwatch.demo import DEMO_SINCE, build_demo_db
 from finwatch.ingest import TickerNotFoundError, build_service
 from finwatch.presentation import PresentationService
@@ -25,6 +26,83 @@ from finwatch.web.runtime import (
     resolve_settings,
 )
 from finwatch.web.security import LOCAL_ALLOWED_HOSTS, remote_allowed_hosts, remote_auth_token
+
+REQUEST_BODY_LIMIT_BYTES = 1024 * 1024
+MAX_TRACKED_TICKERS = 25
+_REQUEST_TOO_LARGE_BODY = (
+    b'{"error":{"code":"request_too_large",'
+    b'"message":"Request body exceeds the 1 MiB limit."}}'
+)
+
+
+class RequestBodyLimitMiddleware:
+    """Bound request bodies before FastAPI or an endpoint attempts to parse them.
+
+    A declared length is rejected without reading. Chunked/streamed requests are
+    buffered only up to the same small cap, then replayed to the downstream app.
+    """
+
+    def __init__(self, app, max_bytes: int = REQUEST_BODY_LIMIT_BYTES) -> None:
+        self.app = app
+        self.max_bytes = max_bytes
+
+    async def _reject(self, send) -> None:
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 413,
+                "headers": [
+                    (b"content-type", b"application/json"),
+                    (b"content-length", str(len(_REQUEST_TOO_LARGE_BODY)).encode("ascii")),
+                ],
+            }
+        )
+        await send(
+            {"type": "http.response.body", "body": _REQUEST_TOO_LARGE_BODY, "more_body": False}
+        )
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        headers = dict(scope.get("headers", ()))
+        declared = headers.get(b"content-length")
+        if declared is not None:
+            try:
+                declared_size = int(declared)
+            except ValueError:
+                declared_size = 0  # the streamed-byte check remains authoritative
+            if declared_size > self.max_bytes:
+                await self._reject(send)
+                return
+
+        messages: list[dict] = []
+        received = 0
+        while True:
+            message = await receive()
+            messages.append(message)
+            if message["type"] == "http.request":
+                received += len(message.get("body", b""))
+                if received > self.max_bytes:
+                    await self._reject(send)
+                    return
+                if not message.get("more_body", False):
+                    break
+            elif message["type"] == "http.disconnect":
+                break
+
+        index = 0
+
+        async def replay_receive():
+            nonlocal index
+            if index < len(messages):
+                message = messages[index]
+                index += 1
+                return message
+            return {"type": "http.request", "body": b"", "more_body": False}
+
+        await self.app(scope, replay_receive, send)
 
 
 class ApiProblem(Exception):
@@ -90,6 +168,7 @@ def create_app(
 ):
     try:
         from fastapi import FastAPI
+        from fastapi.exceptions import RequestValidationError
         from fastapi.middleware.cors import CORSMiddleware
         from fastapi.middleware.trustedhost import TrustedHostMiddleware
         from fastapi.responses import FileResponse, JSONResponse
@@ -113,19 +192,39 @@ def create_app(
     app.state.db_path = resolved_db
     app.state.secrets = RuntimeSecrets()
     app.state.jobs = JobRegistry()
+    app.state.holding_add_lock = Lock()
     app.state.remote = remote
     expected_token = remote_auth_token(auth_token) if remote else None
     trusted_hosts = remote_allowed_hosts(allowed_hosts) if remote else list(LOCAL_ALLOWED_HOSTS)
+
+    # Schema work belongs to process startup, never concurrent request/job paths.
+    # ``:memory:`` remains a test-only exception because each SQLite connection is
+    # an independent ephemeral database.
+    if resolved_db != ":memory:":
+        startup_connection = init_db(resolved_db)
+        startup_connection.close()
+
+    def operational_connection():
+        # Test-only in-memory databases cannot survive the startup connection close.
+        return init_db(app.state.db_path) if app.state.db_path == ":memory:" else connect(
+            app.state.db_path
+        )
 
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=trusted_hosts)
 
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["http://127.0.0.1:5173", "http://localhost:5173"],
+        allow_origins=(
+            [] if remote else ["http://127.0.0.1:5173", "http://localhost:5173"]
+        ),
         allow_credentials=False,
         allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
         allow_headers=["Authorization", "Content-Type"],
     )
+    # Authentication and origin checks are registered below and therefore wrap
+    # this limiter; unauthenticated/cross-origin callers are rejected before we
+    # spend memory buffering any request body.
+    app.add_middleware(RequestBodyLimitMiddleware, max_bytes=REQUEST_BODY_LIMIT_BYTES)
 
     @app.middleware("http")
     async def authenticate_remote_api(request, call_next):
@@ -155,6 +254,16 @@ def create_app(
     async def same_origin_mutations(request, call_next):
         if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
             origin = request.headers.get("origin")
+            if not origin and not remote:
+                return JSONResponse(
+                    status_code=403,
+                    content={
+                        "error": {
+                            "code": "origin_required",
+                            "message": "Local browser mutations require an Origin header.",
+                        }
+                    },
+                )
             if origin:
                 parsed = urlsplit(origin)
                 origin_host = parsed.netloc.lower()
@@ -172,11 +281,58 @@ def create_app(
                     )
         return await call_next(request)
 
+    @app.middleware("http")
+    async def security_headers(request, call_next):
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; base-uri 'none'; frame-ancestors 'none'; "
+            "form-action 'self'; img-src 'self' data:; script-src 'self'; "
+            "style-src 'self'; connect-src 'self'"
+        )
+        if request.url.path.startswith("/api/"):
+            response.headers["Cache-Control"] = "no-store"
+        if remote:
+            response.headers["Strict-Transport-Security"] = "max-age=31536000"
+        return response
+
     @app.exception_handler(ApiProblem)
     async def api_problem_handler(_request, exc: ApiProblem):
         return JSONResponse(
             status_code=exc.status,
             content={"error": {"code": exc.code, "message": exc.message}},
+        )
+
+    @app.exception_handler(RequestValidationError)
+    async def validation_error_handler(_request, exc: RequestValidationError):
+        fields = [
+            ".".join(str(part) for part in error.get("loc", ()))
+            for error in exc.errors()
+        ]
+        return JSONResponse(
+            status_code=422,
+            content={
+                "error": {
+                    "code": "validation_error",
+                    "message": "Request validation failed.",
+                    "fields": fields,
+                }
+            },
+        )
+
+    @app.exception_handler(Exception)
+    async def unhandled_error_handler(_request, _exc: Exception):
+        """Keep internal/provider exception text out of the public API contract."""
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": {
+                    "code": "internal_error",
+                    "message": "The request could not be completed.",
+                }
+            },
         )
 
     @app.get("/healthz", include_in_schema=False)
@@ -185,7 +341,7 @@ def create_app(
 
     @contextmanager
     def repo_context(demo: bool = False):
-        connection = build_demo_db() if demo else init_db(app.state.db_path)
+        connection = build_demo_db() if demo else operational_connection()
         try:
             yield Repo(connection)
         finally:
@@ -209,20 +365,15 @@ def create_app(
             return settings_payload(repo)
 
     @app.get("/api/brief")
-    def brief(
-        demo: bool = False,
-        since: str | None = None,
-        until: str | None = None,
-    ):
+    def brief(demo: bool = False):
         with repo_context(demo) as repo:
             if demo:
-                since = since or DEMO_SINCE
+                since_value = DEMO_SINCE
             else:
                 settings = resolve_settings(repo, app.state.secrets)
-                since = since or _since_for_period(settings.period)
+                since_value = _since_for_period(settings.period)
             return PresentationService(repo).brief(
-                since=since,
-                until=until,
+                since=since_value,
                 sample_data=demo,
             )
 
@@ -241,25 +392,38 @@ def create_app(
 
     @app.post("/api/holdings", status_code=201)
     def create_holding(payload: HoldingCreate):
-        with repo_context() as repo:
-            settings = resolve_settings(repo, app.state.secrets)
-        if not settings.sec_user_agent:
-            raise ApiProblem(
-                409, "missing_user_agent", "Configure the SEC User-Agent before adding a company."
+        # Registration includes external EDGAR reads. Serialize it process-wide so
+        # concurrent requests cannot multiply request rate or race the launch cap.
+        with app.state.holding_add_lock:
+            with repo_context() as repo:
+                settings = resolve_settings(repo, app.state.secrets)
+                known = repo.get_company_by_ticker(payload.ticker)
+                already_tracked = bool(known and repo.get_holding_by_cik(known.cik))
+                if not already_tracked and len(repo.list_holdings()) >= MAX_TRACKED_TICKERS:
+                    raise ApiProblem(
+                        409,
+                        "tracked_ticker_limit",
+                        f"The hosted alpha is limited to {MAX_TRACKED_TICKERS} tracked tickers.",
+                    )
+            if not settings.sec_user_agent:
+                raise ApiProblem(
+                    409,
+                    "missing_user_agent",
+                    "Configure the SEC User-Agent before adding a company.",
+                )
+            config = Config(
+                sec_user_agent=settings.sec_user_agent,
+                db_path=app.state.db_path,
+                model=settings.model,
             )
-        config = Config(
-            sec_user_agent=settings.sec_user_agent,
-            db_path=app.state.db_path,
-            model=settings.model,
-        )
-        connection, service = build_service(config)
-        try:
-            company = service.add_holding(payload.ticker)
-        except TickerNotFoundError as exc:
-            raise ApiProblem(404, "ticker_not_found", "Ticker not found on EDGAR.") from exc
-        finally:
-            service.edgar.close()
-            connection.close()
+            connection, service = build_service(config, conn=operational_connection())
+            try:
+                company = service.add_holding(payload.ticker)
+            except TickerNotFoundError as exc:
+                raise ApiProblem(404, "ticker_not_found", "Ticker not found on EDGAR.") from exc
+            finally:
+                service.edgar.close()
+                connection.close()
         with repo_context() as repo:
             view = PresentationService(repo).holdings()
             rows = view.owned + view.watching
@@ -273,8 +437,8 @@ def create_app(
                 raise ApiProblem(404, "holding_not_found", "Holding not found.")
 
     @app.get("/api/companies/{ticker}/metrics")
-    def company_metrics(ticker: str, as_of: str | None = None, demo: bool = False):
-        selected_date = as_of or date.today().isoformat()
+    def company_metrics(ticker: str, as_of: date | None = None, demo: bool = False):
+        selected_date = as_of.isoformat() if as_of else date.today().isoformat()
         with repo_context(demo) as repo:
             result = PresentationService(repo).metrics(ticker, as_of=selected_date)
             if result is None:
@@ -311,7 +475,7 @@ def create_app(
             if not settings.sec_user_agent:
                 raise RuntimeError("SEC User-Agent is not configured.")
             config = Config(sec_user_agent=settings.sec_user_agent, db_path=app.state.db_path)
-            connection, service = build_service(config)
+            connection, service = build_service(config, conn=operational_connection())
             partial = False
             try:
                 ciks = service.repo.list_tracked_ciks()
@@ -325,31 +489,20 @@ def create_app(
                     key = company.ticker if company else cik
                     result = service.ingest_one(cik)
                     partial = partial or bool(result.error)
-                    metrics_error = None
-                    metrics_computed = 0
+                    metrics_failed = False
                     try:
-                        metrics_computed = _compute_synced_metrics(
+                        _compute_synced_metrics(
                             service, cik, as_of=date.today().isoformat()
                         )
-                    except Exception as exc:  # noqa: BLE001 - preserve successful ingest work
+                    except Exception:  # noqa: BLE001 - preserve successful ingest work
                         partial = True
-                        metrics_error = str(exc)
-                    details = (
-                        f"{result.filings_indexed} filings ({result.filings_new} new), "
-                        f"{result.xbrl_facts} XBRL facts, "
-                        f"{metrics_computed} verified metrics"
-                    )
-                    message = result.error or details
-                    if result.error and metrics_computed:
-                        message += f"; {metrics_computed} verified metrics computed"
-                    if metrics_error:
-                        message += f"; metrics unavailable: {metrics_error}"
+                        metrics_failed = True
                     registry.add_item(
                         job_id,
                         JobItem(
                             key=key,
-                            state="failed" if result.error or metrics_error else "completed",
-                            message=message,
+                            state="failed" if result.error or metrics_failed else "completed",
+                            message="",
                         ),
                     )
             finally:
@@ -368,12 +521,11 @@ def create_app(
             from finwatch.llm.router import LiteLLMClient
             from finwatch.pipeline.run import (
                 build_orchestrator,
-                holding_records,
                 newest_filing_to_analyze,
                 process_filing,
             )
 
-            connection = init_db(app.state.db_path)
+            connection = operational_connection()
             repo = DatabaseRepo(connection)
             settings = resolve_settings(repo, app.state.secrets)
             if not settings.sec_user_agent:
@@ -408,7 +560,6 @@ def create_app(
             )
             partial = False
             try:
-                records = holding_records(repo)
                 filing = newest_filing_to_analyze(repo, cik)
                 if filing is None:
                     registry.add_item(
@@ -426,15 +577,14 @@ def create_app(
                         f"{filing.accession_number}"
                     )
 
-                    def progress(stage, state, message, diagnostics, key=filing_key):
+                    def progress(stage, state, _message, _diagnostics, key=filing_key):
                         registry.upsert_item(
                             job_id,
                             JobItem(
                                 key=f"{key}:{stage}",
                                 state=state,
-                                message=message,
+                                message="",
                                 stage=stage,
-                                diagnostics=diagnostics,
                             ),
                         )
 
@@ -445,7 +595,6 @@ def create_app(
                         repo,
                         filing,
                         fetch_html=fetch,
-                        records=records,
                         on_stage=progress,
                     )
                     partial = partial or not result.ok or result.manual_review
@@ -456,12 +605,7 @@ def create_app(
                             state="completed"
                             if result.ok and not result.manual_review
                             else "failed",
-                            message=result.error
-                            or (
-                                "manual review required"
-                                if result.manual_review
-                                else result.verdict or "complete"
-                            ),
+                            message="",
                             verdict=result.verdict,
                         ),
                     )

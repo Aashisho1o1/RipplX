@@ -142,7 +142,6 @@ def persist_report(
     fail over all rows) reflects only the latest run, and rows don't accumulate on
     every retry.
     """
-    repo.clear_verification_results(analysis_id)
     rows = [
         VerificationResult(
             analysis_id=analysis_id, check_id=c.check_id, verdict=c.verdict,
@@ -150,7 +149,7 @@ def persist_report(
         )
         for c in report.results
     ]
-    return repo.insert_verification_results(rows)
+    return repo.replace_verification_results(analysis_id, rows)
 
 
 

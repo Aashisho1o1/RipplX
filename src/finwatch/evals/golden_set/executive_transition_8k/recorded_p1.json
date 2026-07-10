@@ -1,0 +1,21 @@
+{
+  "accession_number": "0001193125-24-142941",
+  "ticker": "JBL",
+  "form_type": "8-K",
+  "classification": {"overall_severity": "medium"},
+  "findings": [{
+    "headline": "Chief executive leadership changed",
+    "severity": "medium",
+    "critical_flag": null,
+    "evidence": [{
+      "accession_number": "0001193125-24-142941",
+      "form_type": "8-K",
+      "section_key": "item_5_02",
+      "char_start": 89,
+      "char_end": 142,
+      "snippet": "Michael Dastoor was appointed Chief Executive Officer"
+    }]
+  }],
+  "extraction_confidence": "high",
+  "gaps": []
+}

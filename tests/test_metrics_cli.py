@@ -31,24 +31,27 @@ def _bundle_for(cik: str, ticker: str, sic: str, *, financial: int):
     return bundle
 
 
-def test_starter_view_shows_computed_numbers():
+def test_starter_view_separates_fresh_numbers_from_stale_annual_sources():
     bundle = _bundle_for("0000789019", "MSFT", "7372", financial=0)
     rows = metric_view_rows(bundle)
     by_label = {label: (value, mark) for label, value, _f, mark in rows}
 
     # The starter surface, and nothing but it (never the full ambitious core by default).
     assert set(by_label) <= {"Revenue growth", "Net income trend", "Operating cash flow",
-                             "Liquidity", "Share count Δ", "Leverage"}
-    # Revenue growth is computable from the fixture and shows the ✓ mark.
-    assert "Revenue growth" in by_label
-    assert by_label["Revenue growth"][1] == "✓"
-    assert "YoY" in by_label["Revenue growth"][0]
+                             "Liquidity", "Share count Δ",
+                             "Net debt / (operating income + D&A) proxy"}
+    # The annual fixture available at this point-in-time is stale and must not be
+    # dressed up as current; recent instant/share facts remain usable.
+    assert by_label["Revenue growth"][1] == "—"
+    assert "current source is stale" in by_label["Revenue growth"][0]
+    assert by_label["Liquidity"][1] == "✓"
+    assert by_label["Share count Δ"][1] == "✓"
 
 
 def test_bank_marks_not_applicable():
     bundle = _bundle_for("0000019617", "JPM", "6021", financial=1)
     rows = {label: (value, mark) for label, value, _f, mark in
             metric_view_rows(bundle)}
-    value, mark = rows["Leverage"]
+    value, mark = rows["Net debt / (operating income + D&A) proxy"]
     assert mark == "—"
     assert value.startswith("n/a")

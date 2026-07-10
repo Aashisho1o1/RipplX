@@ -7,15 +7,17 @@ import pytest
 pytest.importorskip("fastapi")
 from fastapi.testclient import TestClient  # noqa: E402
 
-from finwatch.db import Repo, init_db
+from finwatch.db import Company, Holding, Repo, init_db
 from finwatch.demo import build_demo_db
 from finwatch.web.app import HoldingCreate, JobRequest, _compute_synced_metrics, create_app
+
+LOCAL_BROWSER_HEADERS = {"Origin": "http://testserver"}
 
 
 def _client(tmp_path: Path) -> tuple[TestClient, Path]:
     db_path = tmp_path / "finwatch.db"
     app = create_app(db_path=str(db_path), web_dist=tmp_path / "missing-dist")
-    return TestClient(app), db_path
+    return TestClient(app, headers=LOCAL_BROWSER_HEADERS), db_path
 
 
 def test_web_job_request_accepts_only_an_optional_ticker():
@@ -40,7 +42,10 @@ def test_holding_create_is_ticker_only_and_legacy_rows_do_not_leak_private_field
 
     db_path = tmp_path / "finwatch.db"
     build_demo_db(str(db_path)).close()
-    client = TestClient(create_app(db_path=str(db_path), web_dist=tmp_path / "missing-dist"))
+    client = TestClient(
+        create_app(db_path=str(db_path), web_dist=tmp_path / "missing-dist"),
+        headers=LOCAL_BROWSER_HEADERS,
+    )
     rows = client.get("/api/holdings").json()["owned"]
     assert rows
     assert {"shares", "cost_basis", "target_weight_pct", "horizon", "thesis"}.isdisjoint(
@@ -49,10 +54,40 @@ def test_holding_create_is_ticker_only_and_legacy_rows_do_not_leak_private_field
     assert client.patch("/api/holdings/MSFT", json={"shares": 1}).status_code == 404
 
 
+def test_holding_create_fails_before_edgar_when_launch_cap_is_reached(tmp_path):
+    client, db_path = _client(tmp_path)
+    assert client.put(
+        "/api/settings",
+        json={"sec_user_agent": "Test User test@example.com"},
+    ).status_code == 200
+    conn = init_db(str(db_path))
+    try:
+        repo = Repo(conn)
+        for index in range(25):
+            cik = str(index + 1)
+            ticker = f"T{index}"
+            repo.upsert_company(Company(cik=cik, ticker=ticker, added_at="t"))
+            repo.upsert_holding(Holding(cik=cik, ticker=ticker, owned=1, added_at="t"))
+    finally:
+        conn.close()
+
+    response = client.post("/api/holdings", json={"ticker": "NEW"})
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "tracked_ticker_limit"
+
+
 def test_analyze_endpoint_rejects_historical_replay_controls(tmp_path):
     client, _ = _client(tmp_path)
     for payload in ({"limit": 10}, {"form": "10-Q"}, {"accession": "a-1"}, {"mode": "parse"}):
         assert client.post("/api/jobs/analyze", json=payload).status_code == 422
+
+
+def test_metrics_endpoint_rejects_malformed_as_of_date(tmp_path):
+    client, _ = _client(tmp_path)
+    response = client.get("/api/companies/MSFT/metrics?as_of=not-a-date")
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "validation_error"
 
 
 def test_bootstrap_setup_and_session_key_are_safe(tmp_path, monkeypatch):
@@ -103,7 +138,10 @@ def test_restart_keeps_portfolio_results_but_drops_session_key(tmp_path, monkeyp
 
     db_path = tmp_path / "finwatch.db"
     build_demo_db(str(db_path)).close()
-    first = TestClient(create_app(db_path=str(db_path), web_dist=tmp_path / "missing-dist"))
+    first = TestClient(
+        create_app(db_path=str(db_path), web_dist=tmp_path / "missing-dist"),
+        headers=LOCAL_BROWSER_HEADERS,
+    )
     response = first.put(
         "/api/settings",
         json={
@@ -115,7 +153,8 @@ def test_restart_keeps_portfolio_results_but_drops_session_key(tmp_path, monkeyp
     assert len(first.get("/api/holdings").json()["owned"]) == 2
 
     restarted = TestClient(
-        create_app(db_path=str(db_path), web_dist=tmp_path / "missing-dist")
+        create_app(db_path=str(db_path), web_dist=tmp_path / "missing-dist"),
+        headers=LOCAL_BROWSER_HEADERS,
     )
     bootstrap = restarted.get("/api/bootstrap").json()
     assert bootstrap["sec_user_agent"] == "Test User test@example.com"
@@ -136,9 +175,20 @@ def test_demo_contract_has_no_shadow_surface(tmp_path):
     assert response.status_code == 200
     body = response.json()
     assert body["sample_data"] is True
-    assert body["critical_red_flags"][0]["flags"][0]["edgar_url"].startswith("https://")
+    assert body["filings"][0]["findings"][0]["evidence"][0]["edgar_url"].startswith(
+        "https://"
+    )
     assert "shadow_signals" not in body
     assert "signals" not in client.get("/api/bootstrap").json()
+
+
+def test_brief_api_does_not_expose_historical_replay_controls(tmp_path):
+    client, _ = _client(tmp_path)
+
+    operation = client.get("/openapi.json").json()["paths"]["/api/brief"]["get"]
+    query_names = {parameter["name"] for parameter in operation["parameters"]}
+
+    assert query_names == {"demo"}
 
 
 def test_removed_track_record_api_returns_json_404(tmp_path):
@@ -158,7 +208,10 @@ def test_removed_reverify_endpoint_cannot_replace_audit_rows(tmp_path):
     before = repo.list_verification_results(analysis.id)
     conn.close()
 
-    client = TestClient(create_app(db_path=str(db_path), web_dist=tmp_path / "missing-dist"))
+    client = TestClient(
+        create_app(db_path=str(db_path), web_dist=tmp_path / "missing-dist"),
+        headers=LOCAL_BROWSER_HEADERS,
+    )
     response = client.post("/api/filings/0001683168-24-004848/reverify")
     assert response.status_code == 404
     assert response.json()["error"]["code"] == "api_route_not_found"

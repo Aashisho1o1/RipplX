@@ -16,9 +16,11 @@ from finwatch.evals.golden import GoldenCase, load_case_html, load_manifest, loa
 from finwatch.llm.router import FakeLLMClient, LLMClient
 from finwatch.llm.stages import P1Extractor, StageError
 from finwatch.metrics.envelope import MetricsBundle
-from finwatch.pipeline.adapters import critical_code
 from finwatch.pipeline.orchestrator import assemble_verify_bundle
+from finwatch.presentation.canonical import build_filing_entry
+from finwatch.presentation.projection import load_filing_projection
 from finwatch.verify.checks import run_all
+from finwatch.verify.orchestrator import persist_report
 
 _SCREAM = frozenset({"critical", "high"})
 
@@ -99,13 +101,18 @@ def score_case(case: GoldenCase, llm: LLMClient, html: str, *, now: str = "eval"
     """Run one golden case through P0 → P1 → verify and score it. Never raises."""
     repo = Repo(init_db(":memory:"))
     repo.upsert_company(Company(cik=case.cik, ticker=case.ticker, added_at=now))
-    repo.upsert_filing(Filing(accession_number=case.accession, cik=case.cik,
-                              form_type=case.form_type, filed_at="2024-01-01"))
+    repo.upsert_filing(Filing(
+        accession_number=case.accession,
+        cik=case.cik,
+        form_type=case.form_type,
+        filed_at=case.filed_at,
+        primary_doc_url=case.primary_doc,
+    ))
 
     from finwatch.preprocess.preprocessor import Preprocessor
     Preprocessor(repo, now_fn=lambda: now).preprocess_html(
         accession_number=case.accession, cik=case.cik, form_type=case.form_type,
-        filed_at="2024-01-01", period_of_report=None, html=html,
+        filed_at=case.filed_at, period_of_report=None, html=html,
     )
     sections = {
         s.section_key: {"text": s.text, "char_start": s.char_start, "char_end": s.char_end,
@@ -114,12 +121,12 @@ def score_case(case: GoldenCase, llm: LLMClient, html: str, *, now: str = "eval"
     }
     filing_meta = {
         "cik": case.cik, "ticker": case.ticker, "company_name": None,
-        "form_type": case.form_type, "filed_at": "2024-01-01", "period_of_report": None,
+        "form_type": case.form_type, "filed_at": case.filed_at, "period_of_report": None,
         "accession_number": case.accession, "is_amendment": False, "amends_accession": None,
     }
 
     try:
-        p1, _aid, resp = P1Extractor(llm, repo, now_fn=lambda: now).run(
+        p1, analysis_id, resp = P1Extractor(llm, repo, now_fn=lambda: now).run(
             filing_meta=filing_meta, sections=sections)
     except StageError:
         # unparseable output: JSON invalid; a critical case with no output is a miss
@@ -128,24 +135,35 @@ def score_case(case: GoldenCase, llm: LLMClient, html: str, *, now: str = "eval"
         return CaseScore(case.id, case.category, recall, json_valid=False,
                          verifier_pass=False, false_alarm=false_alarm)
 
-    # Score recall through the REAL adapter (F15): the golden gate must measure what the
-    # matrix's M1 actually sees — critical_code applies the severity gate — so a model that
-    # emits the right flag at LOW severity (which the adapter drops, so M1 never fires) does
-    # NOT pass, and one that phrases the flag naturally ("substantial doubt…") still does.
-    found = {c for rf in p1.red_flags if (c := critical_code(rf.flag, rf.severity)) is not None}
+    # Critical recall is measured against the strict controlled field in the launch
+    # contract. Free-text keyword normalization is no longer in the production path.
+    found = {finding.critical_flag for finding in p1.findings if finding.critical_flag}
     expected = set(case.expected_critical_flags)
     recall = 1.0 if not expected else len(expected & found) / len(expected)
-    false_alarm = case.category == "boring" and (
+    false_alarm = case.category != "critical" and (
         p1.classification.overall_severity in _SCREAM
-        or any(rf.severity in _SCREAM for rf in p1.red_flags)
+        or any(finding.severity in _SCREAM for finding in p1.findings)
     )
 
     section_texts = {
         f"{case.accession}:{s.section_key}": s.text
         for s in repo.list_filing_sections(case.accession)
     }
-    bundle = assemble_verify_bundle(p1, None, MetricsBundle(), section_texts, [])
-    verifier_pass = run_all(bundle).verdict != "FAIL"
+    bundle = assemble_verify_bundle(p1, MetricsBundle(), section_texts)
+    verification = run_all(bundle)
+    persist_report(repo, analysis_id, verification, created_at=now)
+    if verification.verdict != "FAIL":
+        repo.set_filing_status(case.accession, "verified", processed_at=now)
+    filing = repo.get_filing(case.accession)
+    assert filing is not None
+    launch_entry = build_filing_entry(repo, load_filing_projection(repo, filing))
+    launch_projection_pass = (
+        not launch_entry.manual_review
+        and case.expected_min_findings
+        <= len(launch_entry.findings)
+        <= case.expected_max_findings
+    )
+    verifier_pass = verification.verdict != "FAIL" and launch_projection_pass
 
     return CaseScore(
         case.id, case.category, recall, json_valid=True, verifier_pass=verifier_pass,

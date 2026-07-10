@@ -1,1 +1,1 @@
-"""Pipeline orchestration: ingest → P0 → P1 → metrics → P2 → verify."""
+"""Launch pipeline orchestration: ingest → P0 → P1 → starter metrics → verify."""

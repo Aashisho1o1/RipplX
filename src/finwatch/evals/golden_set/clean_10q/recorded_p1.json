@@ -2,38 +2,8 @@
   "accession_number": "0000320193-24-000081",
   "ticker": "AAPL",
   "form_type": "10-Q",
-  "classification": {
-    "items_8k": [],
-    "overall_severity": "routine"
-  },
-  "claims": [
-    {
-      "claim_id": "c_0001",
-      "claim_type": "evidence",
-      "text": "no material risk factor changes",
-      "confidence": "high",
-      "provenance": {
-        "accession_number": "0000320193-24-000081",
-        "form_type": "10-Q",
-        "section_key": "risk_factor_changes",
-        "char_start": 0,
-        "char_end": 200,
-        "text_sha256_prefix": "rf",
-        "snippet": "no material changes to the risk factors disclosed"
-      }
-    }
-  ],
-  "material_items": [],
-  "risk_factor_findings": {
-    "added": [],
-    "removed": [],
-    "modified": []
-  },
-  "guidance_direction": {
-    "value": "none_stated",
-    "claim_id": null
-  },
-  "red_flags": [],
+  "classification": {"overall_severity": "routine"},
+  "findings": [],
   "extraction_confidence": "high",
   "gaps": []
 }

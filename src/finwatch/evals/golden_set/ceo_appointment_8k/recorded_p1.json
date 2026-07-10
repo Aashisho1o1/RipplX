@@ -1,0 +1,21 @@
+{
+  "accession_number": "0001104659-24-037341",
+  "ticker": "SHAK",
+  "form_type": "8-K",
+  "classification": {"overall_severity": "medium"},
+  "findings": [{
+    "headline": "A new chief executive was appointed",
+    "severity": "medium",
+    "critical_flag": null,
+    "evidence": [{
+      "accession_number": "0001104659-24-037341",
+      "form_type": "8-K",
+      "section_key": "item_5_02",
+      "char_start": 101,
+      "char_end": 163,
+      "snippet": "appointed Robert Lynch to serve as its Chief Executive Officer"
+    }]
+  }],
+  "extraction_confidence": "high",
+  "gaps": []
+}

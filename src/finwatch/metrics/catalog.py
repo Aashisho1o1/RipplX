@@ -15,5 +15,5 @@ STARTER_METRIC_LABELS = {
     "cfo_trend": "Operating cash flow",
     "liquidity_basics": "Liquidity",
     "share_count_change": "Share count Δ",
-    "simple_leverage": "Leverage",
+    "simple_leverage": "Net debt / (operating income + D&A) proxy",
 }

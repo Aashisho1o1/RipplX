@@ -13,14 +13,35 @@ from finwatch.evals.harness import (
 
 def test_golden_manifest_pins_real_accessions():
     cases = load_manifest()
+    assert len(cases) == 12
     assert {c.id for c in cases} == {
-        "going_concern_10k", "non_reliance_8k", "furnished_earnings_8k", "clean_10q"}
+        "going_concern_10k",
+        "non_reliance_8k",
+        "bankruptcy_acceleration_8k",
+        "delisting_8k",
+        "cyber_disruption_8k",
+        "cyber_data_access_8k",
+        "furnished_earnings_8k",
+        "clean_10q",
+        "executive_transition_8k",
+        "ceo_appointment_8k",
+        "part_three_amendment_10ka",
+        "clean_annual_10k",
+    }
     # real accessions (18-digit dashed form), not invented
     for c in cases:
         assert len(c.accession) == 20 and c.accession[10] == "-"
+        assert c.primary_doc.startswith("https://www.sec.gov/Archives/")
+        assert len(c.filed_at) == 10
     critical = [c for c in cases if c.category == "critical"]
     assert {f for c in critical for f in c.expected_critical_flags} == {
-        "going_concern", "item_4_02_non_reliance"}
+        "going_concern",
+        "item_4_02_non_reliance",
+        "item_1_03_bankruptcy",
+        "item_2_04_acceleration",
+        "item_3_01_delisting",
+        "cyber_1_05_critical_tier",
+    }
 
 
 def test_recorded_run_meets_dod():
@@ -35,11 +56,12 @@ def test_recorded_run_meets_dod():
 
 def test_per_case_scores():
     scores = {s.case_id: s for s in run_recorded().scores}
-    # critical cases extract their flag; boring cases don't scream
+    # Critical cases extract their flag; boring/routine cases don't scream.
     assert scores["going_concern_10k"].critical_recall == 1.0
     assert scores["non_reliance_8k"].critical_recall == 1.0
     assert not scores["furnished_earnings_8k"].false_alarm
     assert not scores["clean_10q"].false_alarm
+    assert not scores["part_three_amendment_10ka"].false_alarm
     assert all(s.verifier_pass for s in scores.values())
 
 

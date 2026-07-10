@@ -34,8 +34,9 @@ def as_of_facts(companyfacts: dict, as_of: str | None) -> dict:
     Without this, a historically-dated analysis (backfill / eval replay / the shadow-log
     track record) silently consumes facts from FUTURE filings and restatements — the
     accessors always pick the newest fact. Filing dates and ``as_of`` are compared on their
-    ``YYYY-MM-DD`` prefix; entries without a ``filed`` date (essentially never, in SEC
-    companyfacts) are kept. Also makes amendment supersession point-in-time."""
+    ``YYYY-MM-DD`` prefix. Entries without a ``filed`` date are excluded: their
+    point-in-time eligibility cannot be proven, so retaining them could leak a later
+    restatement into a historical run. Also makes amendment supersession point-in-time."""
     cutoff = (as_of or "")[:10]
     facts = companyfacts.get("facts") if isinstance(companyfacts, dict) else None
     if not cutoff or not isinstance(facts, dict):
@@ -49,10 +50,13 @@ def as_of_facts(companyfacts: dict, as_of: str | None) -> dict:
                 continue
             new_units: dict = {}
             for unit, entries in body.get("units", {}).items():
-                kept = [e for e in entries
-                        if not isinstance(e, dict)
-                        or e.get("filed") is None
-                        or str(e["filed"])[:10] <= cutoff]
+                kept = [
+                    e
+                    for e in entries
+                    if isinstance(e, dict)
+                    and e.get("filed") is not None
+                    and str(e["filed"])[:10] <= cutoff
+                ]
                 if kept:
                     new_units[unit] = kept
             new_tags[tag] = {**body, "units": new_units}

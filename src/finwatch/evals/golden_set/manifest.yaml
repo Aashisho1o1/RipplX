@@ -1,6 +1,7 @@
 # Golden set — real filings pinned by accession (CLAUDE.md §16).
 # Do not invent accession numbers; these were located via EDGAR full-text search.
-# category: critical (must extract the flag) | boring (must NOT scream).
+# category: critical (must extract the flag) | boring (no launch finding) |
+# routine (may produce a non-critical evidence-backed finding, but must not scream).
 # The bundled filing.html is a representative fixture for the deterministic recorded
 # run; the live bake-off (`finwatch eval`) fetches the real primary_doc.
 cases:
@@ -9,30 +10,118 @@ cases:
     cik: "0000866439"
     ticker: DPLS
     form_type: 10-K
+    filed_at: "2024-07-15"
     primary_doc: "https://www.sec.gov/Archives/edgar/data/866439/000168316824004848/darkpulse_i10k-123123.htm"
     category: critical
     expected_critical_flags: [going_concern]
+    expected_min_findings: 2
   - id: non_reliance_8k
     accession: "0001866550-24-000006"
     cik: "0001866550"
     ticker: TWKS
     form_type: 8-K
+    filed_at: "2024-02-12"
     primary_doc: "https://www.sec.gov/Archives/edgar/data/1866550/000186655024000006/twks-20240206.htm"
     category: critical
     expected_critical_flags: [item_4_02_non_reliance]
+    expected_min_findings: 1
+  - id: bankruptcy_acceleration_8k
+    accession: "0001193125-24-167032"
+    cik: "0001720990"
+    ticker: FSR
+    form_type: 8-K
+    filed_at: "2024-06-24"
+    primary_doc: "https://www.sec.gov/Archives/edgar/data/1720990/000119312524167032/d798771d8k.htm"
+    category: critical
+    expected_critical_flags: [item_1_03_bankruptcy, item_2_04_acceleration]
+    expected_min_findings: 2
+  - id: delisting_8k
+    accession: "0001193125-24-086059"
+    cik: "0001305253"
+    ticker: EIGR
+    form_type: 8-K
+    filed_at: "2024-04-04"
+    primary_doc: "https://www.sec.gov/Archives/edgar/data/1305253/000119312524086059/d819347d8k.htm"
+    category: critical
+    expected_critical_flags: [item_3_01_delisting]
+    expected_min_findings: 1
+  - id: cyber_disruption_8k
+    accession: "0001437749-24-022743"
+    cik: "0000010329"
+    ticker: BSET
+    form_type: 8-K
+    filed_at: "2024-07-15"
+    primary_doc: "https://www.sec.gov/Archives/edgar/data/10329/000143774924022743/bset20240715_8k.htm"
+    category: critical
+    expected_critical_flags: [cyber_1_05_critical_tier]
+    expected_min_findings: 1
+  - id: cyber_data_access_8k
+    accession: "0001467623-24-000024"
+    cik: "0001467623"
+    ticker: DBX
+    form_type: 8-K
+    filed_at: "2024-05-01"
+    primary_doc: "https://www.sec.gov/Archives/edgar/data/1467623/000146762324000024/dbx-20240429.htm"
+    category: critical
+    expected_critical_flags: [cyber_1_05_critical_tier]
+    expected_min_findings: 1
   - id: furnished_earnings_8k
     accession: "0000320193-26-000011"
     cik: "0000320193"
     ticker: AAPL
     form_type: 8-K
+    filed_at: "2026-04-30"
     primary_doc: "https://www.sec.gov/Archives/edgar/data/320193/000032019326000011/aapl-20260430.htm"
     category: boring
     expected_critical_flags: []
+    expected_max_findings: 0
   - id: clean_10q
     accession: "0000320193-24-000081"
     cik: "0000320193"
     ticker: AAPL
     form_type: 10-Q
+    filed_at: "2024-08-01"
     primary_doc: "https://www.sec.gov/Archives/edgar/data/320193/000032019324000081/aapl-20240629.htm"
     category: boring
     expected_critical_flags: []
+    expected_max_findings: 0
+  - id: executive_transition_8k
+    accession: "0001193125-24-142941"
+    cik: "0000898293"
+    ticker: JBL
+    form_type: 8-K
+    filed_at: "2024-05-20"
+    primary_doc: "https://www.sec.gov/Archives/edgar/data/898293/000119312524142941/d829227d8k.htm"
+    category: routine
+    expected_critical_flags: []
+    expected_min_findings: 1
+  - id: ceo_appointment_8k
+    accession: "0001104659-24-037341"
+    cik: "0001620533"
+    ticker: SHAK
+    form_type: 8-K
+    filed_at: "2024-03-21"
+    primary_doc: "https://www.sec.gov/Archives/edgar/data/1620533/000110465924037341/tm249491d1_8k.htm"
+    category: routine
+    expected_critical_flags: []
+    expected_min_findings: 1
+  - id: part_three_amendment_10ka
+    accession: "0001193125-25-100573"
+    cik: "0000883569"
+    ticker: FOSL
+    form_type: 10-K/A
+    filed_at: "2025-04-28"
+    primary_doc: "https://www.sec.gov/Archives/edgar/data/883569/000119312525100573/d927401d10ka.htm"
+    category: boring
+    expected_critical_flags: []
+    expected_max_findings: 0
+  - id: clean_annual_10k
+    accession: "0001069258-25-000008"
+    cik: "0001069258"
+    ticker: KTOS
+    form_type: 10-K
+    filed_at: "2025-02-26"
+    primary_doc: "https://www.sec.gov/Archives/edgar/data/1069258/000106925825000008/ktos-20241229.htm"
+    category: boring
+    expected_critical_flags: []
+    expected_max_findings: 0

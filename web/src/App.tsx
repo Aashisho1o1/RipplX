@@ -26,14 +26,11 @@ function RoutedApp() {
 
 function UnlockScreen({ loading, rejected, onUnlock }: { loading: boolean; rejected: boolean; onUnlock: (token: string) => void }) {
   const [token, setToken] = useState("");
-  const [storageError, setStorageError] = useState("");
   function submit(event: FormEvent) {
     event.preventDefault();
-    setStorageError("");
-    try { onUnlock(token); }
-    catch { setStorageError("This browser could not store the access token for this tab."); }
+    onUnlock(token);
   }
-  return <main className="setup"><div className="watermark" aria-hidden="true" /><section className="setup-card unlock-card"><div className="setup-kicker">RipplX hosted alpha</div><h1>Unlock this session</h1><p className="setup-lede">Enter the access token supplied by the operator. It is kept only in this browser tab's session storage.</p><form className="form-grid" onSubmit={submit}><div className="field"><label htmlFor="access-token">Access token</label><input id="access-token" className="input mono-input" type="password" autoComplete="current-password" required value={token} onChange={event => setToken(event.target.value)} /></div>{rejected && !loading && <div className="field-error">That access token was not accepted.</div>}{storageError && <div className="field-error">{storageError}</div>}<button className="button primary" disabled={loading || !token.trim()}>{loading ? "Unlocking…" : "Unlock"}</button></form></section></main>;
+  return <main className="setup"><div className="watermark" aria-hidden="true" /><section className="setup-card unlock-card"><div className="setup-kicker">RipplX hosted alpha</div><h1>Unlock this session</h1><p className="setup-lede">Enter the operator access token. It is kept only in page memory and is cleared on refresh.</p><form className="form-grid" onSubmit={submit}><div className="field"><label htmlFor="access-token">Access token</label><input id="access-token" className="input mono-input" type="password" autoComplete="current-password" required value={token} onChange={event => setToken(event.target.value)} /></div>{rejected && !loading && <div className="field-error">That access token was not accepted.</div>}<button className="button primary" disabled={loading || !token.trim()}>{loading ? "Unlocking…" : "Unlock"}</button></form></section></main>;
 }
 
 export default function App() { return <BrowserRouter><RoutedApp /></BrowserRouter>; }

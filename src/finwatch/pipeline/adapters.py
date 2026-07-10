@@ -1,8 +1,8 @@
-"""Adapters: P1/P2 outputs + holding + metrics → matrix.evaluate() inputs.
+"""Dormant research adapters: P1/P2 outputs + holding + metrics → matrix inputs.
 
-Thin and dumb (SYSTEM_DESIGN §4.4): they carry values across, adding no logic of their
-own. Their one real job is mapping P1's red-flag vocabulary to the exact
-CRITICAL_DOC_FLAGS codes the matrix keys on (M1 fires on that intersection).
+P1's launch contract now emits controlled ``critical_flag`` values directly. The
+legacy free-text normalizer remains available for historical P3 fixtures, but no
+launch decision relies on fuzzy keyword matching.
 """
 from __future__ import annotations
 
@@ -105,10 +105,10 @@ def critical_code(flag: str, severity: str | None = None) -> str | None:
 
 
 def to_extraction_summary(p1: P1Output) -> ExtractionSummary:
+    flags = [finding.critical_flag for finding in p1.findings if finding.critical_flag]
     return ExtractionSummary(
-        red_flag_codes=[c for rf in p1.red_flags
-                        if (c := critical_code(rf.flag, rf.severity)) is not None],
-        has_red_flags=bool(p1.red_flags),   # ANY flag blocks M7 (critical ones fire M1)
+        red_flag_codes=flags,
+        has_red_flags=bool(flags),
         extraction_confidence=p1.extraction_confidence,
         gaps=list(p1.gaps),
     )

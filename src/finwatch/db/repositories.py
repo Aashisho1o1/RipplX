@@ -11,7 +11,7 @@ import json
 import sqlite3
 from collections.abc import Iterable
 
-from pydantic import BaseModel
+from pydantic import BaseModel, FiniteFloat
 
 
 # --------------------------------------------------------------- row models --
@@ -69,7 +69,7 @@ class XbrlFact(BaseModel):
     cik: str
     taxonomy: str
     tag: str
-    value: float | None = None
+    value: FiniteFloat | None = None
     unit_ref: str | None = None
     decimals: str | None = None
     period_start: str | None = None
@@ -226,30 +226,21 @@ class Repo:
 
     # ---- holdings --------------------------------------------------------
     def upsert_holding(self, h: Holding) -> int:
-        """One holding per CIK at the app level: update if present, else insert."""
-        existing = self.conn.execute("SELECT id FROM holdings WHERE cik = ?", (h.cik,)).fetchone()
-        if existing is not None:
+        """Atomically insert or update the database-enforced one row per CIK."""
+        with self.conn:
             self.conn.execute(
-                """UPDATE holdings SET ticker=?, owned=?, shares=?, cost_basis=?,
-                       target_weight_pct=?, horizon=?, thesis=? WHERE id=?""",
-                (
-                    h.ticker,
-                    h.owned,
-                    h.shares,
-                    h.cost_basis,
-                    h.target_weight_pct,
-                    h.horizon,
-                    h.thesis,
-                    existing["id"],
-                ),
-            )
-            holding_id = int(existing["id"])
-        else:
-            cur = self.conn.execute(
                 """INSERT INTO holdings
                        (cik, ticker, owned, shares, cost_basis, target_weight_pct,
                         horizon, thesis, added_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(cik) DO UPDATE SET
+                       ticker = excluded.ticker,
+                       owned = excluded.owned,
+                       shares = excluded.shares,
+                       cost_basis = excluded.cost_basis,
+                       target_weight_pct = excluded.target_weight_pct,
+                       horizon = excluded.horizon,
+                       thesis = excluded.thesis""",
                 (
                     h.cik,
                     h.ticker,
@@ -262,9 +253,12 @@ class Repo:
                     h.added_at,
                 ),
             )
-            holding_id = int(cur.lastrowid)
-        self.conn.commit()
-        return holding_id
+            row = self.conn.execute(
+                "SELECT id FROM holdings WHERE cik = ?", (h.cik,)
+            ).fetchone()
+        if row is None:  # defensive: the upsert and lookup share one transaction
+            raise sqlite3.DatabaseError("holding upsert completed without an id")
+        return int(row["id"])
 
     def get_holding_by_cik(self, cik: str) -> Holding | None:
         row = self.conn.execute("SELECT * FROM holdings WHERE cik = ?", (cik,)).fetchone()
@@ -348,15 +342,15 @@ class Repo:
             )
             for f in facts
         ]
-        self.conn.execute("DELETE FROM xbrl_facts WHERE cik = ?", (cik,))
-        self.conn.executemany(
-            """INSERT INTO xbrl_facts
-                   (cik, taxonomy, tag, value, unit_ref, decimals, period_start,
-                    period_end, instant, fy, fp, form, accession_number, dimensions_json)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            rows,
-        )
-        self.conn.commit()
+        with self.conn:
+            self.conn.execute("DELETE FROM xbrl_facts WHERE cik = ?", (cik,))
+            self.conn.executemany(
+                """INSERT INTO xbrl_facts
+                       (cik, taxonomy, tag, value, unit_ref, decimals, period_start,
+                        period_end, instant, fy, fp, form, accession_number, dimensions_json)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                rows,
+            )
         return len(rows)
 
     def count_xbrl_facts(self, cik: str | None = None) -> int:
@@ -419,43 +413,42 @@ class Repo:
         External-content FTS5 needs an explicit 'delete' for each old row before the
         content row goes away, then a matching insert for each new row.
         """
-        old = self.conn.execute(
-            "SELECT id, text FROM filing_sections WHERE accession_number = ?",
-            (accession_number,),
-        ).fetchall()
-        for r in old:
+        rows = list(sections)
+        with self.conn:
+            old = self.conn.execute(
+                "SELECT id, text FROM filing_sections WHERE accession_number = ?",
+                (accession_number,),
+            ).fetchall()
+            for r in old:
+                self.conn.execute(
+                    "INSERT INTO section_fts(section_fts, rowid, text) VALUES ('delete', ?, ?)",
+                    (r["id"], r["text"]),
+                )
             self.conn.execute(
-                "INSERT INTO section_fts(section_fts, rowid, text) VALUES ('delete', ?, ?)",
-                (r["id"], r["text"]),
+                "DELETE FROM filing_sections WHERE accession_number = ?", (accession_number,)
             )
-        self.conn.execute(
-            "DELETE FROM filing_sections WHERE accession_number = ?", (accession_number,)
-        )
-        count = 0
-        for s in sections:
-            cur = self.conn.execute(
-                """INSERT INTO filing_sections
-                       (accession_number, section_key, title, char_start, char_end,
-                        html_element_id, is_furnished, text, text_sha256)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    accession_number,
-                    s.section_key,
-                    s.title,
-                    s.char_start,
-                    s.char_end,
-                    s.html_element_id,
-                    int(s.is_furnished),
-                    s.text,
-                    s.text_sha256,
-                ),
-            )
-            self.conn.execute(
-                "INSERT INTO section_fts(rowid, text) VALUES (?, ?)", (cur.lastrowid, s.text)
-            )
-            count += 1
-        self.conn.commit()
-        return count
+            for s in rows:
+                cur = self.conn.execute(
+                    """INSERT INTO filing_sections
+                           (accession_number, section_key, title, char_start, char_end,
+                            html_element_id, is_furnished, text, text_sha256)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        accession_number,
+                        s.section_key,
+                        s.title,
+                        s.char_start,
+                        s.char_end,
+                        s.html_element_id,
+                        int(s.is_furnished),
+                        s.text,
+                        s.text_sha256,
+                    ),
+                )
+                self.conn.execute(
+                    "INSERT INTO section_fts(rowid, text) VALUES (?, ?)", (cur.lastrowid, s.text)
+                )
+        return len(rows)
 
     def list_filing_sections(self, accession_number: str) -> list[FilingSection]:
         rows = self.conn.execute(
@@ -632,14 +625,14 @@ class Repo:
             )
             for c in computations
         ]
-        self.conn.executemany(
-            """INSERT INTO computations
-                   (ticker, tool, args_json, result_json, status, formula_version,
-                    as_of, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-            rows,
-        )
-        self.conn.commit()
+        with self.conn:
+            self.conn.executemany(
+                """INSERT INTO computations
+                       (ticker, tool, args_json, result_json, status, formula_version,
+                        as_of, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                rows,
+            )
         return len(rows)
 
     def list_computations(self, ticker: str | None = None) -> list[Computation]:
@@ -652,27 +645,41 @@ class Repo:
         return [Computation(**dict(r)) for r in rows]
 
     def latest_computations(self, ticker: str) -> list[Computation]:
-        """The most recent computation per metric (`tool`) for a ticker — the pipeline
-        re-persists metrics on every run, so the digest wants the latest of each."""
+        """Greatest ``as_of`` computation per metric, breaking date ties by id."""
         rows = self.conn.execute(
-            """SELECT c.* FROM computations c
-                 JOIN (SELECT tool, MAX(id) AS mid FROM computations
-                        WHERE ticker = ? GROUP BY tool) latest
-                   ON c.id = latest.mid
+            """SELECT c.*
+                 FROM computations c
+                WHERE c.ticker = ?
+                  AND NOT EXISTS (
+                      SELECT 1
+                        FROM computations newer
+                       WHERE newer.ticker = c.ticker
+                         AND newer.tool = c.tool
+                         AND (newer.as_of > c.as_of
+                              OR (newer.as_of = c.as_of AND newer.id > c.id))
+                  )
                 ORDER BY c.tool""",
             (ticker,),
         ).fetchall()
         return [Computation(**dict(r)) for r in rows]
 
     def computations_as_of(self, ticker: str, as_of: str) -> list[Computation]:
-        """Latest computation per metric whose point-in-time date is not after ``as_of``."""
+        """Greatest date at/before ``as_of`` per metric, breaking ties by id."""
         rows = self.conn.execute(
-            """SELECT c.* FROM computations c
-                 JOIN (SELECT tool, MAX(id) AS mid FROM computations
-                        WHERE ticker = ? AND as_of <= ? GROUP BY tool) latest
-                   ON c.id = latest.mid
+            """SELECT c.*
+                 FROM computations c
+                WHERE c.ticker = ? AND c.as_of <= ?
+                  AND NOT EXISTS (
+                      SELECT 1
+                        FROM computations newer
+                       WHERE newer.ticker = c.ticker
+                         AND newer.tool = c.tool
+                         AND newer.as_of <= ?
+                         AND (newer.as_of > c.as_of
+                              OR (newer.as_of = c.as_of AND newer.id > c.id))
+                  )
                 ORDER BY c.tool""",
-            (ticker, as_of),
+            (ticker, as_of, as_of),
         ).fetchall()
         return [Computation(**dict(r)) for r in rows]
 
@@ -700,14 +707,33 @@ class Repo:
         self.conn.commit()
         return len(rows)
 
-    def clear_verification_results(self, analysis_id: int) -> int:
-        """Delete all prior verification rows for one analysis so that a re-verify
-        REPLACES rather than appends — stale blocking FAILs must not linger and make
-        ``manual_review`` sticky once a re-run passes."""
-        cur = self.conn.execute(
-            "DELETE FROM verification_results WHERE analysis_id = ?", (analysis_id,))
-        self.conn.commit()
-        return cur.rowcount
+    def replace_verification_results(
+        self, analysis_id: int, results: Iterable[VerificationResult]
+    ) -> int:
+        """Atomically replace one analysis's verifier report.
+
+        Materialize and validate the iterable before deleting the prior report. If
+        either deletion or insertion fails, the context manager rolls both back.
+        """
+        result_rows = list(results)
+        mismatched = [r.analysis_id for r in result_rows if r.analysis_id != analysis_id]
+        if mismatched:
+            raise ValueError("all verification results must belong to the replaced analysis")
+        rows = [
+            (r.analysis_id, r.check_id, r.verdict, r.severity, r.detail, r.created_at)
+            for r in result_rows
+        ]
+        with self.conn:
+            self.conn.execute(
+                "DELETE FROM verification_results WHERE analysis_id = ?", (analysis_id,)
+            )
+            self.conn.executemany(
+                """INSERT INTO verification_results
+                       (analysis_id, check_id, verdict, severity, detail, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                rows,
+            )
+        return len(rows)
 
     def list_verification_results(self, analysis_id: int) -> list[VerificationResult]:
         rows = self.conn.execute(

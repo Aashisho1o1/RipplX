@@ -12,6 +12,7 @@ from typing import Any, Optional
 
 from pydantic import BaseModel, Field
 
+from finwatch.core.text_policy import contains_authored_quantity, contains_trade_instruction
 from finwatch.core.types import DISCLAIMER, FORBIDDEN_VOCABULARY, POSTURE_MAP, SectorInfo
 from finwatch.metrics.envelope import MetricsBundle
 from finwatch.signals.matrix import (Decision, ExtractionSummary, ImpactSummary,
@@ -39,6 +40,9 @@ class EvidenceClaim(BaseModel):
 class VerifyBundle(BaseModel):
     rendered_text: str
     metrics: MetricsBundle
+    # V5 scans only stochastic/authored prose when this is supplied. Exact SEC
+    # quotations may legitimately contain trade/valuation words and are not advice.
+    authored_text: Optional[str] = None
     fact_store_values: list[float] = Field(default_factory=list)  # numeric XBRL leaves
     evidence_claims: list[EvidenceClaim] = Field(default_factory=list)
     section_texts: dict[str, str] = Field(default_factory=dict)   # f"{accn}:{section_key}"
@@ -47,6 +51,8 @@ class VerifyBundle(BaseModel):
     record: Optional[Record] = None
     extraction: Optional[ExtractionSummary] = None
     impact: Optional[ImpactSummary] = None
+    extraction_confidence: Optional[str] = None
+    extraction_gaps: list[str] = Field(default_factory=list)
     # V5:
     trade_action: Any = None
     disclaimer_text: Optional[str] = None
@@ -64,11 +70,13 @@ class VerificationReport(BaseModel):
 # ============================================================ V1 — numbers ==
 _NUM = re.compile(
     r"(?<![\w.])"                       # not inside identifiers/decimals
-    r"(?P<lead_neg>-)?"                 # leading minus sign (the (?<![\w.]) above keeps
+    r"(?P<lead_neg>[-−﹣－])?"           # ASCII + common Unicode minus variants
+                                        # (the (?<![\w.]) above keeps
                                         # ranges like '5-10' out: the '-' after a digit fails)
     r"(?P<neg>\()?"
     r"(?P<cur>\$)?"
     r"(?P<num>\d{1,3}(?:,\d{3})+|\d+)(?P<dec>\.\d+)?"
+    r"(?P<exp>[eE][+-]?\d+)?"
     r"\)?"
     r"(?:\s*(?P<suf>billion|million|thousand|bn|mn|k|b|m)\b)?"
     r"(?P<pct>\s?%)?",
@@ -167,7 +175,12 @@ def extract_number_tokens(text: str) -> list[NumberToken]:
         if not is_quantity and _WHITELIST_BEFORE.search(before):
             continue                                    # Item 2.02, rule ids, phase 3
         raw_num = m.group("num")
-        num = float(raw_num.replace(",", "") + (m.group("dec") or ""))
+        exponent = int((m.group("exp") or "e0")[1:])
+        num = float(
+            raw_num.replace(",", "")
+            + (m.group("dec") or "")
+            + (m.group("exp") or "")
+        )
         is_bare_year = (m.group("suf") is None and m.group("cur") is None
                         and m.group("pct") is None and m.group("dec") is None
                         and m.group("lead_neg") is None and m.group("neg") is None
@@ -187,7 +200,7 @@ def extract_number_tokens(text: str) -> list[NumberToken]:
         if m.group("neg") or m.group("lead_neg"):
             value = -value
         dec_places = len(m.group("dec")) - 1 if m.group("dec") else 0
-        tol = 0.5 * (10 ** -dec_places) * scale
+        tol = 0.5 * (10 ** (exponent - dec_places)) * scale
         tokens.append(NumberToken(
             raw=raw, value=value, tolerance=max(tol, abs(value) * 1e-9), position=s,
             is_percent=m.group("pct") is not None,
@@ -207,7 +220,7 @@ def _candidates(bundle: VerifyBundle) -> list[float]:
 
 def _matches(tok: NumberToken, cands: list[float]) -> bool:
     """A rendered number is provenance-backed if it matches a candidate directly,
-    within relative precision, or via a *type-appropriate* re-expression:
+    within displayed precision, or via a *type-appropriate* re-expression:
 
     - ``× 100`` ONLY for a %-token (a ratio fact 0.081 rendered as "8.1%");
     - ``÷ 1eN`` ONLY for an unsuffixed token (a table number shown in thousands /
@@ -219,8 +232,6 @@ def _matches(tok: NumberToken, cands: list[float]) -> bool:
     """
     for c in cands:
         if abs(tok.value - c) <= tok.tolerance * 1.0001:
-            return True
-        if abs(c) > 0 and abs(tok.value - c) / abs(c) <= 5e-4:
             return True
         if tok.is_percent:
             if abs(tok.value - c * 100.0) <= tok.tolerance * 1.0001:
@@ -358,23 +369,21 @@ def check_v4_citations(bundle: VerifyBundle) -> list[CheckResult]:
                                    severity="blocking",
                                    detail=f"{c.claim_id}: section {key} not provided"))
             continue
-        if c.text_sha256 and hashlib.sha256(
-                text.encode()).hexdigest() != c.text_sha256:
-            out.append(CheckResult(check_id="V4", verdict="warn",
-                                   severity="warning",
-                                   detail=f"{c.claim_id}: section hash drift"))
-        span = text[c.char_start:c.char_end]
-        if c.snippet in span:
-            continue
-        if c.snippet in text:
-            out.append(CheckResult(check_id="V4", verdict="warn",
-                                   severity="warning",
-                                   detail=f"{c.claim_id}: snippet found outside "
-                                          f"declared span (offset drift)"))
-        else:
+        actual_hash = hashlib.sha256(text.encode()).hexdigest()
+        if c.text_sha256 and actual_hash != c.text_sha256:
             out.append(CheckResult(check_id="V4", verdict="fail",
                                    severity="blocking",
-                                   detail=f"{c.claim_id}: snippet not verbatim in section"))
+                                   detail=f"{c.claim_id}: section hash mismatch"))
+            continue
+        if not (0 <= c.char_start < c.char_end <= len(text)):
+            out.append(CheckResult(check_id="V4", verdict="fail",
+                                   severity="blocking",
+                                   detail=f"{c.claim_id}: declared span out of bounds"))
+            continue
+        if text[c.char_start:c.char_end] != c.snippet:
+            out.append(CheckResult(check_id="V4", verdict="fail",
+                                   severity="blocking",
+                                   detail=f"{c.claim_id}: quote is not exact at declared span"))
     if not out:
         out.append(CheckResult(check_id="V4", verdict="pass",
                                severity="blocking", detail="all citations verbatim"))
@@ -385,23 +394,48 @@ def check_v4_citations(bundle: VerifyBundle) -> list[CheckResult]:
 _PRICE_TARGET = re.compile(
     r"(price\s+target|target\s+price|will\s+(reach|hit)|"
     r"\$\d+(\.\d+)?\s*(PT\b|target\b|price\s+target))", re.IGNORECASE)
+_AUTHORED_VALUATION = re.compile(
+    r"\b(?:our|we\s+(?:assign|estimate|believe|calculate))\s+"
+    r"(?:a\s+)?(?:fair|intrinsic)\s+value\b",
+    re.IGNORECASE,
+)
 
 
 def check_v5_hygiene(bundle: VerifyBundle) -> list[CheckResult]:
     out: list[CheckResult] = []
-    text_l = bundle.rendered_text.lower()
+    authored = bundle.authored_text if bundle.authored_text is not None else bundle.rendered_text
+    text_l = authored.lower()
     for w in FORBIDDEN_VOCABULARY:
         if w in text_l:
             out.append(CheckResult(check_id="V5", verdict="fail",
                                    severity="blocking",
                                    detail=f"forbidden vocabulary: '{w}'"))
-    if _PRICE_TARGET.search(bundle.rendered_text):
+    if _PRICE_TARGET.search(authored):
         out.append(CheckResult(check_id="V5", verdict="fail",
                                severity="blocking", detail="price-target language"))
+    if bundle.authored_text is not None and contains_authored_quantity(authored):
+        out.append(CheckResult(check_id="V5", verdict="fail",
+                               severity="blocking", detail="authored quantity"))
+    if contains_trade_instruction(authored):
+        out.append(CheckResult(check_id="V5", verdict="fail",
+                               severity="blocking", detail="trade recommendation"))
+    if _AUTHORED_VALUATION.search(authored):
+        out.append(CheckResult(check_id="V5", verdict="fail",
+                               severity="blocking", detail="authored valuation language"))
     if bundle.trade_action is not None:
         out.append(CheckResult(check_id="V5", verdict="fail",
                                severity="blocking",
                                detail="trade_action must be null in default mode"))
+    if bundle.extraction_confidence == "low":
+        out.append(CheckResult(
+            check_id="V5", verdict="fail", severity="blocking",
+            detail="low-confidence extraction cannot be published",
+        ))
+    if bundle.extraction_gaps:
+        out.append(CheckResult(
+            check_id="V5", verdict="fail", severity="blocking",
+            detail="extraction reported incomplete input",
+        ))
     if bundle.disclaimer_text is not None and bundle.disclaimer_text != DISCLAIMER:
         out.append(CheckResult(check_id="V5", verdict="fail",
                                severity="blocking", detail="disclaimer not verbatim"))

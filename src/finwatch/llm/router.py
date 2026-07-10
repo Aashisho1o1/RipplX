@@ -14,6 +14,8 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Protocol
 
+LAUNCH_MAX_OUTPUT_TOKENS = 2_000
+
 
 @dataclass
 class LLMResponse:
@@ -26,7 +28,8 @@ class LLMResponse:
 
 class LLMClient(Protocol):
     def complete(
-        self, *, system: str, user: str, temperature: float = 0.0, json_mode: bool = True
+        self, *, system: str, user: str, temperature: float = 0.0,
+        json_mode: bool = True, max_tokens: int = LAUNCH_MAX_OUTPUT_TOKENS,
     ) -> LLMResponse: ...
 
 
@@ -49,7 +52,8 @@ class LiteLLMClient:
         self.num_retries = num_retries
 
     def complete(
-        self, *, system: str, user: str, temperature: float = 0.0, json_mode: bool = True
+        self, *, system: str, user: str, temperature: float = 0.0,
+        json_mode: bool = True, max_tokens: int = LAUNCH_MAX_OUTPUT_TOKENS,
     ) -> LLMResponse:
         import litellm  # lazy: heavy import, only when a real call is made
 
@@ -60,6 +64,7 @@ class LiteLLMClient:
                 {"role": "user", "content": user},
             ],
             "temperature": temperature,
+            "max_tokens": max_tokens,
             "timeout": self.timeout,
             "num_retries": self.num_retries,
         }
@@ -95,7 +100,8 @@ class FakeLLMClient:
     calls: list[tuple[str, str]] = field(default_factory=list)
 
     def complete(
-        self, *, system: str, user: str, temperature: float = 0.0, json_mode: bool = True
+        self, *, system: str, user: str, temperature: float = 0.0,
+        json_mode: bool = True, max_tokens: int = LAUNCH_MAX_OUTPUT_TOKENS,
     ) -> LLMResponse:
         self.calls.append((system, user))
         if self.responder is not None:

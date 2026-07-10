@@ -13,6 +13,41 @@ from pydantic import BaseModel, Field
 
 JobKind = Literal["sync", "analysis"]
 JobState = Literal["queued", "running", "completed", "partial", "failed"]
+DEFAULT_MAX_JOB_HISTORY = 100
+
+_SAFE_ITEM_STATES = frozenset({"queued", "running", "completed", "skipped", "failed"})
+_SAFE_VERDICTS = frozenset({"PASS", "PASS_WITH_WARNINGS", "FAIL", "PARSED"})
+_STAGE_LABELS = {
+    "download": "Downloading filing",
+    "parse": "Preparing filing",
+    "extract": "Finding important changes",
+    "metrics": "Computing verified metrics",
+    "verify": "Verifying evidence",
+}
+
+
+def _safe_message(kind: JobKind, *, state: str, stage: str | None) -> str:
+    """Return only fixed text; provider and exception strings are never display data."""
+    if stage in _STAGE_LABELS:
+        label = _STAGE_LABELS[stage]
+        return {
+            "queued": f"{label} is queued.",
+            "running": f"{label}…",
+            "completed": f"{label} complete.",
+            "skipped": f"{label} was not needed.",
+            "failed": f"{label} could not be completed.",
+        }.get(state, f"{label} could not be completed.")
+    if kind == "sync":
+        return (
+            "Filings and verified metrics synced."
+            if state == "completed"
+            else "Filing sync could not be completed."
+        )
+    return (
+        "Analysis completed."
+        if state == "completed"
+        else "Analysis could not be completed."
+    )
 
 
 class JobItem(BaseModel):
@@ -38,15 +73,33 @@ class JobConflictError(RuntimeError):
 
 
 class JobRegistry:
-    def __init__(self) -> None:
+    def __init__(self, *, max_jobs: int = DEFAULT_MAX_JOB_HISTORY) -> None:
+        if max_jobs < 1:
+            raise ValueError("max_jobs must be positive")
         self._lock = threading.Lock()
         self._jobs: dict[str, JobView] = {}
+        self._max_jobs = max_jobs
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ripplx-job")
+
+    def _prune_terminal_locked(self) -> None:
+        while len(self._jobs) >= self._max_jobs:
+            terminal_id = next(
+                (
+                    job_id
+                    for job_id, job in self._jobs.items()
+                    if job.state not in {"queued", "running"}
+                ),
+                None,
+            )
+            if terminal_id is None:
+                raise JobConflictError("The active job registry is at capacity.")
+            del self._jobs[terminal_id]
 
     def start(self, kind: JobKind, work: Callable[[str, JobRegistry], bool]) -> JobView:
         with self._lock:
             if any(job.state in {"queued", "running"} for job in self._jobs.values()):
                 raise JobConflictError("Another sync or analysis job is already running.")
+            self._prune_terminal_locked()
             job = JobView(
                 id=uuid.uuid4().hex,
                 kind=kind,
@@ -62,16 +115,33 @@ class JobRegistry:
         try:
             partial = work(job_id, self)
             self.set_state(job_id, "partial" if partial else "completed")
-        except Exception as exc:  # noqa: BLE001 - background failures become job state
-            self.fail(job_id, str(exc))
+        except Exception:  # noqa: BLE001 - discard untrusted provider/exception text
+            self.fail(job_id)
+
+    def _safe_item(self, job_id: str, item: JobItem) -> JobItem:
+        kind = self._jobs[job_id].kind
+        state = item.state if item.state in _SAFE_ITEM_STATES else "failed"
+        stage = item.stage if item.stage in _STAGE_LABELS else None
+        verdict = item.verdict if item.verdict in _SAFE_VERDICTS else None
+        return item.model_copy(
+            update={
+                "state": state,
+                "stage": stage,
+                "verdict": verdict,
+                "message": _safe_message(kind, state=state, stage=stage),
+                "diagnostics": {},
+            },
+            deep=True,
+        )
 
     def add_item(self, job_id: str, item: JobItem) -> None:
         with self._lock:
-            self._jobs[job_id].items.append(item)
+            self._jobs[job_id].items.append(self._safe_item(job_id, item))
 
     def upsert_item(self, job_id: str, item: JobItem) -> None:
         """Update a live stage row in place so polling shows current progress."""
         with self._lock:
+            item = self._safe_item(job_id, item)
             items = self._jobs[job_id].items
             for index, current in enumerate(items):
                 if current.key == item.key:
@@ -84,10 +154,15 @@ class JobRegistry:
         with self._lock:
             self._jobs[job_id].state = state
 
-    def fail(self, job_id: str, error: str) -> None:
+    def fail(self, job_id: str) -> None:
         with self._lock:
-            self._jobs[job_id].state = "failed"
-            self._jobs[job_id].error = error
+            job = self._jobs[job_id]
+            job.state = "failed"
+            job.error = (
+                "Filing sync could not be completed."
+                if job.kind == "sync"
+                else "Analysis could not be completed."
+            )
 
     def get(self, job_id: str) -> JobView | None:
         with self._lock:

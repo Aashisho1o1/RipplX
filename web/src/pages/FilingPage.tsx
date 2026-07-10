@@ -2,10 +2,9 @@ import { useCallback } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import { api } from "../api/client";
 import { DisclaimerFooter } from "../components/DisclaimerFooter";
+import { FindingList, trustedSecUrl } from "../components/FindingList";
 import { MetricTable } from "../components/MetricTable";
 import { PosturePill } from "../components/PosturePill";
-import { RedFlagRow } from "../components/RedFlagRow";
-import { SeverityBadge } from "../components/SeverityBadge";
 import { useResource } from "../hooks/useResource";
 import type { FilingDetail } from "../types";
 
@@ -26,6 +25,8 @@ export function FilingPage() {
   const detail = resource.data;
   const filing = detail.filing;
   const audit = detail.verification;
+  const withheldReason = detail.withheld_reason ?? filing.withheld_reason ?? (filing.manual_review ? "Findings withheld pending manual review." : null);
+  const filingUrl = trustedSecUrl(filing.edgar_url);
   const sectionValue = detail.pipeline.find(stage => stage.stage === "parse")?.diagnostics.sections_found;
   const parsedSections = Array.isArray(sectionValue) ? sectionValue.map(String) : [];
 
@@ -33,13 +34,10 @@ export function FilingPage() {
     <button className="button ghost" onClick={() => navigate(-1)}>← Back to brief</button>
     <header className="section">
       <h1 className="page-title">{filing.ticker} — {filing.form} filed {filing.filed}</h1>
-      <div className="filing-heading">
-        {filing.severity && <SeverityBadge severity={filing.severity} />}
-      </div>
+      {filingUrl && <a className="citation" href={filingUrl} target="_blank" rel="noopener noreferrer">Open SEC filing ▸</a>}
     </header>
     {filing.manual_review && <div className="notice">⚠ manual review required</div>}
-    {detail.withheld_reason && <div className="notice">{detail.withheld_reason}</div>}
-    {detail.insufficient_reason && <div className="notice neutral"><PosturePill posture="insufficient_data" /> {detail.insufficient_reason}</div>}
+    {withheldReason && <div className="notice">{withheldReason}</div>}
 
     {!demo && <section className="section">
       <h2 className="section-kicker">Pipeline</h2>
@@ -51,9 +49,7 @@ export function FilingPage() {
       {parsedSections.length > 0 && <p className="mono faint">Sections: {parsedSections.join(", ")}</p>}
     </section>}
 
-    <section className="section"><h2 className="section-kicker">Material items</h2>{filing.material_items.map((item, index) => <p key={index}>{item.headline} <em className="faint">({item.event_type})</em></p>)}</section>
-    <section className="section"><h2 className="section-kicker">Red flags</h2>{filing.flags.length ? filing.flags.map(flag => <RedFlagRow flag={flag} key={flag.code} />) : <p className="empty-line">No critical or high-severity findings.</p>}</section>
-    {detail.what_changed.map((row, index) => <section className="section" key={index}><h2 className="section-kicker">Transmission channels</h2><div className="channels">{row.channels.map(channel => <span className={`channel ${channel.direction}`} key={channel.label}>{channel.label} ({channel.direction}{channel.magnitude ? `, ${channel.magnitude}` : ""})</span>)}</div><p className="gln">Guidance: {row.guidance} · Liquidity: {row.liquidity} · Net: {row.net}</p></section>)}
+    <section className="section"><h2 className="section-kicker">AI-selected changes (evidence verified)</h2><p className="metric-caption">The model selects and summarizes importance. Deterministic checks prove each displayed quotation is exact; they do not prove the model's interpretation.</p>{withheldReason ? <p className="empty-line">Findings are withheld until deterministic verification passes.</p> : filing.findings.length ? <FindingList findings={filing.findings} /> : <p className="empty-line">No evidence-backed changes were selected.</p>}</section>
     <section className="section"><div className="page-header"><h2 className="section-kicker">Verified numbers</h2><Link className="button" to={`/companies/${filing.ticker}${demo ? "?demo=1" : ""}`}>Full company view</Link></div>{detail.verified_numbers?.empty ? <p className="empty-line">{detail.verified_numbers.empty}</p> : detail.verified_numbers ? <MetricTable rows={detail.verified_numbers.rows} /> : <p className="empty-line">no verified financials yet (XBRL facts insufficient or not yet ingested).</p>}</section>
     {!demo && <section className="section audit"><h2 className="section-kicker">Verification audit</h2>{audit ? <><PosturePill posture={audit.verdict === "FAIL" ? "critical_review" : audit.verdict === "PASS_WITH_WARNINGS" ? "risk_review" : "monitor"} /><div className="channels">{audit.checks.map(check => <span className="channel" key={check.check_id}>{check.check_id}: {check.verdict}</span>)}</div></> : <p className="empty-line">No verification result yet.</p>}</section>}
     <DisclaimerFooter text={detail.disclaimer} />

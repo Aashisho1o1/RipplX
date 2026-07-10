@@ -6,7 +6,12 @@ from finwatch.metrics.envelope import MetricResult
 
 
 def _pct(value: float | None) -> str:
-    return "n/a" if value is None else f"{value * 100:+.1f}%"
+    if value is None:
+        return "n/a"
+    displayed = round(value * 100, 1)
+    if displayed == 0:
+        return "0.0%"
+    return f"{displayed:+.1f}%"
 
 
 def _usd(value: float | None) -> str:
@@ -42,18 +47,22 @@ def format_metric_value(result: MetricResult) -> str:
             parts.append(f"current ratio {_num(components['current_ratio'])}")
         return " · ".join(parts)
     if metric == "share_count_change":
+        material_change = result.value if result.value is not None else 0.0
         drift = (
-            "buyback"
-            if (result.value or 0) < 0
-            else "dilution"
-            if (result.value or 0) > 0
-            else "flat"
+            "share count decreased"
+            if material_change <= -0.0005
+            else "share count increased"
+            if material_change >= 0.0005
+            else "share count flat"
         )
         return f"{_pct(result.value)} YoY ({drift})"
     if metric == "simple_leverage":
         parts: list[str] = []
         if components.get("net_debt_to_ebitda") is not None:
-            parts.append(f"net debt/EBITDA {_num(components['net_debt_to_ebitda'])}×")
+            parts.append(
+                "net debt / (operating income + D&A) proxy "
+                f"{_num(components['net_debt_to_ebitda'])}×"
+            )
         if components.get("interest_coverage") is not None:
             parts.append(f"interest coverage {_num(components['interest_coverage'])}×")
         return " · ".join(parts) or "computed"

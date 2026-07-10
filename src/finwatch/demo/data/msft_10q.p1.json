@@ -1,28 +1,21 @@
 {
-  "accession_number": "0000789019-24-000070",
+  "accession_number": "0000950170-24-048288",
   "ticker": "MSFT",
   "form_type": "10-Q",
-  "classification": {"items_8k": [], "overall_severity": "routine"},
-  "claims": [
-    {
-      "claim_id": "c_0001",
-      "claim_type": "evidence",
-      "text": "Revenue grew year over year.",
-      "confidence": "high",
-      "provenance": {
-        "accession_number": "0000789019-24-000070",
-        "form_type": "10-Q",
-        "section_key": "mdna",
-        "char_start": 0,
-        "char_end": 250,
-        "text_sha256_prefix": "demo",
-        "snippet": "Net sales increased 5% year over year"
-      }
-    }
-  ],
-  "material_items": [],
-  "guidance_direction": {"value": "maintained", "claim_id": null},
-  "red_flags": [],
+  "classification": {"overall_severity": "medium"},
+  "findings": [{
+    "headline": "Quarterly revenue increased",
+    "severity": "medium",
+    "critical_flag": null,
+    "evidence": [{
+      "accession_number": "0000950170-24-048288",
+      "form_type": "10-Q",
+      "section_key": "mdna",
+      "char_start": 98,
+      "char_end": 135,
+      "snippet": "Revenue increased $2.1 billion or 12%"
+    }]
+  }],
   "extraction_confidence": "high",
   "gaps": []
 }

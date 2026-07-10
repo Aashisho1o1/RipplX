@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import hashlib
 
+import pytest
+
 from finwatch.core.types import DISCLAIMER, MetricStatus, SectorClass, SectorInfo
 from finwatch.metrics.envelope import MetricResult, MetricsBundle
 from finwatch.signals.matrix import ExtractionSummary, ImpactSummary, Record, evaluate
@@ -29,7 +31,7 @@ def make_store(assets=1000.0, liab=600.0, equity=400.0) -> FactStore:
 
 
 def make_bundle(rendered=None, snippet="$1,234.5 million",
-                char=(16, 31)) -> VerifyBundle:
+                char=(16, 32)) -> VerifyBundle:
     metrics = MetricsBundle()
     metrics.results["revenue_growth"] = MetricResult(
         metric="revenue_growth", status=MetricStatus.COMPUTED, value=0.12,
@@ -94,6 +96,39 @@ def test_mutation_d_changed_rule_id_fails_v3():
 
 def test_mutation_e_price_target_language_fails_v5():
     b = make_bundle(rendered="Revenue grew 0.12; we see a price target of $50.")
+    r = run_all(b, make_store(), SectorInfo(SectorClass.GENERAL, False))
+    assert "V5" in failing_ids(r)
+
+
+@pytest.mark.parametrize(
+    ("confidence", "gaps"),
+    [
+        ("low", []),
+        ("high", ["Input was truncated before controls."]),
+    ],
+)
+def test_incomplete_extraction_fails_v5(confidence: str, gaps: list[str]):
+    b = make_bundle()
+    b.extraction_confidence = confidence
+    b.extraction_gaps = gaps
+    r = run_all(b, make_store(), SectorInfo(SectorClass.GENERAL, False))
+    assert "V5" in failing_ids(r)
+
+
+@pytest.mark.parametrize(
+    "authored",
+    [
+        "Revenue increased a dozen basis points",
+        "Revenue changed by a fraction",
+        "Investors should avoid the shares",
+        "Exit the position",
+        "Reduce exposure to the shares",
+        "Stay away from the stock",
+    ],
+)
+def test_authored_quantity_or_advice_bypass_fails_v5(authored: str):
+    b = make_bundle()
+    b.authored_text = authored
     r = run_all(b, make_store(), SectorInfo(SectorClass.GENERAL, False))
     assert "V5" in failing_ids(r)
 

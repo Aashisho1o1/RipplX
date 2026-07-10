@@ -1,0 +1,36 @@
+{
+  "accession_number": "0001193125-24-167032",
+  "ticker": "FSR",
+  "form_type": "8-K",
+  "classification": {"overall_severity": "critical"},
+  "findings": [
+    {
+      "headline": "Voluntary bankruptcy cases commenced",
+      "severity": "critical",
+      "critical_flag": "item_1_03_bankruptcy",
+      "evidence": [{
+        "accession_number": "0001193125-24-167032",
+        "form_type": "8-K",
+        "section_key": "item_1_03",
+        "char_start": 95,
+        "char_end": 149,
+        "snippet": "commenced voluntary cases under chapter 11 of title 11"
+      }]
+    },
+    {
+      "headline": "Debt obligations accelerated",
+      "severity": "critical",
+      "critical_flag": "item_2_04_acceleration",
+      "evidence": [{
+        "accession_number": "0001193125-24-167032",
+        "form_type": "8-K",
+        "section_key": "item_2_04",
+        "char_start": 124,
+        "char_end": 197,
+        "snippet": "constitute an event of default that accelerated the Company's obligations"
+      }]
+    }
+  ],
+  "extraction_confidence": "high",
+  "gaps": []
+}

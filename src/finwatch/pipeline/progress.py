@@ -7,13 +7,12 @@ from datetime import UTC, datetime
 
 from finwatch.db.repositories import Repo
 
-PIPELINE_STAGES = ("download", "parse", "extract", "metrics", "impact", "verify")
+PIPELINE_STAGES = ("download", "parse", "extract", "metrics", "verify")
 STAGE_LABELS = {
     "download": "Downloaded",
     "parse": "Parsed",
     "extract": "Extracted",
     "metrics": "Metrics computed",
-    "impact": "Impact assessed",
     "verify": "Verified",
 }
 
@@ -80,11 +79,13 @@ class StageReporter:
         self._set(stage, "skipped", message=reason, diagnostics={"reason": reason})
 
     def failed(self, stage: str, error: Exception | str, diagnostics: dict | None = None) -> None:
-        detail = str(error)
+        # Provider exceptions can include request headers or credentials. The stage
+        # ledger is persistent user data, not a debug log, so it stores fixed text only.
+        detail = f"{STAGE_LABELS[stage]} could not be completed."
         self._set(
             stage,
             "failed",
-            message=f"{STAGE_LABELS[stage]} failed: {detail}",
+            message=detail,
             error=detail,
             diagnostics=diagnostics,
         )

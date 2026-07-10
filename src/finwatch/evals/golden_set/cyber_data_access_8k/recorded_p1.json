@@ -1,0 +1,21 @@
+{
+  "accession_number": "0001467623-24-000024",
+  "ticker": "DBX",
+  "form_type": "8-K",
+  "classification": {"overall_severity": "critical"},
+  "findings": [{
+    "headline": "Threat actor accessed user data",
+    "severity": "critical",
+    "critical_flag": "cyber_1_05_critical_tier",
+    "evidence": [{
+      "accession_number": "0001467623-24-000024",
+      "form_type": "8-K",
+      "section_key": "item_1_05",
+      "char_start": 67,
+      "char_end": 117,
+      "snippet": "accessed data related to all users of Dropbox Sign"
+    }]
+  }],
+  "extraction_confidence": "high",
+  "gaps": []
+}

@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from finwatch.db.repositories import Company, Filing, Holding, Repo
-from finwatch.llm.schemas import Claim, P1Output, P2Output
+from finwatch.llm.schemas import P1Output
 
 _REQUIRED_PUBLICATION_CHECKS = frozenset({"V1", "V4", "V5"})
 
@@ -16,10 +16,8 @@ class FilingProjection:
     company: Company | None
     holding: Holding | None
     p1: P1Output | None
-    p2: P2Output | None
     analysis_present: bool
     llm_output_allowed: bool
-    claims: dict[str, Claim]
     manual_review: bool
     withheld_reason: str | None = None
     data_quality: list[tuple[str, str]] = field(default_factory=list)
@@ -36,12 +34,11 @@ class FilingProjection:
 
     @property
     def is_critical(self) -> bool:
-        return bool(self.p1) and (self.severity in {"critical", "high"} or bool(self.p1.red_flags))
+        return bool(self.p1) and self.severity in {"critical", "high"}
 
 
 def load_filing_projection(repo: Repo, filing: Filing) -> FilingProjection:
     p1a = repo.latest_analysis(filing.accession_number, "P1")
-    p2a = repo.latest_analysis(filing.accession_number, "P2")
     analysis_present = p1a is not None
     results = repo.list_verification_results(p1a.id) if p1a else []
     by_id = {row.check_id: row for row in results}
@@ -56,16 +53,19 @@ def load_filing_projection(repo: Repo, filing: Filing) -> FilingProjection:
         p1a and filing.status == "verified" and required_passed and not blocking
     )
     p1 = None
-    p2 = None
     if llm_output_allowed:
         try:
             p1 = P1Output.model_validate_json(p1a.output_json)
-            p2 = P2Output.model_validate_json(p2a.output_json) if p2a else None
         except Exception:  # noqa: BLE001 - corrupt persisted output must fail closed
             llm_output_allowed = False
             p1 = None
-            p2 = None
-    claims = {claim.claim_id: claim for claim in p1.claims} if p1 else {}
+        else:
+            # Existing verification rows may predate the incomplete-extraction gate.
+            # Reapply the publication invariant so an old low-confidence or gapped
+            # artifact cannot appear as a reassuring "routine" filing after upgrade.
+            if p1.extraction_confidence == "low" or p1.gaps:
+                llm_output_allowed = False
+                p1 = None
     manual_review = filing.status == "failed" or bool(analysis_present and not llm_output_allowed)
     withheld_reason = (
         "LLM-derived analysis withheld because deterministic verification did not pass."
@@ -82,30 +82,12 @@ def load_filing_projection(repo: Repo, filing: Filing) -> FilingProjection:
         company=repo.get_company(filing.cik),
         holding=repo.get_holding_by_cik(filing.cik),
         p1=p1,
-        p2=p2,
         analysis_present=analysis_present,
         llm_output_allowed=llm_output_allowed,
-        claims=claims,
         manual_review=manual_review,
         withheld_reason=withheld_reason,
         data_quality=data_quality,
     )
-
-
-def evidence_snippet(view: FilingProjection, claim_ids: list[str]) -> str | None:
-    for claim_id in claim_ids:
-        claim = view.claims.get(claim_id)
-        if claim and claim.claim_type == "evidence" and claim.provenance:
-            if claim.provenance.snippet:
-                return claim.provenance.snippet
-    return None
-
-
-def has_impact(view: FilingProjection) -> bool:
-    return view.p2 is not None and any(
-        record.impact_class != "no_impact" for record in view.p2.records_affected
-    )
-
 
 def in_window(filing: Filing, since: str | None, until: str | None) -> bool:
     filed = (filing.filed_at or "")[:10]

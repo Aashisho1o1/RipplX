@@ -3,7 +3,6 @@ import { Link, useLocation, useNavigate } from "react-router-dom";
 import { api, ApiError } from "../api/client";
 import { Drawer } from "../components/Drawer";
 import { JobProgress } from "../components/JobProgress";
-import { SeverityBadge } from "../components/SeverityBadge";
 import { useResource } from "../hooks/useResource";
 import type { Holding, Holdings, Job } from "../types";
 
@@ -11,7 +10,7 @@ export function HoldingsPage() {
   const location = useLocation(); const navigate = useNavigate(); const panel = new URLSearchParams(location.search).get("panel");
   const load = useCallback((signal: AbortSignal) => api<Holdings>("/api/holdings", { signal }), []); const resource = useResource(load, []);
   const [job, setJob] = useState<Job | null>(null); const [error, setError] = useState("");
-  useEffect(() => { if (!job || !["queued", "running"].includes(job.state)) return; const timer = window.setInterval(() => api<Job>(`/api/jobs/${job.id}`).then(next => { setJob(next); if (!["queued", "running"].includes(next.state)) resource.refresh(); }), 700); return () => window.clearInterval(timer); }, [job, resource.refresh]);
+  useEffect(() => { if (!job || !["queued", "running"].includes(job.state)) return; const timer = window.setInterval(() => api<Job>(`/api/jobs/${job.id}`).then(next => { setJob(next); if (!["queued", "running"].includes(next.state)) resource.refresh(); }).catch(reason => { setError(reason instanceof ApiError ? reason.message : "Job status was lost after a restart."); setJob(null); }), 700); return () => window.clearInterval(timer); }, [job, resource.refresh]);
   function closePanel() { navigate("/holdings", { replace: true }); }
   async function sync() { setError(""); try { setJob(await api<Job>("/api/jobs/sync", { method: "POST", body: "{}" })); } catch (reason) { setError(reason instanceof ApiError ? reason.message : "Sync could not start."); } }
   async function remove(ticker: string) { if (!window.confirm(`Remove ${ticker} from tracking? Historical audit data will be retained.`)) return; await api(`/api/holdings/${ticker}`, { method: "DELETE" }); resource.refresh(); }
@@ -26,7 +25,7 @@ export function HoldingsPage() {
 }
 
 function HoldingRow({ row, onRemove }: { row: Holding; onRemove: (ticker: string) => void }) {
-  return <div className="holding-row"><div className="holding-row-main"><Link to={`/companies/${row.ticker}`} className="holding-row-main"><div><div className="holding-title"><strong>{row.ticker}</strong>{row.severity && <SeverityBadge severity={row.severity} />}</div><div className="row-meta">{row.compressed_verified_read ?? "no verified financials yet"}</div></div><span className="row-meta">last: {row.last_filing ?? "—"}</span></Link><button className="button ghost" onClick={() => onRemove(row.ticker)}>Remove</button></div></div>;
+  return <div className="holding-row"><div className="holding-row-main"><Link to={`/companies/${row.ticker}`} className="holding-row-main"><div><div className="holding-title"><strong>{row.ticker}</strong></div><div className="row-meta">{row.compressed_verified_read ?? "no verified financials yet"}</div></div><span className="row-meta">last: {row.last_filing ?? "—"}</span></Link><button className="button ghost" onClick={() => onRemove(row.ticker)}>Remove</button></div></div>;
 }
 
 function AddTickerForm({ onAdded }: { onAdded: () => void }) {

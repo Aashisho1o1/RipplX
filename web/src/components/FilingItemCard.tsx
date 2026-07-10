@@ -1,12 +1,13 @@
 import { Link, useLocation } from "react-router-dom";
-import type { FilingItem } from "../types";
-import { SeverityBadge } from "./SeverityBadge";
+import type { FilingDigestEntry } from "../types";
+import { FindingList } from "./FindingList";
 
-export function FilingItemCard({ filing }: { filing: FilingItem }) {
+export function FilingItemCard({ filing, withholdFindings = false }: { filing: FilingDigestEntry; withholdFindings?: boolean }) {
   const location = useLocation();
   const demo = new URLSearchParams(location.search).get("demo") === "1";
-  return <Link className="filing-card" to={`/filings/${filing.accession}${demo ? "?demo=1" : ""}`}>
-    <div className="filing-heading"><strong>{filing.ticker}</strong><span className="mono muted">{filing.form} · {filing.filed}</span>{filing.severity && <SeverityBadge severity={filing.severity} />}</div>
-    <div className="material-items">{filing.material_items.map((item, index) => <span key={`${item.event_type}-${index}`}>{index > 0 ? " · " : ""}{item.headline} <em>({item.event_type})</em></span>)}</div>
-  </Link>;
+  const withheld = withholdFindings || filing.manual_review || Boolean(filing.withheld_reason);
+  return <article className="filing-card">
+    <div className="filing-heading"><Link className="filing-link" to={`/filings/${filing.accession}${demo ? "?demo=1" : ""}`}><strong>{filing.ticker}</strong></Link><span className="mono muted">{filing.form} · {filing.filed}</span></div>
+    {withheld ? <p className="notice">{filing.withheld_reason ?? "Findings withheld pending manual review."}</p> : filing.findings.length ? <FindingList findings={filing.findings} /> : <p className="empty-line">No evidence-backed changes were selected.</p>}
+  </article>;
 }

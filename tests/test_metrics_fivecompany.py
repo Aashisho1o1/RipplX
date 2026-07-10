@@ -18,7 +18,9 @@ from finwatch.metrics.formulas import compute_all
 from finwatch.xbrl.normalize import FactStore
 
 FX = Path(__file__).parent / "fixtures" / "companyfacts"
-AS_OF = "2025-05-01"
+# After the newest synthetic fixture period: starter freshness gates must not
+# mistake fixture look-ahead for a formula error in this hand-derived research suite.
+AS_OF = "2026-07-03"
 
 # ticker -> (sic, fixed price or None)
 COMPANIES = {
@@ -111,15 +113,16 @@ def test_cat_peg_not_applicable_on_negative_growth():
     assert peg.not_applicable_reason == "non_positive_growth"
 
 
-def test_cat_quarterly_net_income_falls_through_to_profitloss():
+def test_cat_quarterly_net_income_gap_is_not_labeled_a_four_quarter_trend():
     # F11 regression: CAT tags recent QUARTERLY net income under the fallback tag
     # `ProfitLoss` while `NetIncomeLoss` (priority 1) carries the annual data. Per-accessor
-    # tag resolution now lets quarterly() fall through to ProfitLoss, so the 4-quarter
-    # direction is computed ('up') instead of being stranded as 'insufficient_points'.
+    # tag resolution lets quarterly() fall through to ProfitLoss, but the fixture skips
+    # Q4 between Q3 and the next Q1. A non-contiguous series must not be called a
+    # four-quarter trend merely because four points exist.
     nit = bundle_for("CAT").get("net_income_trend")
     assert nit.status == MetricStatus.COMPUTED
     assert nit.components["yoy"] is not None  # headline YoY unchanged
-    assert nit.components["four_quarter_direction"] == "up"
+    assert nit.components["four_quarter_direction"] == "insufficient_points"
 
 
 # ---- bank: every not_applicable path ---------------------------------------
@@ -138,8 +141,8 @@ def test_bank_financial_institution_not_applicable_paths():
 def test_bank_current_ratio_excluded_and_piotroski_reduced():
     b = bundle_for("JPM")
     liq = b.get("liquidity_basics")
-    assert liq.status == MetricStatus.COMPUTED
-    assert liq.components.get("current_ratio_note") == "not_applicable_financial_institution"
+    assert liq.status == MetricStatus.NOT_APPLICABLE
+    assert liq.not_applicable_reason == "financial_institution_balance_sheet"
     pf = b.get("piotroski_f")
     assert pf.components["f6_current_ratio_improved"] == "skipped_financial"
     assert pf.components["f8_gross_margin_improved"] == "skipped_financial"

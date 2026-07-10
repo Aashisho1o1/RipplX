@@ -17,7 +17,7 @@ from __future__ import annotations
 from datetime import date
 from typing import Iterable, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, FiniteFloat
 
 from finwatch.metrics.envelope import InputUsed
 
@@ -91,7 +91,7 @@ class Fact(BaseModel):
     taxonomy: str
     tag: str
     unit: str
-    value: float
+    value: FiniteFloat
     start: Optional[str] = None   # ISO date for durations
     end: Optional[str] = None     # ISO date: duration end, or instant date
     fy: Optional[int] = None
@@ -112,7 +112,7 @@ class Fact(BaseModel):
         return (date.fromisoformat(self.end) - date.fromisoformat(self.start)).days
 
     def period_key(self) -> tuple:
-        return (self.tag, self.unit, self.start or "", self.end or "")
+        return (self.taxonomy, self.tag, self.unit, self.start or "", self.end or "")
 
 
 class ResolvedFact(BaseModel):
@@ -203,12 +203,24 @@ class FactStore:
 
     def _series(self, concept: str, keep, n: int) -> list[ResolvedFact]:
         """Deduped (by period-end, newest first) series from the first priority tag whose
-        facts pass `keep`."""
+        facts pass `keep`. Unit choice is deterministic: headline monetary concepts prefer
+        USD, share counts prefer shares, and a sole alternate unit is accepted. Multiple
+        non-preferred units are ambiguous and fail closed instead of depending on JSON order."""
         for taxo, tag in self._tags_for(concept):
-            rows = [ResolvedFact(concept=concept, fact=f)
-                    for f in self._by_tag.get((taxo, tag), ()) if keep(f)]
-            if not rows:
+            eligible = [f for f in self._by_tag.get((taxo, tag), ()) if keep(f)]
+            if not eligible:
                 continue
+            by_unit: dict[str, list[Fact]] = {}
+            for fact in eligible:
+                by_unit.setdefault(fact.unit, []).append(fact)
+            preferred = "shares" if concept == "shares_outstanding" else "USD"
+            if preferred in by_unit:
+                selected = by_unit[preferred]
+            elif len(by_unit) == 1:
+                selected = next(iter(by_unit.values()))
+            else:
+                return []
+            rows = [ResolvedFact(concept=concept, fact=f) for f in selected]
             rows.sort(key=lambda r: r.fact.end or "", reverse=True)
             seen: set = set()
             out: list[ResolvedFact] = []

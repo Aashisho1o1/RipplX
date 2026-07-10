@@ -1,19 +1,21 @@
-"""Pydantic stage schemas mirroring the JSON contracts in CLAUDE.md §§11–13.
+"""Strict Pydantic contracts for launch P1 and dormant research P2/P3.
 
 Parsing an LLM response into these models IS the schema-validity check (V5): a
 ValidationError means the stage output is malformed and must be regenerated
 (stages.py routes it to StageError → the §14 regeneration policy). These schemas
-enforce STRUCTURE, required fields, the controlled vocabularies the matrix/digest
-consume, the claim graph (foundation R2: evidence ⇒ provenance, judgment ⇒ basis),
-and reject unknown fields (``extra='forbid'``). Enum values are normalised (strip +
-lowercase) so a well-formed but differently-cased value is accepted, not silently
-passed through as garbage.
+P1 is deliberately small: at most three qualitative findings, each inseparable
+from one to three exact filing spans. P2/P3 retain their historical research
+schemas but are not constructed by the launch pipeline. All models reject unknown
+fields (``extra='forbid'``); controlled enum values are normalized before use.
 """
 from __future__ import annotations
 
 from typing import Annotated, Any
 
-from pydantic import AfterValidator, BaseModel, ConfigDict, field_validator, model_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from finwatch.core.text_policy import contains_authored_quantity, contains_trade_instruction
+from finwatch.core.types import CRITICAL_DOC_FLAGS
 
 _STRICT = ConfigDict(extra="forbid")
 
@@ -30,8 +32,6 @@ _THESIS = frozenset({"intact", "weakened", "broken", "not_assessable"})
 _POSTURE = frozenset({"critical_review", "risk_review", "monitor", "positive_support",
                       "insufficient_data"})
 _CLAIM_TYPE = frozenset({"evidence", "judgment"})
-
-
 def _one_of(allowed: frozenset[str]):
     def _validate(value: str) -> str:
         v = value.strip().lower() if isinstance(value, str) else value
@@ -60,7 +60,7 @@ def _require_unique_claim_ids(claims: list) -> list:
     return claims
 
 
-# ---- claim graph (shared, foundation R2) -----------------------------------
+# ---- dormant P2/P3 research claim graph ------------------------------------
 class Provenance(BaseModel):
     model_config = _STRICT
     accession_number: str
@@ -86,8 +86,8 @@ class Claim(BaseModel):
 
     @model_validator(mode="after")
     def _claim_graph(self):
-        # Foundation R2: evidence claims are verbatim-anchored (need provenance). Judgment
-        # claims SHOULD cite basis_claim_ids, but that is best-effort audit metadata — it is
+        # Historical P2 research claims keep evidence provenance. Judgment claims SHOULD
+        # cite basis_claim_ids, but that is best-effort audit metadata — it is
         # never checked by V1-V5 (only persisted), and real models routinely omit it — so its
         # ABSENCE is not a hard failure here or per-stage. When basis IS provided it must
         # resolve to a declared claim (enforced in P1Output/P2Output): a P1 judgment resolves
@@ -99,48 +99,62 @@ class Claim(BaseModel):
         return self
 
 
-# ---- P1: filing event extractor (§11) --------------------------------------
-class Item8K(BaseModel):
-    model_config = _STRICT
-    item: str
-    base_severity: str
-    final_severity: Severity                 # critical|high|medium|low
-    adjustment_rationale_claim_id: str | None = None
-
-
+# ---- P1: filing event extractor (launch contract) --------------------------
 class Classification(BaseModel):
     model_config = _STRICT
-    items_8k: list[Item8K] = []
     overall_severity: OverallSeverity        # critical|high|medium|low|routine
 
 
-class MaterialItem(BaseModel):
+class FindingEvidence(BaseModel):
+    """One exact, section-relative quotation supporting a launch finding."""
+
     model_config = _STRICT
-    headline: str
-    event_type: str
+    accession_number: str = Field(min_length=1, max_length=64)
+    form_type: str = Field(min_length=1, max_length=16)
+    section_key: str = Field(min_length=1, max_length=128)
+    exhibit: str | None = Field(default=None, max_length=128)
+    char_start: int = Field(ge=0)
+    char_end: int = Field(gt=0)
+    html_element_id: str | None = Field(default=None, max_length=256)
+    snippet: str = Field(min_length=1, max_length=2_000)
+
+    @model_validator(mode="after")
+    def _valid_exact_span(self):
+        if self.char_end <= self.char_start:
+            raise ValueError("evidence char_end must be greater than char_start")
+        if len(self.snippet.split()) > 25:
+            raise ValueError("evidence snippet must contain at most 25 words")
+        return self
+
+
+class Finding(BaseModel):
+    """A qualitative conclusion that is inseparable from its exact SEC evidence."""
+
+    model_config = _STRICT
+    headline: str = Field(min_length=1, max_length=240)
     severity: Severity
-    claim_ids: list[str] = []
+    critical_flag: str | None = None
+    evidence: list[FindingEvidence] = Field(min_length=1, max_length=3)
 
-
-class RiskFactorFindings(BaseModel):
-    model_config = _STRICT
-    added: list[str] = []
-    removed: list[str] = []
-    modified: list[str] = []
-
-
-class GuidanceDirection(BaseModel):
-    model_config = _STRICT
-    # value: raised|maintained|lowered|withdrawn|initiated|none_stated
-    value: Guidance
-    claim_id: str | None = None
-
-
-class RedFlag(BaseModel):
-    model_config = _STRICT
-    flag: str
-    severity: Severity
-    claim_ids: list[str] = []
+    @model_validator(mode="after")
+    def _qualitative_and_controlled(self):
+        if contains_authored_quantity(self.headline):
+            raise ValueError("finding headline must be qualitative; numbers belong in evidence")
+        if contains_trade_instruction(self.headline):
+            raise ValueError("finding headline must not contain trade instructions")
+        if self.critical_flag is not None:
+            flag = self.critical_flag.strip().lower()
+            if flag not in CRITICAL_DOC_FLAGS:
+                raise ValueError(
+                    f"critical_flag must be one of {sorted(CRITICAL_DOC_FLAGS)}, "
+                    f"got {self.critical_flag!r}"
+                )
+            self.critical_flag = flag
+            if self.severity not in {"critical", "high"}:
+                raise ValueError("critical_flag requires critical or high severity")
+            if flag == "cyber_1_05_critical_tier" and self.severity != "critical":
+                raise ValueError("cyber_1_05_critical_tier requires critical severity")
+        return self
 
 
 class P1Output(BaseModel):
@@ -149,45 +163,31 @@ class P1Output(BaseModel):
     ticker: str
     form_type: str
     classification: Classification
-    claims: list[Claim] = []
-    material_items: list[MaterialItem] = []
-    risk_factor_findings: RiskFactorFindings | None = None
-    guidance_direction: GuidanceDirection
-    red_flags: list[RedFlag] = []
+    findings: list[Finding] = Field(max_length=3)
     extraction_confidence: Confidence        # high|medium|low
-    gaps: list[str] = []
-
-    @field_validator("claims")
-    @classmethod
-    def _unique_claims(cls, v):
-        return _require_unique_claim_ids(v)
+    gaps: list[str] = Field(default_factory=list, max_length=20)
 
     @model_validator(mode="after")
-    def _claim_refs_resolve(self):
-        # Every claim_id cited ANYWHERE must resolve to a declared claim — not just
-        # red-flag/material-item refs but also judgment basis_claim_ids, the
-        # guidance_direction claim, and each 8-K adjustment rationale. Otherwise an
-        # (LLM- or injection-authored) judgment could rest on a fabricated evidence id.
-        ids = {c.claim_id for c in self.claims}
+    def _findings_match_classification(self):
+        for finding in self.findings:
+            for evidence in finding.evidence:
+                if evidence.accession_number != self.accession_number:
+                    raise ValueError("finding evidence accession_number must match P1 output")
+                if evidence.form_type != self.form_type:
+                    raise ValueError("finding evidence form_type must match P1 output")
 
-        def _check(cid, where):
-            if cid is not None and cid not in ids:
-                raise ValueError(f"{where} cites unknown claim_id {cid!r}")
+        if not self.findings:
+            if self.classification.overall_severity not in {"routine", "low"}:
+                raise ValueError("medium/high/critical classification requires a finding")
+            return self
 
-        for rf in self.red_flags:
-            for cid in rf.claim_ids:
-                _check(cid, f"red_flag {rf.flag!r}")
-        for mi in self.material_items:
-            for cid in mi.claim_ids:
-                _check(cid, "material_item")
-        for c in self.claims:
-            # basis_claim_ids is best-effort (see Claim._claim_graph): an absent basis does
-            # NOT fail extraction, but when present every id must resolve to a declared claim.
-            for cid in (c.basis_claim_ids or ()):
-                _check(cid, f"judgment claim {c.claim_id!r} basis")
-        _check(self.guidance_direction.claim_id, "guidance_direction")
-        for it in self.classification.items_8k:
-            _check(it.adjustment_rationale_claim_id, f"item_8k {it.item!r}")
+        rank = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+        highest = min((finding.severity for finding in self.findings), key=rank.__getitem__)
+        if self.classification.overall_severity != highest:
+            raise ValueError("overall_severity must equal the highest finding severity")
+        flags = [finding.critical_flag for finding in self.findings if finding.critical_flag]
+        if len(flags) != len(set(flags)):
+            raise ValueError("critical_flag values must be unique within a P1 output")
         return self
 
 

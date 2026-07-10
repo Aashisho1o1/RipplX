@@ -15,53 +15,33 @@ Severity = Literal["CRITICAL", "HIGH", "MEDIUM", "LOW"]
 MetricState = Literal["computed", "unavailable", "not_applicable"]
 
 
-class MaterialItemView(BaseModel):
-    headline: str
-    event_type: str
+class EvidenceView(BaseModel):
+    claim_id: str = Field(min_length=1, max_length=128)
+    accession: str = Field(min_length=1, max_length=32)
+    section_key: str = Field(min_length=1, max_length=128)
+    char_start: int
+    char_end: int
+    quote: str = Field(min_length=1, max_length=2_000)
+    section_sha256: str = Field(min_length=64, max_length=64)
+    edgar_url: str = Field(min_length=1, max_length=500)
 
 
-class RedFlagView(BaseModel):
-    code: str
-    label: str
+class FindingView(BaseModel):
+    finding_id: str = Field(min_length=1, max_length=128)
+    headline: str = Field(min_length=1, max_length=240)
     severity: Severity
-    edgar_url: str
-    quote: str | None = None
+    evidence: list[EvidenceView] = Field(min_length=1, max_length=3)
 
 
-class FilingItemView(BaseModel):
-    accession: str
-    ticker: str
-    owned: bool
-    form: str
-    filed: str
-    severity: Severity | None = None
-    material_items: list[MaterialItemView] = Field(default_factory=list)
-    flags: list[RedFlagView] = Field(default_factory=list)
+class FilingDigestEntry(BaseModel):
+    accession: str = Field(min_length=1, max_length=32)
+    ticker: str = Field(min_length=1, max_length=16)
+    form: str = Field(min_length=1, max_length=16)
+    filed: str = Field(min_length=1, max_length=32)
+    edgar_url: str = Field(min_length=1, max_length=500)
+    findings: list[FindingView] = Field(default_factory=list, max_length=3)
     manual_review: bool = False
-
-
-class ChannelView(BaseModel):
-    label: str
-    direction: str
-    magnitude: str | None = None
-
-
-class WhatChangedView(BaseModel):
-    ticker: str
-    impact_class: str
-    via: str
-    net_read: str
-    channels: list[ChannelView] = Field(default_factory=list)
-    guidance: str
-    liquidity: str
-    net: str
-    risk_factor_changes: str | None = None
-
-
-class ThesisImpactView(BaseModel):
-    ticker: str
-    verdict: str
-    no_thesis: bool = False
+    withheld_reason: str | None = None
 
 
 class MetricRowView(BaseModel):
@@ -70,6 +50,8 @@ class MetricRowView(BaseModel):
     formula: str
     state: MetricState
     state_label: str
+    source_computation_id: int
+    effective_as_of: str
 
 
 class IssuerMetricsView(BaseModel):
@@ -95,13 +77,11 @@ class BriefView(BaseModel):
     portfolio: BriefPortfolioView
     answer: str
     answer_posture: Posture | None = None
-    critical_red_flags: list[FilingItemView] = Field(default_factory=list)
-    what_changed: list[WhatChangedView] = Field(default_factory=list)
-    thesis_impact: list[ThesisImpactView] = Field(default_factory=list)
+    filings: list[FilingDigestEntry] = Field(default_factory=list)
     verified_numbers: list[IssuerMetricsView] = Field(default_factory=list)
     open_questions: list[str] = Field(default_factory=list)
     boring_filings: str | None = None
-    withheld_filings: list[FilingItemView] = Field(default_factory=list)
+    withheld_filings: list[FilingDigestEntry] = Field(default_factory=list)
     tracked_but_unanalyzed: bool = False
     disclaimer: str = DISCLAIMER
     sample_data: bool = False
@@ -129,12 +109,9 @@ class PipelineStageView(BaseModel):
 
 
 class FilingDetailView(BaseModel):
-    filing: FilingItemView
-    what_changed: list[WhatChangedView] = Field(default_factory=list)
-    thesis_impact: list[ThesisImpactView] = Field(default_factory=list)
+    filing: FilingDigestEntry
     verified_numbers: IssuerMetricsView | None = None
     verification: VerificationView | None = None
-    insufficient_reason: str | None = None
     withheld_reason: str | None = None
     pipeline: list[PipelineStageView] = Field(default_factory=list)
     disclaimer: str = DISCLAIMER
@@ -144,7 +121,6 @@ class HoldingView(BaseModel):
     ticker: str
     cik: str
     owned: bool
-    severity: Severity | None = None
     last_filing: str | None = None
     compressed_verified_read: str | None = None
 

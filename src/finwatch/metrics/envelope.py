@@ -9,9 +9,10 @@ matrix skips rules (never fails globally) based on it.
 """
 from __future__ import annotations
 
+import math
 from typing import Any, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, FiniteFloat, field_validator
 
 from finwatch.core.types import MetricStatus
 
@@ -20,7 +21,7 @@ class InputUsed(BaseModel):
     concept: str
     tag: str
     taxonomy: str = "us-gaap"
-    value: Optional[float] = None
+    value: Optional[FiniteFloat] = None
     unit_ref: Optional[str] = None
     decimals: Optional[str] = None
     period_start: Optional[str] = None
@@ -35,13 +36,32 @@ class MetricResult(BaseModel):
     not_applicable_reason: Optional[str] = None
     unavailable_missing: list[str] = Field(default_factory=list)
     sector_applicability: list[str] = Field(default_factory=list)
-    value: Optional[float] = None
+    value: Optional[FiniteFloat] = None
     zone_or_flag: Optional[str] = None
     components: dict[str, Any] = Field(default_factory=dict)
     inputs_used: list[InputUsed] = Field(default_factory=list)
     formula_version: str
     as_of: str
     confidence: str = "high"  # high | medium | low
+
+    @field_validator("components")
+    @classmethod
+    def _finite_components(cls, value: dict[str, Any]) -> dict[str, Any]:
+        """Reject NaN/Infinity anywhere a deterministic formula may render it."""
+        def check(node: Any) -> None:
+            if isinstance(node, bool):
+                return
+            if isinstance(node, float) and not math.isfinite(node):
+                raise ValueError("metric components must contain only finite numbers")
+            if isinstance(node, dict):
+                for child in node.values():
+                    check(child)
+            elif isinstance(node, (list, tuple)):
+                for child in node:
+                    check(child)
+
+        check(value)
+        return value
 
     @property
     def computed(self) -> bool:

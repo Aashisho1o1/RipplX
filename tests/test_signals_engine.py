@@ -26,9 +26,16 @@ from finwatch.verify.checks import VerifyBundle, run_all
 def _p1(sev, flags, conf="high", gaps=None):
     return P1Output.model_validate({
         "accession_number": "a", "ticker": "T", "form_type": "10-K",
-        "classification": {"items_8k": [], "overall_severity": sev},
-        "red_flags": [{"flag": f, "severity": "critical", "claim_ids": []} for f in flags],
-        "guidance_direction": {"value": "withdrawn"}, "extraction_confidence": conf,
+        "classification": {"overall_severity": sev},
+        "findings": [{
+            "headline": "Critical filing concern",
+            "severity": "critical",
+            "critical_flag": f,
+            "evidence": [{"accession_number": "a", "form_type": "10-K",
+                          "section_key": "controls", "char_start": index,
+                          "char_end": index + 1, "snippet": "x"}],
+        } for index, f in enumerate(flags)],
+        "extraction_confidence": conf,
         "gaps": gaps or []})
 
 
@@ -112,10 +119,8 @@ def test_critical_code_excludes_lookalikes_even_at_critical_severity():
         assert critical_code(phrase, "critical") is None
 
 
-def test_going_concern_natural_phrase_fires_m1_end_to_end():
-    # Regression for the confirmed blocking finding: a going-concern filing whose P1 uses the
-    # natural phrase (not the canonical token) at critical severity still reaches critical review.
-    ext = to_extraction_summary(_p1("critical", ["going concern", "substantial doubt"]))
+def test_going_concern_controlled_flag_fires_m1_end_to_end():
+    ext = to_extraction_summary(_p1("critical", ["going_concern"]))
     assert set(ext.red_flag_codes) & CRITICAL_DOC_FLAGS   # non-empty intersection
     d = evaluate(Record(ticker="T", owned=True, thesis="th"), ext, ImpactSummary(),
                  MetricsBundle())
@@ -123,7 +128,7 @@ def test_going_concern_natural_phrase_fires_m1_end_to_end():
 
 
 def test_to_extraction_summary_normalizes_flags():
-    ext = to_extraction_summary(_p1("critical", ["non_reliance"], gaps=["g"]))
+    ext = to_extraction_summary(_p1("critical", ["item_4_02_non_reliance"], gaps=["g"]))
     assert ext.red_flag_codes == ["item_4_02_non_reliance"]
     assert ext.extraction_confidence == "high" and ext.gaps == ["g"]
 

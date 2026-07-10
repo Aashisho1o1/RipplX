@@ -1,0 +1,21 @@
+{
+  "accession_number": "0001193125-24-086059",
+  "ticker": "EIGR",
+  "form_type": "8-K",
+  "classification": {"overall_severity": "critical"},
+  "findings": [{
+    "headline": "Nasdaq issued a delisting determination",
+    "severity": "critical",
+    "critical_flag": "item_3_01_delisting",
+    "evidence": [{
+      "accession_number": "0001193125-24-086059",
+      "form_type": "8-K",
+      "section_key": "item_3_01",
+      "char_start": 133,
+      "char_end": 174,
+      "snippet": "common stock will be delisted from Nasdaq"
+    }]
+  }],
+  "extraction_confidence": "high",
+  "gaps": []
+}

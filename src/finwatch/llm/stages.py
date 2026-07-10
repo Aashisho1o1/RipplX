@@ -1,9 +1,10 @@
-"""P1/P2 stage runners: build inputs → call the LLM → parse to schema → persist.
+"""LLM stage runners: bound inputs/cost → parse strict schemas → persist.
 
 Parsing the response into the pydantic schema is the schema-validity gate (a
 ValidationError = malformed output → the pipeline regenerates). The trusted
 accession/ticker (from the filing being analyzed) are used for the DB keys, never
-the model's echoed values.
+the model's echoed values. Launch P1 stores evidence inside each finding; only the
+dormant P2 research schema still emits parallel claim rows.
 """
 from __future__ import annotations
 
@@ -15,8 +16,21 @@ from typing import Any
 from finwatch.claims.persist import to_analysis_claims
 from finwatch.db.repositories import Analysis, Repo
 from finwatch.llm.prompts import STAGE_P1, STAGE_P2, load_prompt
-from finwatch.llm.router import LLMClient, LLMResponse, extract_json
+from finwatch.llm.router import (
+    LAUNCH_MAX_OUTPUT_TOKENS,
+    LLMClient,
+    LLMResponse,
+    extract_json,
+)
 from finwatch.llm.schemas import P1Output, P2Output
+
+P1_MAX_INPUT_CHARS = 240_000
+_CRITICAL_8K_SECTION_FLAGS = {
+    "item_1_03": "item_1_03_bankruptcy",
+    "item_2_04": "item_2_04_acceleration",
+    "item_3_01": "item_3_01_delisting",
+    "item_4_02": "item_4_02_non_reliance",
+}
 
 
 def _now_iso() -> str:
@@ -47,10 +61,48 @@ def _run_stage(
     resp: LLMResponse | None = None
     for attempt in range(2):
         user = json.dumps(active_inputs, ensure_ascii=False, default=str)
-        resp = llm.complete(system=system, user=user, temperature=temperature, json_mode=True)
+        if stage == "P1" and len(user) > P1_MAX_INPUT_CHARS:
+            raise StageError(
+                f"P1 input exceeds the {P1_MAX_INPUT_CHARS:,}-character launch limit"
+            )
+        resp = llm.complete(
+            system=system,
+            user=user,
+            temperature=temperature,
+            json_mode=True,
+            max_tokens=LAUNCH_MAX_OUTPUT_TOKENS,
+        )
         try:
             data = extract_json(resp.text)
             output = schema_cls.model_validate(data)
+            if getattr(output, "accession_number", accession_number) != accession_number:
+                raise ValueError("output accession_number does not match trusted filing metadata")
+            if stage == "P1":
+                if getattr(output, "ticker", ticker) != ticker:
+                    raise ValueError("P1 ticker does not match trusted filing metadata")
+                trusted_form = (inputs.get("filing_meta") or {}).get("form_type")
+                if trusted_form and getattr(output, "form_type", None) != trusted_form:
+                    raise ValueError("P1 form_type does not match trusted filing metadata")
+                if str(trusted_form or "").upper().startswith("8-K"):
+                    section_keys = set((inputs.get("sections") or {}).keys())
+                    for section_key, required_flag in _CRITICAL_8K_SECTION_FLAGS.items():
+                        if section_key not in section_keys:
+                            continue
+                        matching = [
+                            finding
+                            for finding in output.findings
+                            if finding.critical_flag == required_flag
+                            and finding.severity == "critical"
+                            and any(
+                                evidence.section_key == section_key
+                                for evidence in finding.evidence
+                            )
+                        ]
+                        if not matching:
+                            raise ValueError(
+                                f"{section_key} requires a critical evidence-backed "
+                                f"{required_flag} finding"
+                            )
             break
         except Exception as exc:  # noqa: BLE001 — one bounded schema-repair attempt
             last_error = exc

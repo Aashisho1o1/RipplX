@@ -107,19 +107,21 @@ def test_regenerate_returning_none_gives_up_immediately():
     assert outcome.manual_review
 
 
-def test_warnings_do_not_trigger_regeneration():
+def test_offset_drift_is_blocking_and_routes_to_manual_review():
     section = "The revenue was strong this quarter across regions."
     claim = EvidenceClaim(
         claim_id="c1", accession_number="a", section_key="mdna",
-        char_start=0, char_end=5, snippet="strong",  # in text, but outside [0:5] -> warn
+        char_start=0, char_end=5, snippet="strong",  # present elsewhere, not exact at span
         text_sha256=hashlib.sha256(section.encode()).hexdigest(),
     )
     bundle = _bundle(CLEAN, evidence=[claim], section_texts={"a:mdna": section})
-    regen_called = []
-    outcome = run_with_regeneration(bundle, lambda _r, _n: regen_called.append(1))
-    assert outcome.report.verdict == "PASS_WITH_WARNINGS"
-    assert outcome.regenerations == 0 and not outcome.manual_review
-    assert not regen_called
+    outcome = run_with_regeneration(bundle, lambda _r, _n: None)
+    assert outcome.report.verdict == "FAIL"
+    assert outcome.regenerations == 0 and outcome.manual_review
+    assert any(
+        row.check_id == "V4" and row.verdict == "fail" and row.severity == "blocking"
+        for row in outcome.report.results
+    )
 
 
 def test_store_sector_passed_through_to_verifier():

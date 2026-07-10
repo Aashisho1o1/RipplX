@@ -17,10 +17,41 @@ jobs:
           python-version: "3.13"
 
       - name: Sync dependencies
-        run: uv sync --frozen
+        run: uv sync --frozen --extra web
 
       - name: Lint (ruff)
         run: uv run ruff check .
 
+      - name: Test Python web surface (FastAPI must be installed)
+        run: |
+          uv run python -c "import fastapi, uvicorn"
+          uv run pytest -q \
+            tests/test_web.py \
+            tests/test_web_security.py \
+            tests/test_presentation_fail_closed.py
+
       - name: Test (pytest)
         run: uv run pytest -q
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: web
+        run: npm ci
+
+      - name: Test frontend
+        working-directory: web
+        run: npm test
+
+      - name: Type-check frontend
+        working-directory: web
+        run: npm run typecheck
+
+      - name: Build frontend
+        working-directory: web
+        run: npm run build

@@ -76,20 +76,24 @@ def test_f6_any_red_flag_blocks_m7_accumulate():
     assert any(s["rule"] == "M7" and "red_flags" in s["reason"] for s in d.rules_skipped)
 
 
-def test_f6_high_covenant_flag_flows_through_adapter_and_blocks_m7():
+def test_controlled_critical_flag_flows_through_dormant_adapter():
     from finwatch.llm.schemas import P1Output
 
     p1 = P1Output.model_validate({
         "accession_number": "a", "ticker": "T", "form_type": "8-K",
-        "classification": {"items_8k": [], "overall_severity": "high"},
-        "claims": [], "material_items": [],
-        "guidance_direction": {"value": "none_stated"},
-        "red_flags": [{"flag": "covenant breach and waiver", "severity": "high"}],
+        "classification": {"overall_severity": "high"},
+        "findings": [{
+            "headline": "Going concern doubt", "severity": "high",
+            "critical_flag": "going_concern",
+            "evidence": [{"accession_number": "a", "form_type": "8-K",
+                          "section_key": "item_8_01", "char_start": 0,
+                          "char_end": 1, "snippet": "x"}],
+        }],
         "extraction_confidence": "high", "gaps": []})
     ext = to_extraction_summary(p1)
-    assert ext.has_red_flags and ext.red_flag_codes == []   # non-critical -> not in codes
+    assert ext.has_red_flags and ext.red_flag_codes == ["going_concern"]
     d = evaluate(_under(), ext, _INTACT, _m7_passing_metrics())
-    assert d.signal != "ACCUMULATE"
+    assert d.signal == "STRONG_REVIEW_SELL"
 
 
 # ---- F7: V3 re-derives the FULL decision (posture, rules_skipped, caps) ------
@@ -133,6 +137,31 @@ def test_f8_v1_flags_a_sign_reversed_number():
     assert v1.verdict == "fail"                                # -5 does not match +5
 
 
+def test_v1_understands_unicode_minus_and_scientific_notation():
+    unicode_minus = extract_number_tokens("Loss was −5%.")
+    exponent = extract_number_tokens("Exposure was 1e9.")
+    assert len(unicode_minus) == 1 and unicode_minus[0].value == -5.0
+    assert len(exponent) == 1 and exponent[0].value == 1e9
+
+    metrics = MetricsBundle(results={"x": _mr("x", value=1.0)})
+    report = run_all(VerifyBundle(
+        rendered_text="Exposure was 1e9.",
+        metrics=metrics,
+        disclaimer_text=DISCLAIMER,
+    ))
+    assert any(row.check_id == "V1" and row.verdict == "fail" for row in report.results)
+
+
+def test_v1_exact_integer_does_not_use_blanket_relative_tolerance():
+    metrics = MetricsBundle(results={"x": _mr("x", value=1_000_000_000.0)})
+    report = run_all(VerifyBundle(
+        rendered_text="Exposure was $1,000,400,000.",
+        metrics=metrics,
+        disclaimer_text=DISCLAIMER,
+    ))
+    assert any(row.check_id == "V1" and row.verdict == "fail" for row in report.results)
+
+
 # ---- F9: V5 price-target regex covers the "$N target" form -------------------
 def _v5(text):
     return check_v5_hygiene(VerifyBundle(rendered_text=text, metrics=MetricsBundle(),
@@ -145,6 +174,18 @@ def test_f9_dollar_target_form_is_caught_without_false_positive():
     assert all(c.verdict == "pass" for c in _v5("drifting above its target weight"))
 
 
+def test_v5_blocks_trade_recommendations_and_authored_valuation_but_not_exact_quotes():
+    assert any(c.verdict == "fail" for c in _v5("You should sell the shares."))
+    assert any(c.verdict == "fail" for c in _v5("We estimate a fair value of $50."))
+    quoted = VerifyBundle(
+        rendered_text='The filing says “shareholders should sell the shares.”',
+        authored_text="Material tender-offer terms disclosed",
+        metrics=MetricsBundle(),
+        disclaimer_text=DISCLAIMER,
+    )
+    assert all(c.verdict == "pass" for c in check_v5_hygiene(quoted))
+
+
 # ---- F4: point-in-time — historical analyses never use future-filed facts ---
 def test_f4_as_of_excludes_facts_filed_after_the_cutoff():
     from finwatch.metrics.service import as_of_facts
@@ -155,15 +196,58 @@ def test_f4_as_of_excludes_facts_filed_after_the_cutoff():
                 "fy": year, "fp": "FY", "form": "10-K"}
 
     cf = {"cik": "1", "entityName": "X", "facts": {"us-gaap": {"Revenues": {"units": {"USD": [
+        {"start": "2021-01-01", "end": "2021-12-31", "val": 50,
+         "fy": 2021, "fp": "FY", "form": "10-K"},  # unprovable: no filed date
         fy(2022, 100, "2023-02-01"),
         fy(2023, 200, "2024-02-01"),
         fy(2024, 300, "2025-02-01"),   # filed AFTER the as_of below
     ]}}}}}
     filtered = as_of_facts(cf, "2024-06-01")
     kept = {e["end"] for e in filtered["facts"]["us-gaap"]["Revenues"]["units"]["USD"]}
-    assert kept == {"2022-12-31", "2023-12-31"}         # the 2025-filed fact is excluded
+    assert kept == {"2022-12-31", "2023-12-31"}  # future-filed and undated facts excluded
     store = FactStore.from_companyfacts(filtered)
     assert store.latest_annual("revenue").fact.value == 200.0   # not 300 (a future filing)
+
+
+def test_companyfacts_unit_selection_is_deterministic_and_ambiguous_units_fail_closed():
+    from finwatch.xbrl.normalize import FactStore
+
+    def entry(end, value):
+        year = int(end[:4])
+        return {
+            "start": f"{year}-01-01",
+            "end": end,
+            "val": value,
+            "filed": f"{year + 1}-02-01",
+            "accn": f"{year}",
+            "form": "10-K",
+            "fy": year,
+            "fp": "FY",
+        }
+
+    units = {
+        "EUR": [entry("2023-12-31", 900), entry("2022-12-31", 800)],
+        "USD": [entry("2023-12-31", 200), entry("2022-12-31", 100)],
+    }
+    payload = {"facts": {"us-gaap": {"Revenues": {"units": units}}}}
+    pair = FactStore.from_companyfacts(payload).yoy_pair("revenue")
+    assert pair is not None
+    assert [row.fact.unit for row in pair] == ["USD", "USD"]
+    assert [row.fact.value for row in pair] == [200.0, 100.0]
+
+    ambiguous = {
+        "facts": {
+            "us-gaap": {
+                "Revenues": {
+                    "units": {
+                        "EUR": units["EUR"],
+                        "GBP": [entry("2023-12-31", 700), entry("2022-12-31", 600)],
+                    }
+                }
+            }
+        }
+    }
+    assert FactStore.from_companyfacts(ambiguous).latest_annual("revenue") is None
 
 
 # ---- F10: V2 accounting identities run (V2b annual-gated, V2a alignment-gated) --

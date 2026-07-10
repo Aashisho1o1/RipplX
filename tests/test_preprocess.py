@@ -197,6 +197,34 @@ def test_amendment_links_to_original():
     assert repo.get_filing("amend").amends_accession == "orig"
 
 
+def test_part_three_only_10ka_routes_as_explicit_amendment_section():
+    html = (
+        "<p>FORM 10-K/A</p><p>Explanatory Note</p>"
+        "<p>This amendment includes Items 10 through 14 of Part III.</p>"
+        "<p>Item 10. Directors and Corporate Governance.</p>"
+    )
+    repo = _repo_with_filing(
+        accession_number="amend-only",
+        cik="1",
+        form_type="10-K/A",
+        filed_at="2025-04-28",
+        is_amendment=1,
+    )
+
+    result = Preprocessor(repo, now_fn=lambda: "t").preprocess_html(
+        accession_number="amend-only",
+        cik="1",
+        form_type="10-K/A",
+        filed_at="2025-04-28",
+        period_of_report=None,
+        html=html,
+    )
+
+    assert [section.section_key for section in result.sections] == ["amendment"]
+    assert "Items 10 through 14" in result.sections[0].text
+    assert repo.get_filing("amend-only").status == "sectioned"
+
+
 def test_plain_text_toc_does_not_capture_the_stub():
     # A non-hyperlinked ToC (older HTML / .txt filings): every 'Item N' line is a
     # non-link candidate. The real body must win over the one-line ToC stub.

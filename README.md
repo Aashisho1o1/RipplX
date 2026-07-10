@@ -1,240 +1,254 @@
 # finwatch
 
-**Open-source filing intelligence for self-directed investors.**
+**Evidence-backed SEC filing alerts for self-directed investors.**
 
-finwatch watches your holdings, reads new SEC filings, highlights material changes, checks
-every number deterministically, and shows *why it matters* — with citations.
+Add the tickers you follow. When a 10-K, 10-Q, or 8-K arrives, finwatch shows up to three
+important changes, the exact SEC evidence behind each change, and a small set of
+deterministically computed financial deltas.
 
 > "I own 12 stocks. I do not read every 8-K, 10-Q, and 10-K. I want to know when something
 > actually important changed."
 
-## 60-second demo (no API key, no setup)
+finwatch is an educational research tool, not an investment adviser. It never tells a user to
+buy, sell, hold, trim, or accumulate a security.
+
+## Launch scope
+
+The current repository contains the launch cut of a larger research prototype. The user-facing
+loop is intentionally narrow:
+
+1. Track a ticker. No shares, cost basis, target weight, investment horizon, or thesis is
+   collected during onboarding.
+2. Sync filings and SEC companyfacts from EDGAR.
+3. Analyze at most one filing per request: the newest supported filing for a selected ticker,
+   or the newest supported filing across tracked tickers when no ticker is selected. An already
+   terminal newest filing is a no-op; the system never falls through to older filings for an
+   implicit historical replay.
+4. Produce zero to three qualitative findings. Every finding must carry an exact quotation with
+   accession, section, character offsets, section hash, and an HTTPS SEC link.
+5. Show only the starter metrics: revenue growth, net-income trend, operating cash flow,
+   liquidity, share-count change, and a net-debt / (operating income + D&A) leverage proxy.
+   Share-count direction is reported neutrally—not inferred to be a buyback or dilution. Stale,
+   future-dated, or malformed source periods are shown as unavailable, never relabeled as current.
+
+Numbers may appear only in deterministic metric rows sourced from SEC XBRL or inside exact SEC
+quotations. The browser and Markdown digest use the same canonical presentation model. If a
+blocking verifier or presentation-integrity check fails, all LLM-derived findings are withheld;
+the user sees a manual-review state instead of partial analysis.
+
+The model still makes the qualitative selection, headline, and importance judgment. Verification
+proves that its displayed evidence is exact and that displayed numbers come from allowed sources;
+it does not prove semantic entailment or make the model's interpretation deterministic. Both
+renderers label that boundary explicitly, and the concierge alpha manually reviews every result.
+
+The launch path does **not** execute or expose:
+
+- P2 portfolio-impact or cross-holding analysis;
+- P3 signals, trade-action vocabulary, shadow logs, promotion policy, or track-record UI;
+- offline reverify or historical analysis replay;
+- portfolio accounting, position sizing, rebalancing, thesis checks, or extended valuation and
+  forensic-score suites; or
+- multiple production providers/models.
+
+Dormant research modules and historical tests may remain in the repository to preserve prior
+work, but the launch assembly does not construct, execute, render, or advertise them.
+
+## Zero-key demo
+
+The bundled demo runs the real launch pipeline with recorded model output, no network, and no
+API key:
 
 ```bash
 uv sync
-uv run finwatch demo            # runs the full pipeline on bundled filings, prints a digest
-uv run finwatch demo --signals  # also show the (unvalidated) shadow-signal block
+uv run finwatch demo
 ```
 
-`finwatch demo` runs the **real** pipeline (P0 → P1 → metrics → P2 → verify → P3) over five
-bundled SEC filings with a recorded LLM — no network, no keys — and prints a full markdown
-digest in under a second. A committed copy is at [`docs/sample_digest.md`](docs/sample_digest.md).
-It covers every section: a going-concern **critical red flag** with a claim-backed EDGAR quote,
-a watch-only non-reliance filing, a **verified-numbers** table (each value computed
-deterministically from XBRL facts, formula-versioned, and traceable — never from the LLM), a
-broken thesis, and — behind `--signals` — the shadow signal engine.
+It exercises deterministic preprocessing, evidence-backed extraction, the starter metrics,
+verification, and the same canonical presentation DTO consumed by the browser and Markdown
+renderer.
 
-## RipplX local web app
+## Run locally
 
-RipplX is the local, browser-based interface over the same finwatch trust layer. It uses the
-real SQLite repository, deterministic metrics, verifier, bundled demo, and analysis pipeline;
-the browser never recreates financial logic or parses the Markdown digest.
-Filing pages show persisted progress from download through verification. Failed runs resume
-completed parse/LLM stages, with explicit controls to rerun parsing or analysis independently.
+Requirements: Python 3.11 or newer, [uv](https://docs.astral.sh/uv/), and Node.js 22 for building
+the browser assets.
 
 ```bash
 uv sync --extra web
-cd web && npm install && npm run build && cd ..
+npm --prefix web ci
+npm --prefix web run build
 uv run finwatch serve
 ```
 
-Open `http://127.0.0.1:8765`. First run asks for the SEC User-Agent identity, but the bundled
-sample brief is always available without keys or network access. Provider API keys entered in
-Settings stay only in the running Python process and are never written to SQLite or returned by
-the API. Persistent credentials can still be supplied through the provider environment variables
-supported by LiteLLM.
-
-On Windows, `scripts\start_demo.cmd` starts the built local app and backs up an existing
-`data\finwatch.db` before launch. Pass `-SkipBackup` only when that safety copy is unnecessary.
+Open `http://127.0.0.1:8765`. Loopback is the default and local mode does not require an access
+token. The first-run screen asks for the SEC User-Agent identity required by EDGAR.
 
 For frontend development, run `npm run dev` from `web/` while `finwatch serve` provides the API;
 Vite proxies `/api` to port 8765.
 
-### Vercel frontend deployment
+On Windows, `scripts\start_demo.cmd` starts the built local app and backs up an existing
+`data\finwatch.db` before launch. Pass `-SkipBackup` only when that safety copy is unnecessary.
 
-The root [`vercel.json`](vercel.json) tells Vercel to install and build the Vite application in
-`web/`; do not add `src.finwatch.cli:app` as a Python entrypoint. That object is the Typer CLI,
-not an ASGI application.
+### Configuration
 
-Vercel hosts the frontend assets only. The complete RipplX application still needs
-`finwatch serve` on a persistent Python host because it uses local SQLite, an in-process job
-manager, and process-memory session keys. Production should reverse-proxy that API under the
-same origin. `VITE_API_BASE_URL` can select a custom same-origin proxy prefix at build time; its
-default is empty, which keeps requests at `/api` for local and single-origin deployments.
+Copy `.env.example` to `.env`. The real process environment takes precedence over `.env`.
 
-### Persistent prototype deployment
-
-The complete app is packaged by the root `Dockerfile`: it builds the React frontend, installs
-the Python web dependencies, and runs one FastAPI process that serves both the UI and `/api`.
-SQLite lives at `/data/finwatch.db` by default.
-
-```bash
-docker build -t ripplx .
-docker run --rm -p 8765:8765 -v ripplx-data:/data ripplx
+```dotenv
+SEC_USER_AGENT=Your Name your-email@example.com
+FINWATCH_DB=./data/finwatch.db
+FINWATCH_MODEL=openai/your-evaluated-model
+OPENAI_API_KEY=
 ```
 
-On a container host such as Render, Railway, or Fly.io, deploy this Dockerfile, attach one
-persistent volume at `/data`, and expose the host-provided `PORT`. Keep the service at one
-instance because this prototype uses SQLite and an in-process job runner. `/api/bootstrap` is a
-suitable health-check path. Provider credentials can be configured as environment variables;
-keys entered in the UI remain process-memory only and disappear on restart.
+- `SEC_USER_AGENT` identifies the EDGAR client. The local browser can also collect it during
+  setup; unlike an API key, this setting is persisted in SQLite.
+- `FINWATCH_MODEL` is the single operator-selected launch model and must use the `openai/`
+  LiteLLM prefix. The browser displays it read-only.
+- `OPENAI_API_KEY` is the only production provider credential read from the environment.
+- Instead of setting `OPENAI_API_KEY`, a local user may enter a key in Settings. That key exists
+  only in the running Python process, is never written to SQLite or returned by the API, and is
+  lost on restart. `FINWATCH_MODEL` must still be configured by the operator.
 
-This prototype has no authentication. Keep the deployment private or use the hosting platform's
-access protection when portfolio data or model credentials are present.
+Do not commit `.env`; it is ignored by Git. The demo needs none of these values.
 
-## Verify the backend on real data — no API key
+### Browser workflow
 
-`finwatch demo` proves the wiring on bundled data. To watch the **trust layer run on a live
-company** — real SEC XBRL in, deterministic verified numbers out — with **no LLM key**:
+1. Add one or more tickers under **Tracked tickers**.
+2. Run **Sync filings** to index SEC filings and ingest companyfacts.
+3. Run **Analyze latest filing**. Each request processes at most one newest filing.
+4. Read the findings and click the SEC evidence links. A routine filing may correctly produce no
+   findings.
+
+## Hosted alpha: one Docker deployment path
+
+Docker is the only supported hosted-alpha packaging path. The image builds the React frontend,
+installs the Python application from `uv.lock`, serves UI and API from one process, runs as a
+non-root user, and stores SQLite at `/data/finwatch.db`.
+
+This is a single-operator alpha, not a public SaaS deployment. Its bearer token is an
+**operator/admin credential**, not a participant login and not tenant authorization. Never give one
+instance or token to multiple concierge participants. Either keep the experience operator-mediated
+(the operator alone accesses finwatch and shares only a manually reviewed digest), or provision one
+isolated container, SQLite database/volume, hostname, and bearer token per participant. Each
+container still runs one in-process worker and uses one persistent volume at `/data`. Hosted ticker
+registration is serialized and capped at 25 tracked tickers per workspace; that is a resource and
+LLM-wallet bound, not tenant isolation.
+
+Create a `.env` file on the deployment host:
+
+```dotenv
+SEC_USER_AGENT=Your Name your-email@example.com
+FINWATCH_MODEL=openai/your-evaluated-model
+OPENAI_API_KEY=your-openai-key
+FINWATCH_AUTH_TOKEN=replace-with-a-random-value-of-at-least-32-characters
+FINWATCH_ALLOWED_HOSTS=alpha.example.com
+```
+
+Generate an access token without placing it in shell history:
+
+```bash
+python -c "import secrets; print(secrets.token_urlsafe(32))"
+```
+
+Build and run the one supported image:
+
+```bash
+docker build -t finwatch-alpha .
+docker run --rm \
+  --env-file .env \
+  -p 8765:8765 \
+  -v finwatch-data:/data \
+  finwatch-alpha
+```
+
+Required remote controls:
+
+- `FINWATCH_AUTH_TOKEN` must contain at least 32 characters. It is the operator/admin credential;
+  never reuse or distribute it as a participant password. Every `/api/*` request requires it as an
+  `Authorization: Bearer` token. The unlock screen keeps it only in JavaScript module memory; it is
+  not written to browser storage and is intentionally lost on refresh.
+- `FINWATCH_ALLOWED_HOSTS` must contain the exact public hostname, without scheme or path. Use a
+  comma-separated list only when the same instance genuinely has multiple trusted hostnames.
+- Terminate TLS in front of the container. Never send the bearer token or an API key over a
+  plaintext public connection.
+- Keep the service at one instance. Jobs live in process memory and are lost on restart; SQLite
+  is a single-node store. Stop the instance before a raw filesystem copy/snapshot of `/data`, test
+  restores, and apply the host's encryption and access controls.
+- Keep each workspace at or below 25 tracked tickers. Registration is serialized to enforce the
+  cap, but the cap does not create participant accounts or authorization boundaries.
+- `GET /healthz` is intentionally public and returns only service health. Interactive API docs
+  are disabled in remote mode.
+
+Remote serving fails closed if the auth token or host allowlist is missing. The CLI also refuses
+a non-loopback bind unless `--allow-remote` is explicit. The token provides an operator boundary
+only: it is not user accounts, tenant isolation, or authorization between participants. Concierge
+participants must never share direct access to an instance; use operator-mediated review or one
+isolated DB/container/token deployment per participant.
+
+## CLI and developer tooling
+
+The browser is the launch product. The CLI remains useful for operators and development:
 
 ```bash
 uv run finwatch init
-uv run finwatch metrics AAPL          # revenue growth · net income · cash flow · liquidity · leverage
-uv run finwatch metrics AAPL --all    # the full engine: Altman-Z, Piotroski-F, valuation percentiles, …
-uv run finwatch metrics JPM --all     # a bank — watch the sector-aware not_applicable paths
+uv run finwatch add AAPL
+uv run finwatch ingest
+uv run finwatch analyze AAPL
+uv run finwatch digest
+uv run finwatch metrics AAPL
 ```
 
-`metrics` needs only `SEC_USER_AGENT`. It fetches the company's filings + XBRL from EDGAR
-(adding it as a watch entry if untracked), runs the metrics engine, and prints the numbers —
-all deterministic Python; the LLM is never involved. It also persists to `computations`, so a
-later `finwatch digest` shows the same verified-numbers table.
+`metrics` is deterministic and needs no model key. `eval` remains developer-only bake-off tooling
+and is not part of the production model-routing surface. Run `uv run finwatch --help` for the
+authoritative command list.
 
-You can also assert the live EDGAR path directly, still key-free:
+## Trust and data handling
+
+- Filing text is untrusted input. It is isolated as data in the extraction prompt, and only
+  exact, deterministically rechecked evidence reaches the launch DTO.
+- The LLM never performs arithmetic or supplies a numeric conclusion from model memory.
+- Starter metrics are deterministic Python computations over point-in-time SEC XBRL facts.
+- Annual metric sources older than 550 days and instant/share sources older than 200 days fail
+  closed as unavailable. Non-finite, future, missing-date, and malformed facts are rejected.
+- Findings are capped at three and must be qualitative; numbers belong in exact evidence.
+- The deterministic verifier never edits failed content into compliance. Blocking failure means
+  withholding.
+- React renders filing/model text as escaped text; the launch UI does not render raw filing HTML.
+- SQLite and the `/data` volume are plaintext unless the operator supplies filesystem or volume
+  encryption. They contain tracked tickers, SEC data, generated analyses, and the SEC User-Agent.
+  They do not contain OpenAI keys or the hosted bearer token. A database upgraded from the broader
+  research prototype may still contain dormant legacy portfolio fields; audit or start with a fresh
+  alpha database before inviting participants.
+
+The disclaimer remains part of every canonical digest:
+
+> Educational analysis of public information for the portfolio owner's own decision-making. Not
+> individualized investment advice. Data may be incomplete or delayed.
+
+## Concierge alpha
+
+The first launch is deliberately supervised. See
+[`docs/CONCIERGE_ALPHA.md`](docs/CONCIERGE_ALPHA.md) for the 5–10-user protocol, manual digest
+review checklist, and the seven feedback questions. The application does not recruit or contact
+participants automatically.
+
+## Development checks
 
 ```bash
-SEC_USER_AGENT="Your Name you@example.com" uv run pytest -m live \
-  tests/test_ingest_live.py tests/test_preprocess_live.py
+uv sync --frozen --extra web
+uv run ruff check .
+uv run pytest -q
+npm --prefix web ci
+npm --prefix web test
+npm --prefix web run typecheck
+npm --prefix web run build
 ```
 
-Running the **LLM stages** (P1/P2/P3 → red-flag analysis, thesis checks, the full digest) needs
-a model + key — see the Quickstart below. It is cheap: ~1–3 model calls per filing; cap a probe
-with `finwatch process --ticker AAPL --limit 1`.
+Tests make no live network or LLM calls by default. Optional live checks are marked `live` and
+excluded from the normal suite.
 
-## Status
-
-**v0.2 backend complete.** Built backend-first, phase by phase. See
-[`CLAUDE.md`](CLAUDE.md) for the full build specification and
-[`SYSTEM_DESIGN.md`](SYSTEM_DESIGN.md) for the module map.
-
-- [x] **Phase 0** — Scaffold (uv project, CLI skeleton, config, CI, license). Tier 1 trust
-      layer transcribed and green.
-- [x] **Phase 1** — Data layer + EDGAR ingestion (SQLite schema + migrations + repository;
-      SEC-etiquette EDGAR client; ticker→CIK; Stooq prices; `add`/`watch`/`ingest`).
-- [x] **Phase 2** — P0 filing preprocessor (form router; canonical sections with offsets,
-      element ids, hashes; 8-K item split + furnished detection; amendment linkage;
-      risk-factor differ; FTS-synced persistence). Validated on real AAPL 10-K/10-Q/8-K.
-- [x] **Phase 3** — XBRL normalization + metrics engine *(most important)*: sector-aware
-      `compute_all` wired to the DB, `computations` persistence, concept-map mirror, and a
-      five-company hand-verified suite (MSFT/GOOGL/CAT/JPM + a messy small-cap).
-- [x] **Phase 4** — Deterministic verifier *(second most important)*: V1–V5 (Tier 1) plus the
-      §14 regeneration policy (blocking FAIL → regenerate ≤2 → else manual-review) and
-      `verification_results` persistence. Mutation battery green.
-- [x] **Phase 5** — LLM layer + P1/P2 pipeline: litellm router (models from env), versioned
-      verbatim prompts, pydantic stage schemas, claim-graph persistence, the
-      P0→P1→metrics→P2→verify orchestrator, and the golden-set eval harness + `finwatch eval`
-      (recorded run meets the DoD: critical recall 100%, verifier pass). Live bake-off is
-      operator-run with keys.
-- [x] **Phase 6** — Signal engine + shadow log: the deterministic decision matrix (Tier 1)
-      wired into the pipeline via adapters; P3 writes rationale only while the engine decides
-      the posture/signal (so V3 re-derivation is always an exact match); one-notch escalation
-      toward caution; watch records → `NOT_APPLICABLE_WATCHLIST`; every owned evaluation logged
-      to the shadow table; `finwatch shadow report`.
-- [x] **Phase 7** — Digest + demo + release polish: deterministic markdown renderer
-      (reproducible from the DB, no LLM at render time), `finwatch demo` (zero-key, bundled
-      fixtures), `finwatch digest [--since] [--until] [--signals] [--out]`, and this README.
-- [x] **Review hardening (post-v0.2)** — an external adversarial review drove fixes across the
-      trust layer: the production pipeline is now wired into the CLI (`process`/`analyze`/
-      `verify`); the verifier no longer skips V2 accounting identities, re-derives the full P3
-      decision (V3), is sign-aware (V1) and catches the `$N target` price form (V5), and now
-      scans P3 rationale prose; XBRL is point-in-time (no future-filed facts) with per-accessor
-      tag resolution and period-matched valuation history; LLM output contracts (vocabularies +
-      claim graph) are enforced by the schemas; and several signal-matrix edge cases were
-      corrected. See the `fix:`/`feat:` commits for the finding-by-finding detail.
-- [x] **RipplX web prototype** — local FastAPI adapter, structured presentation contracts,
-      real bundled-demo projection, session-only LLM credentials, sequential sync/analysis jobs,
-      and a lean React/TypeScript interface for the Brief, holdings, evidence, metrics, settings,
-      and shadow track record.
-
-## Quickstart (development)
-
-```bash
-uv sync                     # create venv, install deps
-uv run finwatch --help      # see the CLI surface
-uv run pytest               # run the test suite
-```
-
-`finwatch` requires a SEC User-Agent for any command that hits EDGAR. Copy `.env.example` to
-`.env` and set:
-
-```
-SEC_USER_AGENT="Your Name your-email@example.com"
-```
-
-The SEC requires this header for all API access; finwatch refuses to make network calls
-without it.
-
-Then track holdings, pull their filings, run the analysis pipeline, and read the digest:
-
-```bash
-uv run finwatch init                              # create the database
-uv run finwatch add AAPL --shares 10 --cost 150   # owned holding (thesis optional)
-uv run finwatch watch MSFT                         # track without ownership
-uv run finwatch ingest                             # pull filings, XBRL facts, EOD prices
-uv run finwatch process                            # run P0→P1→metrics→P2→verify→P3, persist analyses
-uv run finwatch digest                             # render the markdown digest from the DB
-```
-
-`process` (and `analyze TICKER`) run the LLM stages, so set the model strings in `.env`
-(`FINWATCH_MODEL_EXTRACT`, `FINWATCH_MODEL_REASON` — any litellm model string). `ingest` and
-`digest` need no model; `finwatch demo` needs no config at all. `finwatch verify ACCESSION`
-re-runs the deterministic verifier on a stored analysis offline.
-
-> **Dev note:** if `uv run finwatch` can't import the package (a uv/`site` editable-install
-> quirk on some Python builds), reinstall it non-editable: `uv sync --no-editable`. Tests are
-> unaffected — they run against `src/` directly.
-
-## What this is — and is NOT
-
-finwatch is an **open-source research tool**. It does **not** provide investment advice.
-
-- The LLM never performs arithmetic and never sources a number from its own weights. Numbers
-  enter only from (a) SEC XBRL structured data or (b) verbatim extraction with full
-  provenance. All computation happens in deterministic Python, and a deterministic verifier
-  is the compile pass: analyses that fail it do not ship.
-- The default digest ships **review postures** (critical_review / risk_review / monitor /
-  positive_support / insufficient_data), never trade instructions.
-- A signal engine exists but runs in **shadow mode** — its hypothetical signals are
-  experimental, unvalidated output, logged to build an auditable track record. They are
-  visible only behind an explicit `--signals` flag and are OFF by default.
-- **You are responsible for your own decisions.**
-
-### Shadow-signal promotion policy
-
-Shadow signals are trade-action *vocabulary* (e.g. `STRONG_REVIEW_SELL`) evaluated by the
-deterministic matrix and logged to `signal_shadow_log` on every owned evaluation — with the
-rules that fired, the rules skipped (and why), the computed inputs, and the EOD price at
-evaluation. They are **never** shown in the default digest. A hypothetical signal may become
-default-visible only after **all** of the following hold:
-
-1. **≥ 100 logged shadow evaluations**, and
-2. a **human audit of ≥ 20 sampled cases**, and
-3. the acceptance gates below pass.
-
-Until then, the product ships **review postures**, and `finwatch shadow report` /
-`finwatch digest --signals` surface the shadow record clearly labelled *unvalidated,
-educational*. Track record ≠ endorsement.
-
-## Acceptance gates (v0.2 release checklist)
-
-1. Zero V1 numeric orphans across real filings — every rendered number traces to a computation,
-   an XBRL fact, or a verbatim evidence snippet.
-2. 100% recall on critical golden-set items (a missed going-concern is disqualifying); ≥ 90% on high.
-3. 100% V3 agreement between each P3 output and a fresh matrix re-derivation.
-4. Boring-filing silence — routine filings collapse to a single line, never an alert.
-5. `finwatch demo` works on a fresh clone with no keys, in under 60 seconds.
-6. A 10-ticker weekly digest completes in minutes and well under $0.10 at bake-off pricing.
-7. The shadow log is populated for every evaluated filing; `--signals` output carries the
-   unvalidated-shadow label.
+The original v0.2 research specification is archived at
+[`docs/CLAUDE_v0.2_full_spec.md`](docs/CLAUDE_v0.2_full_spec.md). It describes historical scope,
+not the current launch runtime.
 
 ## License
 

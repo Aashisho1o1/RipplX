@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
-import { api } from "../api/client";
+import { api, ApiError } from "../api/client";
 import { DisclaimerFooter } from "../components/DisclaimerFooter";
 import { JobProgress } from "../components/JobProgress";
 import { MetricTable } from "../components/MetricTable";
@@ -17,7 +17,7 @@ export function CompanyPage() {
   const [job, setJob] = useState<Job | null>(null); const [jobError, setJobError] = useState("");
   const load = useCallback((signal: AbortSignal) => api<Metrics>(`/api/companies/${ticker}/metrics?as_of=${asOf}&demo=${demo}`, { signal }), [ticker, asOf, demo]);
   const resource = useResource(load, [ticker, asOf, demo]);
-  useEffect(() => { if (!job || !["queued", "running"].includes(job.state)) return; const timer = window.setInterval(() => api<Job>(`/api/jobs/${job.id}`).then(next => { setJob(next); if (!["queued", "running"].includes(next.state)) resource.refresh(); }), 700); return () => window.clearInterval(timer); }, [job, resource.refresh]);
+  useEffect(() => { if (!job || !["queued", "running"].includes(job.state)) return; const timer = window.setInterval(() => api<Job>(`/api/jobs/${job.id}`).then(next => { setJob(next); if (!["queued", "running"].includes(next.state)) resource.refresh(); }).catch(reason => { setJobError(reason instanceof ApiError ? reason.message : "Job status was lost after a restart."); setJob(null); }), 700); return () => window.clearInterval(timer); }, [job, resource.refresh]);
   async function start(kind: "sync" | "analyze") { setJobError(""); if (kind === "analyze" && !bootstrap.analysis_configured) { navigate("/settings"); return; } try { setJob(await api<Job>(`/api/jobs/${kind === "sync" ? "sync" : "analyze"}`, { method: "POST", body: JSON.stringify({ ticker }) })); } catch (reason) { setJobError(reason instanceof Error ? reason.message : "Operation could not start."); } }
   if (!resource.data) return <main className="page">{resource.loading ? <p className="loading">Loading verified numbers…</p> : <div className="notice">{resource.error?.message}</div>}</main>;
   const metrics = resource.data;

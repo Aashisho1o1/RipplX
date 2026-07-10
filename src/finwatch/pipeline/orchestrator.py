@@ -1,9 +1,8 @@
-"""Pipeline orchestrator: P0 → P1 → metrics → P2 → verify (per filing).
+"""Pipeline orchestrator: P0 → P1 → starter metrics → verify (per filing).
 
-Deterministic control flow around the (stochastic) LLM stages. P1 + metrics run for
-every filing; P2 runs when the filing is material (overall_severity ≥ MEDIUM or any
-red flag); the verifier gates the result and, on a blocking FAIL, the §14 policy
-flags manual review. P3 (the signal engine) is Phase 6 — V3 is therefore skipped here.
+Deterministic control flow around one stochastic extraction stage. The verifier gates
+the result and any blocking failure withholds the entire LLM-derived presentation.
+P2/P3 research modules are deliberately outside the prototype launch path.
 """
 from __future__ import annotations
 
@@ -13,8 +12,8 @@ from datetime import UTC, datetime
 
 from finwatch.core.types import DISCLAIMER
 from finwatch.db.repositories import Filing, Repo
-from finwatch.llm.schemas import P1Output, P2Output
-from finwatch.llm.stages import P1Extractor, P2Explainer
+from finwatch.llm.schemas import P1Output
+from finwatch.llm.stages import P1Extractor
 from finwatch.metrics.envelope import MetricsBundle
 from finwatch.metrics.service import MetricsService
 from finwatch.pipeline.progress import ProgressCallback, StageReporter
@@ -22,13 +21,10 @@ from finwatch.preprocess.diff import RiskFactorDiff
 from finwatch.preprocess.preprocessor import Preprocessor
 from finwatch.verify.checks import EvidenceClaim, VerificationReport, VerifyBundle
 from finwatch.verify.orchestrator import (
-    fact_values_from_repo,
     persist_report,
     run_with_regeneration,
     section_texts_from_repo,
 )
-
-_P2_MATERIAL = frozenset({"critical", "high", "medium"})
 
 
 @dataclass
@@ -38,17 +34,9 @@ class FilingAnalysis:
     p1: P1Output
     p1_analysis_id: int
     metrics: MetricsBundle
-    p2: P2Output | None
     verification: VerificationReport
     manual_review: bool
     starter_metrics: list = field(default_factory=list)
-
-
-def p2_gate(p1: P1Output) -> bool:
-    """P2 runs on material filings: overall_severity ≥ MEDIUM, or a non-empty red-flag
-    register regardless of severity (CLAUDE.md §12)."""
-    return p1.classification.overall_severity in _P2_MATERIAL or bool(p1.red_flags)
-
 
 def risk_diff_to_dict(diff: RiskFactorDiff) -> dict:
     def para(p):
@@ -64,42 +52,38 @@ def risk_diff_to_dict(diff: RiskFactorDiff) -> dict:
 
 def assemble_verify_bundle(
     p1: P1Output,
-    p2: P2Output | None,
     metrics: MetricsBundle,
     section_texts: dict[str, str],
-    fact_values: list[float],
     *,
     disclaimer: str = DISCLAIMER,
 ) -> VerifyBundle:
     """Build the VerifyBundle from the analysis. The rendered text is the verifiable
-    analysis summary (red flags, net reads, and verbatim evidence snippets). Its numbers
-    must come from evidence snippets or deterministic metrics, which are V1's candidate
-    pool. P3 is outside the launch pipeline, so V3 intentionally returns not-applicable."""
+    launch projection: qualitative headlines plus exact evidence quotes. V1 candidates
+    are only those quotes and deterministic starter metrics; an unrelated XBRL fact can
+    never legitimize an authored number. P3 is outside the launch pipeline, so V3 is
+    intentionally not applicable."""
     assert disclaimer is not None, "verify bundle requires disclaimer_text (V5)"
-    lines: list[str] = []
-    for rf in p1.red_flags:
-        lines.append(f"Red flag: {rf.flag} ({rf.severity}).")
-    for mi in p1.material_items:
-        lines.append(f"{mi.headline} [{mi.event_type}]")
-    if p2 is not None:
-        for rec in p2.records_affected:
-            lines.append(rec.net_read.text)
+    authored_lines = [finding.headline for finding in p1.findings]
+    lines = list(authored_lines)
     evidence: list[EvidenceClaim] = []
-    for c in p1.claims:
-        if c.claim_type == "evidence" and c.provenance is not None:
-            pv = c.provenance
+    for finding_index, finding in enumerate(p1.findings):
+        for evidence_index, pv in enumerate(finding.evidence):
             lines.append(pv.snippet)
             evidence.append(EvidenceClaim(
-                claim_id=c.claim_id, accession_number=pv.accession_number,
+                claim_id=f"finding-{finding_index + 1}-evidence-{evidence_index + 1}",
+                accession_number=pv.accession_number,
                 section_key=pv.section_key, char_start=pv.char_start, char_end=pv.char_end,
                 snippet=pv.snippet, text_sha256=None,
             ))
     return VerifyBundle(
         rendered_text="\n".join(lines),
+        authored_text="\n".join(authored_lines),
         metrics=metrics,
-        fact_store_values=fact_values,
+        fact_store_values=[],
         evidence_claims=evidence,
         section_texts=section_texts,
+        extraction_confidence=p1.extraction_confidence,
+        extraction_gaps=list(p1.gaps),
         trade_action=None,
         disclaimer_text=disclaimer,
     )
@@ -111,19 +95,15 @@ class Orchestrator:
         repo: Repo,
         preprocessor: Preprocessor,
         p1: P1Extractor,
-        p2: P2Explainer,
         metrics_service: MetricsService,
         *,
-        companyfacts_provider: Callable[[str], dict],
         now_fn: Callable[[], str] | None = None,
         disclaimer: str = DISCLAIMER,
     ) -> None:
         self.repo = repo
         self.preprocessor = preprocessor
         self.p1 = p1
-        self.p2 = p2
         self.metrics_service = metrics_service
-        self.companyfacts_provider = companyfacts_provider
         self._now_fn = now_fn or (lambda: datetime.now(UTC).isoformat())
         self.disclaimer = disclaimer
 
@@ -133,7 +113,6 @@ class Orchestrator:
         filing: Filing,
         html: str | None,
         as_of: str,
-        records: list,
         resume: bool = True,
         on_stage: ProgressCallback | None = None,
     ) -> FilingAnalysis:
@@ -241,14 +220,14 @@ class Orchestrator:
                 lambda result: {
                     "analysis_id": result[1],
                     "severity": result[0].classification.overall_severity,
-                    "claim_count": len(result[0].claims),
+                    "finding_count": len(result[0].findings),
                 },
             )
 
         # --- metrics -------------------------------------------------------
         # Persist to `computations` so the digest renders "Verified numbers" straight
         # from the DB (deterministic, no LLM at render time — CLAUDE.md §15).
-        metrics_were_complete = reporter.is_complete("metrics")
+        metrics_were_complete = resume and reporter.is_complete("metrics")
 
         def compute_metrics():
             result = self.metrics_service.compute(filing.cik, as_of=as_of)
@@ -266,42 +245,12 @@ class Orchestrator:
             },
         )
 
-        # --- P2: portfolio impact (material filings only) ------------------
-        p2_out = None
-        if p2_gate(p1_out) and records:
-            stored_p2 = self.repo.latest_analysis(filing.accession_number, "P2")
-            if reusable("impact", stored_p2):
-                assert stored_p2 is not None
-                p2_out = P2Output.model_validate_json(stored_p2.output_json)
-                reporter.completed(
-                    "impact",
-                    {"analysis_id": stored_p2.id, "resumed": True},
-                    message="Impact assessed (reused stored analysis)",
-                )
-            else:
-                p2_out, _, _ = run_stage(
-                    "impact",
-                    lambda: self.p2.run(
-                        extraction=p1_out.model_dump(),
-                        records=records,
-                        accession_number=filing.accession_number,
-                        ticker=ticker,
-                    ),
-                    lambda result: {
-                        "analysis_id": result[1],
-                        "records_assessed": len(result[0].records_affected),
-                    },
-                )
-        else:
-            reporter.skipped("impact", "Impact assessment not required for this filing")
-
         # --- verify: launch-output gate (V1/V4/V5; V3 is not applicable) ------
         # This gate covers the failure modes regenerating an LLM stage can fix.
         reporter.running("verify")
         bundle = assemble_verify_bundle(
-            p1_out, p2_out, metrics,
+            p1_out, metrics,
             section_texts_from_repo(self.repo, filing.accession_number),
-            fact_values_from_repo(self.repo, filing.cik),
             disclaimer=self.disclaimer,
         )
         # A recorded/deterministic response cannot self-repair, so give up immediately
@@ -325,6 +274,6 @@ class Orchestrator:
 
         return FilingAnalysis(
             accession_number=filing.accession_number, ticker=ticker, p1=p1_out,
-            p1_analysis_id=p1_aid, metrics=metrics, p2=p2_out,
+            p1_analysis_id=p1_aid, metrics=metrics,
             verification=report, manual_review=report.verdict == "FAIL",
         )

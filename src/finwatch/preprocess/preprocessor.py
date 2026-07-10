@@ -7,6 +7,7 @@ comparable filing. P1 then receives already-labelled sections.
 """
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -36,7 +37,25 @@ def route_sections(form_type: str, html: str) -> list[Section]:
     doc = html_to_text(html)
     family = form_family(form_type)
     if family == "10-K":
-        return split_10k(doc)
+        sections = split_10k(doc)
+        if sections or not is_amendment(form_type) or not doc.text.strip():
+            return sections
+        # Part-III/exhibit-only 10-K/A filings legitimately contain none of the
+        # launch router's Item 1/1A/3/7/7A/8/9A sections. Treat the complete amendment
+        # as one explicit section instead of misclassifying a valid amendment as a
+        # parser failure. P1 can then say routine/insufficient with exact provenance.
+        return [
+            Section(
+                section_key="amendment",
+                title="Form 10-K amendment",
+                char_start=0,
+                char_end=len(doc.text),
+                element_id=doc.element_id_at(0),
+                is_furnished=False,
+                text=doc.text,
+                text_sha256=hashlib.sha256(doc.text.encode()).hexdigest(),
+            )
+        ]
     if family == "10-Q":
         return split_10q(doc)
     if family == "8-K":
