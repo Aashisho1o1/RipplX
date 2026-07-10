@@ -16,6 +16,9 @@ STAGE_P1 = "P1_extractor"
 STAGE_P2 = "P2_impact"
 STAGE_P3 = "P3_rationale"
 _STAGE_VERSIONS = {STAGE_P1: "v3"}
+# Stage prompts MUST embed the shared foundation block (untrusted-input / prompt-injection
+# defense). ``foundation`` itself is not a stage and carries no placeholder.
+_STAGE_PROMPTS = frozenset({STAGE_P1, STAGE_P2, STAGE_P3})
 
 
 def _read(name: str) -> str:
@@ -31,6 +34,17 @@ def load_prompt(stage: str) -> tuple[str, str]:
     block spliced in where the placeholder appears."""
     text = _read(stage)
     version = f"{stage}.{_STAGE_VERSIONS.get(stage, PROMPT_SUITE_VERSION)}"
+    # Fail closed if a stage prompt has lost its foundation placeholder: silently
+    # shipping a stage without the injection-defense block (the only visible signal
+    # being a dropped ``+foundation`` version suffix) is exactly the latent footgun
+    # this guards against. Require exactly one placeholder; ``foundation`` is exempt.
+    placeholder_count = text.count(_FOUNDATION_PLACEHOLDER)
+    if stage in _STAGE_PROMPTS and placeholder_count != 1:
+        raise ValueError(
+            f"stage prompt {stage!r} must contain exactly one {_FOUNDATION_PLACEHOLDER} "
+            f"placeholder (found {placeholder_count}); the foundation block must never "
+            f"be silently omitted"
+        )
     if _FOUNDATION_PLACEHOLDER in text:
         text = text.replace(_FOUNDATION_PLACEHOLDER, _read("foundation"))
         version = f"{version}+foundation.{PROMPT_SUITE_VERSION}"

@@ -59,6 +59,22 @@ def test_foundation_prompt_has_its_own_version():
     assert version == "foundation.v2"
 
 
+def test_stage_prompt_without_foundation_placeholder_hard_fails(monkeypatch):
+    # If a stage prompt loses its [FOUNDATION BLOCK] marker, the injection-defense
+    # foundation must NOT be silently omitted — load_prompt fails closed. `foundation`
+    # itself carries no placeholder and stays loadable.
+    from finwatch.llm import prompts as prompts_mod
+
+    monkeypatch.setattr(prompts_mod, "_read", lambda _name: "stage body with no placeholder")
+    for stage in (prompts_mod.STAGE_P1, prompts_mod.STAGE_P2, prompts_mod.STAGE_P3):
+        with pytest.raises(ValueError, match="FOUNDATION BLOCK"):
+            prompts_mod.load_prompt(stage)
+
+    body, version = prompts_mod.load_prompt("foundation")
+    assert body == "stage body with no placeholder"
+    assert version == "foundation.v2"
+
+
 # ---- JSON extraction -------------------------------------------------------
 def test_extract_json_plain_and_fenced_and_prose():
     assert extract_json('{"a": 1}') == {"a": 1}
