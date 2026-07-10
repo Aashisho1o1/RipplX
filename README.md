@@ -48,7 +48,7 @@ The launch path does **not** execute or expose:
 - offline reverify or historical analysis replay;
 - portfolio accounting, position sizing, rebalancing, thesis checks, or extended valuation and
   forensic-score suites; or
-- multiple production providers/models.
+- open-ended provider/model routing (only the `openai/` and `openrouter/` prefixes are accepted).
 
 Dormant research modules and historical tests may remain in the repository to preserve prior
 work, but the launch assembly does not construct, execute, render, or advertise them.
@@ -101,9 +101,10 @@ OPENAI_API_KEY=
 
 - `SEC_USER_AGENT` identifies the EDGAR client. The local browser can also collect it during
   setup; unlike an API key, this setting is persisted in SQLite.
-- `FINWATCH_MODEL` is the single operator-selected launch model and must use the `openai/`
-  LiteLLM prefix. The browser displays it read-only.
-- `OPENAI_API_KEY` is the only production provider credential read from the environment.
+- `FINWATCH_MODEL` is the single operator-selected launch model and must use the `openai/` or
+  `openrouter/` LiteLLM prefix. The browser displays it read-only.
+- `OPENAI_API_KEY` or `OPENROUTER_API_KEY` (matching the model prefix) is the production provider
+  credential read from the environment.
 - Instead of setting `OPENAI_API_KEY`, a local user may enter a key in Settings. That key exists
   only in the running Python process, is never written to SQLite or returned by the API, and is
   lost on restart. `FINWATCH_MODEL` must still be configured by the operator.

@@ -6,7 +6,7 @@ import os
 import threading
 from dataclasses import dataclass
 
-from finwatch.config import PRODUCTION_MODEL_PREFIX
+from finwatch.config import PRODUCTION_MODEL_PREFIXES
 from finwatch.db.repositories import Repo
 
 SETTING_USER_AGENT = "web.sec_user_agent"
@@ -39,14 +39,20 @@ class RuntimeSecrets:
 
 
 def _environment_key_configured() -> bool:
-    return bool(os.environ.get("OPENAI_API_KEY", "").strip())
+    # openai/* reads OPENAI_API_KEY; openrouter/* reads OPENROUTER_API_KEY. Either
+    # environment credential counts as configured for the matching model prefix.
+    return bool(
+        os.environ.get("OPENAI_API_KEY", "").strip()
+        or os.environ.get("OPENROUTER_API_KEY", "").strip()
+    )
 
 
 def production_model() -> str | None:
     model = os.environ.get("FINWATCH_MODEL", "").strip()
-    if model and not model.startswith(PRODUCTION_MODEL_PREFIX):
+    if model and not model.startswith(PRODUCTION_MODEL_PREFIXES):
         raise RuntimeError(
-            f"FINWATCH_MODEL must use the {PRODUCTION_MODEL_PREFIX!r} production provider"
+            "FINWATCH_MODEL must use one of these production providers: "
+            + ", ".join(PRODUCTION_MODEL_PREFIXES)
         )
     return model or None
 

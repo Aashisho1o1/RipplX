@@ -13,7 +13,10 @@ from pathlib import Path
 from pydantic import BaseModel, field_validator
 
 DEFAULT_ENV_PATH = Path(".env")
-PRODUCTION_MODEL_PREFIX = "openai/"
+# Launch accepts a small allowlist of litellm provider prefixes: OpenAI direct and
+# OpenRouter (which proxies cheap models such as deepseek/gemini through one fixed,
+# known endpoint). Other providers stay out of the production path.
+PRODUCTION_MODEL_PREFIXES = ("openai/", "openrouter/")
 
 
 class ConfigError(RuntimeError):
@@ -30,9 +33,10 @@ class Config(BaseModel):
     @field_validator("model")
     @classmethod
     def one_production_provider(cls, value: str | None) -> str | None:
-        if value is not None and not value.startswith(PRODUCTION_MODEL_PREFIX):
+        if value is not None and not value.startswith(PRODUCTION_MODEL_PREFIXES):
             raise ValueError(
-                f"FINWATCH_MODEL must use the {PRODUCTION_MODEL_PREFIX!r} production provider"
+                "FINWATCH_MODEL must use one of these production providers: "
+                + ", ".join(PRODUCTION_MODEL_PREFIXES)
             )
         return value
 

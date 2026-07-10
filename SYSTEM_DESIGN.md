@@ -208,9 +208,9 @@ tokens. This model-call bound is distinct from the two persisted full-attempt bo
    `render_brief_markdown(BriefView)` serializes the same DTO returned to the browser and escapes
    filing/model text as text.
 
-9. **Production model contract** — `FINWATCH_MODEL` must have an `openai/` prefix and production
-   credential discovery recognizes only `OPENAI_API_KEY` plus the process-memory browser key.
-   Model bake-off flexibility is developer tooling, not runtime provider routing.
+9. **Production model contract** — `FINWATCH_MODEL` must have an `openai/` or `openrouter/` prefix
+   and production credential discovery recognizes `OPENAI_API_KEY` / `OPENROUTER_API_KEY` plus the
+   process-memory browser key. Model bake-off flexibility is developer tooling, not runtime provider routing.
 
 10. **Ticker-only contract** — public holding create/update schemas accept identity only. Shares,
     cost basis, targets, horizons, and theses are neither collected nor returned. Dormant DB columns

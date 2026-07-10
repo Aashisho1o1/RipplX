@@ -20,13 +20,14 @@ def test_load_config_reads_user_agent_from_env(monkeypatch, tmp_path):
     assert cfg.db_path == "./data/finwatch.db"
 
 
-def test_load_config_accepts_only_one_openai_production_model(monkeypatch, tmp_path):
+def test_load_config_accepts_allowlisted_production_providers(monkeypatch, tmp_path):
     monkeypatch.setenv("SEC_USER_AGENT", "Test User test@example.com")
-    monkeypatch.setenv("FINWATCH_MODEL", "openai/evaluated-model")
-    assert load_config(env_path=tmp_path / "missing.env").model == "openai/evaluated-model"
+    for model in ("openai/evaluated-model", "openrouter/deepseek/deepseek-v4-flash"):
+        monkeypatch.setenv("FINWATCH_MODEL", model)
+        assert load_config(env_path=tmp_path / "missing.env").model == model
 
     monkeypatch.setenv("FINWATCH_MODEL", "anthropic/other-model")
-    with pytest.raises(ValueError, match="openai/"):
+    with pytest.raises(ValueError, match="production providers"):
         load_config(env_path=tmp_path / "missing.env")
 
 

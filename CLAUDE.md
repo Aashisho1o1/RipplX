@@ -269,8 +269,9 @@ going-concern, auditor, control, and material-cyber cases. No evidence means no 
 accession, ticker, and form must match trusted filing metadata before persistence.
 
 The combined P1 input is capped at 240,000 characters and output at 2,000 tokens. Production accepts
-one `FINWATCH_MODEL` using the `openai/` prefix and only `OPENAI_API_KEY`; provider/model flexibility
-inside dormant developer utilities is not a production configuration promise. The key may come from
+one `FINWATCH_MODEL` using the `openai/` or `openrouter/` prefix, with the matching `OPENAI_API_KEY`
+or `OPENROUTER_API_KEY`; other providers and base-URL overrides stay out of the launch path. Broader
+provider/model flexibility inside dormant developer utilities is not a production configuration promise. The key may come from
 the environment or browser session memory and must never be logged, persisted, or returned.
 
 ---
