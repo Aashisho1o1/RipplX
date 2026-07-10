@@ -92,7 +92,7 @@ def serve(
     if host not in {"127.0.0.1", "localhost", "::1"} and not allow_remote:
         console.print(
             "[yellow]Refusing a non-loopback bind.[/] Pass [bold]--allow-remote[/] "
-            "only if you understand that this prototype has no authentication."
+            "only for an authenticated hosted alpha."
         )
         raise typer.Exit(code=1)
     try:
@@ -102,7 +102,13 @@ def serve(
     except (ImportError, RuntimeError) as exc:
         console.print(f"[yellow]{exc}[/]")
         raise typer.Exit(code=1) from exc
-    uvicorn.run(create_app(), host=host, port=port, log_level="info")
+    remote = host not in {"127.0.0.1", "localhost", "::1"}
+    try:
+        web_app = create_app(remote=remote)
+    except RuntimeError as exc:
+        console.print(f"[red]Web security configuration error:[/] {exc}")
+        raise typer.Exit(code=1) from exc
+    uvicorn.run(web_app, host=host, port=port, log_level="info")
 
 
 @app.command()
@@ -126,11 +132,11 @@ def add(
     )
 
 
-def _require_models(cfg: Config) -> None:
-    if not cfg.model_extract or not cfg.model_reason:
+def _require_model(cfg: Config) -> None:
+    if not cfg.model:
         console.print(
-            "[red]LLM models not configured.[/] Set [bold]FINWATCH_MODEL_EXTRACT[/] and "
-            "[bold]FINWATCH_MODEL_REASON[/] (litellm model strings) in your .env to run the "
+            "[red]LLM model not configured.[/] Set [bold]FINWATCH_MODEL[/] to one "
+            "OpenAI-backed litellm model string in your .env to run the "
             "analysis pipeline. No key is needed for [bold]finwatch demo[/]."
         )
         raise typer.Exit(code=1)
@@ -149,13 +155,12 @@ def _run_pipeline(cfg: Config, *, cik: str | None):
     repo = Repo(conn)
     cache_dir = Path(cfg.db_path).parent / "cache" if cfg.db_path != ":memory:" else None
     edgar = EdgarClient(cfg.sec_user_agent, cache_dir=cache_dir)
+    llm = LiteLLMClient(cfg.model)
     orch = build_orchestrator(
         repo,
-        llm_extract=LiteLLMClient(cfg.model_extract),
-        llm_reason=LiteLLMClient(cfg.model_reason),
+        llm=llm,
         companyfacts_provider=lambda c: edgar.companyfacts(c),
-        model_extract=cfg.model_extract,
-        model_reason=cfg.model_reason,
+        model=cfg.model,
     )
 
     def fetch_html(url: str) -> str:
@@ -190,7 +195,7 @@ def analyze(
     from finwatch.db import Repo, init_db
 
     cfg = _config_or_exit()
-    _require_models(cfg)
+    _require_model(cfg)
     conn = init_db(cfg.db_path)
     company = Repo(conn).get_company_by_ticker(ticker)
     conn.close()
@@ -258,7 +263,7 @@ def process(
     from finwatch.db import Repo, init_db
 
     cfg = _config_or_exit()
-    _require_models(cfg)
+    _require_model(cfg)
     cik = None
     if ticker:
         conn = init_db(cfg.db_path)

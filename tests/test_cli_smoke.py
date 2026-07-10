@@ -51,3 +51,11 @@ def test_init_creates_database_file(monkeypatch, tmp_path):
     result = runner.invoke(app, ["init"])
     assert result.exit_code == 0
     assert db.exists()
+
+
+def test_remote_serve_refuses_to_start_without_alpha_auth(monkeypatch):
+    monkeypatch.delenv("FINWATCH_AUTH_TOKEN", raising=False)
+    monkeypatch.delenv("FINWATCH_ALLOWED_HOSTS", raising=False)
+    result = runner.invoke(app, ["serve", "--host", "0.0.0.0", "--allow-remote"])
+    assert result.exit_code == 1
+    assert "FINWATCH_AUTH_TOKEN" in result.output

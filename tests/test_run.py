@@ -68,8 +68,8 @@ def _seed(repo, *, owned=1, url="https://www.sec.gov/x.htm"):
 def _orch(repo):
     llm = FakeLLMClient(responder=_responder)
     return build_orchestrator(
-        repo, llm_extract=llm, llm_reason=llm, companyfacts_provider=lambda _c: MSFT_CF,
-        model_extract="fake/x", model_reason="fake/r",
+        repo, llm=llm, companyfacts_provider=lambda _c: MSFT_CF,
+        model="fake/model",
         now_fn=lambda: "t")
 
 
@@ -78,7 +78,11 @@ def test_process_latest_runs_pipeline_persists_and_digest_renders():
     _seed(repo)
     assert newest_filing_to_analyze(repo).accession_number == ACCN
 
-    results = process_latest(repo, _orch(repo), fetch_html=lambda _u: TENQ, now_fn=lambda: "t")
+    orchestrator = _orch(repo)
+    assert orchestrator.p1.llm is orchestrator.p2.llm
+    results = process_latest(
+        repo, orchestrator, fetch_html=lambda _u: TENQ, now_fn=lambda: "t"
+    )
     assert len(results) == 1 and results[0].ok
     assert results[0].verdict in ("PASS", "PASS_WITH_WARNINGS")
 
@@ -183,9 +187,9 @@ def test_transient_failure_is_retried_and_not_rendered_clean():
         return _P1
 
     llm = FakeLLMClient(responder=flaky)
-    orch = build_orchestrator(repo, llm_extract=llm, llm_reason=llm,
+    orch = build_orchestrator(repo, llm=llm,
                               companyfacts_provider=lambda _c: MSFT_CF,
-                              model_extract="x", model_reason="r", now_fn=lambda: "t")
+                              model="fake/model", now_fn=lambda: "t")
     r = process_latest(repo, orch, fetch_html=lambda _u: TENQ, now_fn=lambda: "t")
     assert not r[0].ok and "pipeline failed" in r[0].error
     assert repo.get_filing(ACCN).status == "failed"
@@ -265,14 +269,13 @@ def test_failed_parse_rerun_keeps_previous_verified_analysis():
 
 
 # ---- CLI guardrails (no network) -------------------------------------------
-def test_cli_process_requires_models(monkeypatch, tmp_path):
+def test_cli_process_requires_model(monkeypatch, tmp_path):
     from typer.testing import CliRunner
 
     from finwatch.cli import app
 
     monkeypatch.setenv("SEC_USER_AGENT", "Test t@e.com")
     monkeypatch.setenv("FINWATCH_DB", str(tmp_path / "fw.db"))
-    monkeypatch.delenv("FINWATCH_MODEL_EXTRACT", raising=False)
-    monkeypatch.delenv("FINWATCH_MODEL_REASON", raising=False)
+    monkeypatch.delenv("FINWATCH_MODEL", raising=False)
     result = CliRunner().invoke(app, ["process"])
-    assert result.exit_code == 1 and "models not configured" in result.output.lower()
+    assert result.exit_code == 1 and "model not configured" in result.output.lower()

@@ -36,14 +36,12 @@ def _now_iso() -> str:
 def build_orchestrator(
     repo: Repo,
     *,
-    llm_extract: LLMClient,
-    llm_reason: LLMClient,
+    llm: LLMClient,
     companyfacts_provider: CompanyFactsProvider,
-    model_extract: str | None = None,
-    model_reason: str | None = None,
+    model: str | None = None,
     now_fn: Callable[[], str] | None = None,
 ) -> Orchestrator:
-    """Wire the launch pipeline. P1 uses the extract model and P2 uses the reason model.
+    """Wire the launch pipeline. One production client/model serves both LLM stages.
 
     P3/shadow signals are deliberately not constructed or executed in the prototype launch
     path. The research implementation remains isolated under ``finwatch.signals`` until user
@@ -53,8 +51,8 @@ def build_orchestrator(
     metrics = MetricsService(repo, companyfacts_provider, now_fn=now_fn)
     return Orchestrator(
         repo, Preprocessor(repo, now_fn=now_fn),
-        P1Extractor(llm_extract, repo, model_label=model_extract, now_fn=now_fn),
-        P2Explainer(llm_reason, repo, model_label=model_reason, now_fn=now_fn),
+        P1Extractor(llm, repo, model_label=model, now_fn=now_fn),
+        P2Explainer(llm, repo, model_label=model, now_fn=now_fn),
         metrics, companyfacts_provider=companyfacts_provider, now_fn=now_fn)
 
 

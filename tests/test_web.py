@@ -57,6 +57,7 @@ def test_analyze_endpoint_rejects_historical_replay_controls(tmp_path):
 
 def test_bootstrap_setup_and_session_key_are_safe(tmp_path, monkeypatch):
     monkeypatch.delenv("SEC_USER_AGENT", raising=False)
+    monkeypatch.setenv("FINWATCH_MODEL", "openai/test")
     client, db_path = _client(tmp_path)
     assert client.get("/api/bootstrap").json()["setup_required"] is True
 
@@ -64,7 +65,6 @@ def test_bootstrap_setup_and_session_key_are_safe(tmp_path, monkeypatch):
         "/api/settings",
         json={
             "sec_user_agent": "Test User test@example.com",
-            "model_extract": "openai/test",
             "api_key": "secret-value",
         },
     )
@@ -73,6 +73,7 @@ def test_bootstrap_setup_and_session_key_are_safe(tmp_path, monkeypatch):
     assert body["setup_required"] is False
     assert body["api_key_configured"] is True
     assert body["api_key_source"] == "session"
+    assert body["model"] == "openai/test"
     assert "secret-value" not in response.text
 
     conn = init_db(str(db_path))
@@ -81,19 +82,24 @@ def test_bootstrap_setup_and_session_key_are_safe(tmp_path, monkeypatch):
     finally:
         conn.close()
     assert "secret-value" not in settings.values()
+    assert client.put("/api/settings", json={"model_extract": "anthropic/other"}).status_code == 422
+
+
+def test_only_openai_environment_credentials_configure_production(tmp_path, monkeypatch):
+    monkeypatch.setenv("SEC_USER_AGENT", "Test User test@example.com")
+    monkeypatch.setenv("FINWATCH_MODEL", "openai/test")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "must-be-ignored")
+
+    client, _ = _client(tmp_path)
+    bootstrap = client.get("/api/bootstrap").json()
+    assert bootstrap["model"] == "openai/test"
+    assert bootstrap["api_key_configured"] is False
 
 
 def test_restart_keeps_portfolio_results_but_drops_session_key(tmp_path, monkeypatch):
-    for name in (
-        "OPENAI_API_KEY",
-        "ANTHROPIC_API_KEY",
-        "GEMINI_API_KEY",
-        "GOOGLE_API_KEY",
-        "MISTRAL_API_KEY",
-        "GROQ_API_KEY",
-        "AZURE_API_KEY",
-    ):
-        monkeypatch.delenv(name, raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setenv("FINWATCH_MODEL", "openai/test")
 
     db_path = tmp_path / "finwatch.db"
     build_demo_db(str(db_path)).close()
@@ -102,8 +108,6 @@ def test_restart_keeps_portfolio_results_but_drops_session_key(tmp_path, monkeyp
         "/api/settings",
         json={
             "sec_user_agent": "Test User test@example.com",
-            "model_extract": "openai/test",
-            "model_reason": "openai/test",
             "api_key": "disposable-secret",
         },
     )
@@ -115,7 +119,7 @@ def test_restart_keeps_portfolio_results_but_drops_session_key(tmp_path, monkeyp
     )
     bootstrap = restarted.get("/api/bootstrap").json()
     assert bootstrap["sec_user_agent"] == "Test User test@example.com"
-    assert bootstrap["model_extract"] == "openai/test"
+    assert bootstrap["model"] == "openai/test"
     assert bootstrap["api_key_configured"] is False
     assert len(restarted.get("/api/holdings").json()["owned"]) == 2
     filing = restarted.get("/api/filings/0001683168-24-004848")

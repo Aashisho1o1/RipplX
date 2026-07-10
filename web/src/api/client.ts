@@ -3,13 +3,33 @@ export class ApiError extends Error {
 }
 
 const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL ?? "").replace(/\/+$/, "");
+export const AUTH_TOKEN_STORAGE_KEY = "finwatch_auth_token";
+
+export function readAuthToken(): string | null {
+  try { return window.sessionStorage.getItem(AUTH_TOKEN_STORAGE_KEY); }
+  catch { return null; }
+}
+
+export function storeAuthToken(token: string): void {
+  window.sessionStorage.setItem(AUTH_TOKEN_STORAGE_KEY, token.trim());
+}
+
+export function clearAuthToken(): void {
+  try { window.sessionStorage.removeItem(AUTH_TOKEN_STORAGE_KEY); }
+  catch { /* Storage can be unavailable in privacy-restricted browser contexts. */ }
+}
 
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   let response: Response;
   try {
+    const headers = new Headers(init?.headers);
+    if (!headers.has("Content-Type")) headers.set("Content-Type", "application/json");
+    headers.delete("Authorization");
+    const authToken = readAuthToken();
+    if (authToken) headers.set("Authorization", `Bearer ${authToken}`);
     response = await fetch(`${apiBaseUrl}${path}`, {
       ...init,
-      headers: { "Content-Type": "application/json", ...init?.headers },
+      headers,
     });
   } catch (error) {
     if (error instanceof DOMException && error.name === "AbortError") throw error;

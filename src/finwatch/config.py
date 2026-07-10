@@ -10,9 +10,10 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 DEFAULT_ENV_PATH = Path(".env")
+PRODUCTION_MODEL_PREFIX = "openai/"
 
 
 class ConfigError(RuntimeError):
@@ -24,8 +25,16 @@ class Config(BaseModel):
 
     sec_user_agent: str
     db_path: str = "./data/finwatch.db"
-    model_extract: str | None = None
-    model_reason: str | None = None
+    model: str | None = None
+
+    @field_validator("model")
+    @classmethod
+    def one_production_provider(cls, value: str | None) -> str | None:
+        if value is not None and not value.startswith(PRODUCTION_MODEL_PREFIX):
+            raise ValueError(
+                f"FINWATCH_MODEL must use the {PRODUCTION_MODEL_PREFIX!r} production provider"
+            )
+        return value
 
 
 def load_dotenv(path: Path = DEFAULT_ENV_PATH) -> None:
@@ -57,6 +66,5 @@ def load_config(env_path: Path = DEFAULT_ENV_PATH) -> Config:
     return Config(
         sec_user_agent=user_agent,
         db_path=os.environ.get("FINWATCH_DB", "./data/finwatch.db"),
-        model_extract=os.environ.get("FINWATCH_MODEL_EXTRACT") or None,
-        model_reason=os.environ.get("FINWATCH_MODEL_REASON") or None,
+        model=os.environ.get("FINWATCH_MODEL", "").strip() or None,
     )

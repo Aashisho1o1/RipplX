@@ -86,6 +86,7 @@ h1, h2, h3, p { margin-top: 0; }
 .field label { display: block; margin-bottom: 6px; color: var(--color-muted); font: 12px var(--font-mono); }
 .input { width: 100%; padding: 10px 12px; border: var(--border-hair); border-radius: var(--radius-sm); background: var(--color-panel-alt); color: var(--color-ink); }
 .input.mono-input { font-family: var(--font-mono); }
+.input[readonly] { cursor: default; color: var(--color-muted); }
 textarea.input { min-height: 100px; resize: vertical; }
 .helper { margin: 6px 0 0; color: var(--color-faint); font-size: 12px; line-height: 1.5; }
 .field-error { margin-top: 5px; color: var(--color-warn); font-size: 13px; }
@@ -103,6 +104,7 @@ textarea.input { min-height: 100px; resize: vertical; }
 .setup { position: relative; display: grid; min-height: 100vh; place-items: center; overflow: hidden; padding: 44px 24px; }
 .watermark { position: absolute; width: 640px; height: 640px; border-radius: 50%; background: radial-gradient(circle, var(--color-accent-wash), transparent 68%); }
 .setup-card { position: relative; width: min(100%, 680px); }
+.setup-card.unlock-card { width: min(100%, 520px); }
 .setup-kicker { color: var(--color-muted); font: 500 12px var(--font-mono); letter-spacing: var(--tracking-kicker); text-transform: uppercase; }
 .setup h1 { color: var(--color-ink); font: 500 var(--text-display)/1.2 var(--font-serif); letter-spacing: var(--tracking-tight); }
 .setup-lede { color: var(--color-body); font-size: var(--text-body-lg); line-height: 1.65; }

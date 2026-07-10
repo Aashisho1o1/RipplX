@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import secrets
 from contextlib import contextmanager
 from datetime import date, timedelta
 from pathlib import Path
@@ -18,13 +19,12 @@ from finwatch.ingest import TickerNotFoundError, build_service
 from finwatch.presentation import PresentationService
 from finwatch.web.jobs import JobConflictError, JobItem, JobRegistry
 from finwatch.web.runtime import (
-    SETTING_MODEL_EXTRACT,
-    SETTING_MODEL_REASON,
     SETTING_PERIOD,
     SETTING_USER_AGENT,
     RuntimeSecrets,
     resolve_settings,
 )
+from finwatch.web.security import LOCAL_ALLOWED_HOSTS, remote_allowed_hosts, remote_auth_token
 
 
 class ApiProblem(Exception):
@@ -42,17 +42,22 @@ class HoldingCreate(BaseModel):
 
 
 class SettingsUpdate(BaseModel):
-    sec_user_agent: str | None = None
+    model_config = ConfigDict(extra="forbid")
+
+    sec_user_agent: str | None = Field(default=None, max_length=256)
     period: Literal["30d", "60d", "90d", "180d", "1y"] | None = None
-    model_extract: str | None = None
-    model_reason: str | None = None
-    api_key: str | None = None
+    api_key: str | None = Field(default=None, max_length=512)
 
 
 class JobRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    ticker: str | None = None
+    ticker: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=15,
+        pattern=r"^[A-Za-z][A-Za-z0-9.-]*$",
+    )
 
 
 def _since_for_period(period: str) -> str:
@@ -75,31 +80,76 @@ def _compute_synced_metrics(service, cik: str, *, as_of: str) -> int:
     return sum(result.status.value == "computed" for result in bundle.all_results())
 
 
-def create_app(*, db_path: str | None = None, web_dist: str | Path | None = None):
+def create_app(
+    *,
+    db_path: str | None = None,
+    web_dist: str | Path | None = None,
+    remote: bool | None = None,
+    auth_token: str | None = None,
+    allowed_hosts: list[str] | None = None,
+):
     try:
         from fastapi import FastAPI
         from fastapi.middleware.cors import CORSMiddleware
+        from fastapi.middleware.trustedhost import TrustedHostMiddleware
         from fastapi.responses import FileResponse, JSONResponse
         from fastapi.staticfiles import StaticFiles
     except ImportError as exc:  # pragma: no cover - only hit without the web extra
         raise RuntimeError("Install RipplX web dependencies with `uv sync --extra web`.") from exc
 
     resolved_db = db_path or os.environ.get("FINWATCH_DB", "./data/finwatch.db")
+    if remote is None:
+        remote = os.environ.get("FINWATCH_REMOTE", "").strip().lower() in {"1", "true", "yes"}
     configured_dist = os.environ.get("FINWATCH_WEB_DIST")
     default_dist = Path(__file__).resolve().parents[3] / "web" / "dist"
     dist = Path(web_dist if web_dist is not None else configured_dist or default_dist)
-    app = FastAPI(title="RipplX local API", version="0.1.0")
+    app = FastAPI(
+        title="RipplX local API",
+        version="0.1.0",
+        docs_url=None if remote else "/docs",
+        redoc_url=None if remote else "/redoc",
+        openapi_url=None if remote else "/openapi.json",
+    )
     app.state.db_path = resolved_db
     app.state.secrets = RuntimeSecrets()
     app.state.jobs = JobRegistry()
+    app.state.remote = remote
+    expected_token = remote_auth_token(auth_token) if remote else None
+    trusted_hosts = remote_allowed_hosts(allowed_hosts) if remote else list(LOCAL_ALLOWED_HOSTS)
+
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=trusted_hosts)
 
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["http://127.0.0.1:5173", "http://localhost:5173"],
         allow_credentials=False,
         allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
-        allow_headers=["Content-Type"],
+        allow_headers=["Authorization", "Content-Type"],
     )
+
+    @app.middleware("http")
+    async def authenticate_remote_api(request, call_next):
+        if remote and request.url.path.startswith("/api/"):
+            authorization = request.headers.get("authorization", "")
+            scheme, _, candidate = authorization.partition(" ")
+            authenticated = (
+                scheme.lower() == "bearer"
+                and bool(candidate)
+                and expected_token is not None
+                and secrets.compare_digest(candidate, expected_token)
+            )
+            if not authenticated:
+                return JSONResponse(
+                    status_code=401,
+                    headers={"WWW-Authenticate": "Bearer"},
+                    content={
+                        "error": {
+                            "code": "authentication_required",
+                            "message": "A valid hosted-alpha access token is required.",
+                        }
+                    },
+                )
+        return await call_next(request)
 
     @app.middleware("http")
     async def same_origin_mutations(request, call_next):
@@ -109,7 +159,7 @@ def create_app(*, db_path: str | None = None, web_dist: str | Path | None = None
                 parsed = urlsplit(origin)
                 origin_host = parsed.netloc.lower()
                 request_host = request.headers.get("host", "").lower()
-                dev_hosts = {"127.0.0.1:5173", "localhost:5173"}
+                dev_hosts = set() if remote else {"127.0.0.1:5173", "localhost:5173"}
                 if origin_host != request_host and origin_host not in dev_hosts:
                     return JSONResponse(
                         status_code=403,
@@ -129,6 +179,10 @@ def create_app(*, db_path: str | None = None, web_dist: str | Path | None = None
             content={"error": {"code": exc.code, "message": exc.message}},
         )
 
+    @app.get("/healthz", include_in_schema=False)
+    def healthz():
+        return {"status": "ok"}
+
     @contextmanager
     def repo_context(demo: bool = False):
         connection = build_demo_db() if demo else init_db(app.state.db_path)
@@ -143,13 +197,10 @@ def create_app(*, db_path: str | None = None, web_dist: str | Path | None = None
             "setup_required": not bool(settings.sec_user_agent),
             "sec_user_agent": settings.sec_user_agent or "",
             "period": settings.period,
-            "model_extract": settings.model_extract or "",
-            "model_reason": settings.model_reason or "",
+            "model": settings.model or "",
             "api_key_configured": settings.api_key_configured,
             "api_key_source": settings.api_key_source,
-            "analysis_configured": bool(
-                settings.model_extract and settings.model_reason and settings.api_key_configured
-            ),
+            "analysis_configured": bool(settings.model and settings.api_key_configured),
         }
 
     @app.get("/api/bootstrap")
@@ -199,8 +250,7 @@ def create_app(*, db_path: str | None = None, web_dist: str | Path | None = None
         config = Config(
             sec_user_agent=settings.sec_user_agent,
             db_path=app.state.db_path,
-            model_extract=settings.model_extract,
-            model_reason=settings.model_reason,
+            model=settings.model,
         )
         connection, service = build_service(config)
         try:
@@ -250,10 +300,6 @@ def create_app(*, db_path: str | None = None, web_dist: str | Path | None = None
                 repo.set_setting(SETTING_USER_AGENT, user_agent)
             if payload.period is not None:
                 repo.set_setting(SETTING_PERIOD, payload.period)
-            if "model_extract" in payload.model_fields_set:
-                repo.set_setting(SETTING_MODEL_EXTRACT, _trimmed(payload.model_extract) or "")
-            if "model_reason" in payload.model_fields_set:
-                repo.set_setting(SETTING_MODEL_REASON, _trimmed(payload.model_reason) or "")
             if "api_key" in payload.model_fields_set:
                 app.state.secrets.set_api_key(payload.api_key)
             return settings_payload(repo)
@@ -333,9 +379,9 @@ def create_app(*, db_path: str | None = None, web_dist: str | Path | None = None
             if not settings.sec_user_agent:
                 connection.close()
                 raise RuntimeError("SEC User-Agent is not configured.")
-            if not settings.model_extract or not settings.model_reason:
+            if not settings.model:
                 connection.close()
-                raise RuntimeError("Analysis models are not configured.")
+                raise RuntimeError("Analysis model is not configured.")
             if not settings.api_key_configured:
                 connection.close()
                 raise RuntimeError("A provider API key is not configured.")
@@ -353,13 +399,12 @@ def create_app(*, db_path: str | None = None, web_dist: str | Path | None = None
             )
             edgar = EdgarClient(settings.sec_user_agent, cache_dir=cache)
             key = app.state.secrets.api_key()
+            llm = LiteLLMClient(settings.model, api_key=key)
             orchestrator = build_orchestrator(
                 repo,
-                llm_extract=LiteLLMClient(settings.model_extract, api_key=key),
-                llm_reason=LiteLLMClient(settings.model_reason, api_key=key),
+                llm=llm,
                 companyfacts_provider=lambda selected_cik: edgar.companyfacts(selected_cik),
-                model_extract=settings.model_extract,
-                model_reason=settings.model_reason,
+                model=settings.model,
             )
             partial = False
             try:
@@ -438,13 +483,9 @@ def create_app(*, db_path: str | None = None, web_dist: str | Path | None = None
     def start_analysis(payload: JobRequest):
         with repo_context() as repo:
             settings = resolve_settings(repo, app.state.secrets)
-        if (
-            not settings.model_extract
-            or not settings.model_reason
-            or not settings.api_key_configured
-        ):
+        if not settings.model or not settings.api_key_configured:
             raise ApiProblem(
-                409, "models_not_configured", "Configure an analysis model and API key first."
+                409, "model_not_configured", "Configure the analysis model and API key first."
             )
         try:
             return app.state.jobs.start(
