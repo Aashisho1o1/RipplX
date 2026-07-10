@@ -86,12 +86,14 @@ class Claim(BaseModel):
 
     @model_validator(mode="after")
     def _claim_graph(self):
-        # Foundation R2: evidence claims are verbatim-anchored (need provenance);
-        # judgment claims interpret and MUST cite basis_claim_ids.
+        # Foundation R2: evidence claims are verbatim-anchored (need provenance).
+        # Judgment claims must cite basis, but WHERE that basis lives is stage-specific,
+        # so presence/resolution is enforced per stage: a P1 judgment grounds on evidence
+        # in the SAME analysis (enforced in P1Output._claim_refs_resolve); a P2 synthesis
+        # judgment grounds on P1's evidence — a separate, already-verified analysis — so it
+        # is not required inline here (see P2Output._claim_refs_resolve).
         if self.claim_type == "evidence" and self.provenance is None:
             raise ValueError(f"evidence claim {self.claim_id!r} missing provenance (foundation R2)")
-        if self.claim_type == "judgment" and not self.basis_claim_ids:
-            raise ValueError(f"judgment claim {self.claim_id!r} missing basis_claim_ids")
         return self
 
 
@@ -177,6 +179,10 @@ class P1Output(BaseModel):
             for cid in mi.claim_ids:
                 _check(cid, "material_item")
         for c in self.claims:
+            # P1 is self-contained: a judgment must cite basis, and it must resolve here.
+            if c.claim_type == "judgment" and not c.basis_claim_ids:
+                raise ValueError(
+                    f"judgment claim {c.claim_id!r} missing basis_claim_ids (foundation R2)")
             for cid in (c.basis_claim_ids or ()):
                 _check(cid, f"judgment claim {c.claim_id!r} basis")
         _check(self.guidance_direction.claim_id, "guidance_direction")
@@ -226,17 +232,17 @@ class P2Output(BaseModel):
 
     @model_validator(mode="after")
     def _claim_refs_resolve(self):
-        # As with P1: judgment basis_claim_ids and each record's thesis_check /
-        # net_read judgment_claim_id must resolve to a declared claim.
+        # A P2 synthesis judgment (thesis_check / net_read) grounds on P1's evidence,
+        # which lives in the SEPARATE P1 analysis — so its basis_claim_ids reference ids
+        # that are neither declared nor resolvable here, and are not required inline (P1's
+        # evidence is verified in P1). We DO require each record's thesis_check / net_read
+        # judgment_claim_id to resolve to a judgment claim declared in THIS output.
         ids = {c.claim_id for c in self.claims}
 
         def _check(cid, where):
             if cid is not None and cid not in ids:
                 raise ValueError(f"{where} cites unknown claim_id {cid!r}")
 
-        for c in self.claims:
-            for cid in (c.basis_claim_ids or ()):
-                _check(cid, f"judgment claim {c.claim_id!r} basis")
         for rec in self.records_affected:
             _check(rec.thesis_check.judgment_claim_id, f"{rec.ticker} thesis_check")
             _check(rec.net_read.judgment_claim_id, f"{rec.ticker} net_read")
