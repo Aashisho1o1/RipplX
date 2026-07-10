@@ -1,72 +1,32 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
-import { api, ApiError } from "../api/client";
+import { api } from "../api/client";
 import { DisclaimerFooter } from "../components/DisclaimerFooter";
-import { JobProgress } from "../components/JobProgress";
 import { MetricTable } from "../components/MetricTable";
 import { OwnedWatchTag } from "../components/OwnedWatchTag";
 import { PosturePill } from "../components/PosturePill";
 import { RedFlagRow } from "../components/RedFlagRow";
 import { SeverityBadge } from "../components/SeverityBadge";
-import { useBootstrap } from "../context/BootstrapContext";
 import { useResource } from "../hooks/useResource";
-import type { FilingDetail, Job, Verification } from "../types";
+import type { FilingDetail } from "../types";
 
 export function FilingPage() {
   const { accession = "" } = useParams();
   const location = useLocation();
   const navigate = useNavigate();
-  const { bootstrap } = useBootstrap();
   const demo = new URLSearchParams(location.search).get("demo") === "1";
   const load = useCallback(
     (signal: AbortSignal) => api<FilingDetail>(`/api/filings/${accession}?demo=${demo}`, { signal }),
     [accession, demo],
   );
   const resource = useResource(load, [accession, demo]);
-  const [verification, setVerification] = useState<Verification | null>(null);
-  const [verifyError, setVerifyError] = useState("");
-  const [job, setJob] = useState<Job | null>(null);
-  const [processError, setProcessError] = useState("");
-
-  useEffect(() => {
-    if (!job || !["queued", "running"].includes(job.state)) return;
-    const timer = window.setInterval(() => {
-      api<Job>(`/api/jobs/${job.id}`).then(next => {
-        setJob(next);
-        if (!["queued", "running"].includes(next.state)) resource.refresh();
-      });
-    }, 700);
-    return () => window.clearInterval(timer);
-  }, [job, resource.refresh]);
-
-  async function reverify() {
-    setVerifyError("");
-    try {
-      setVerification(await api<Verification>(`/api/filings/${accession}/reverify`, { method: "POST" }));
-    } catch (reason) {
-      setVerifyError(reason instanceof ApiError ? reason.message : "Re-verification failed.");
-    }
-  }
-
-  async function rerun(mode: "parse" | "analysis") {
-    setProcessError("");
-    try {
-      setJob(await api<Job>("/api/jobs/analyze", {
-        method: "POST",
-        body: JSON.stringify({ accession, mode }),
-      }));
-    } catch (reason) {
-      setProcessError(reason instanceof ApiError ? reason.message : "Pipeline stage could not start.");
-    }
-  }
-
   if (!resource.data) {
     return <main className="page">{resource.loading ? <p className="loading">Loading filing evidence…</p> : <div className="notice">{resource.error?.message}</div>}</main>;
   }
 
   const detail = resource.data;
   const filing = detail.filing;
-  const audit = verification ?? detail.verification;
+  const audit = detail.verification;
   const sectionValue = detail.pipeline.find(stage => stage.stage === "parse")?.diagnostics.sections_found;
   const parsedSections = Array.isArray(sectionValue) ? sectionValue.map(String) : [];
 
@@ -83,15 +43,7 @@ export function FilingPage() {
     {detail.insufficient_reason && <div className="notice neutral"><PosturePill posture="insufficient_data" /> {detail.insufficient_reason}</div>}
 
     {!demo && <section className="section">
-      <div className="page-header">
-        <h2 className="section-kicker">Pipeline</h2>
-        <div className="actions">
-          <button className="button" onClick={() => rerun("parse")}>Re-run parsing</button>
-          <button className="button secondary" disabled={!bootstrap.analysis_configured} onClick={() => rerun("analysis")}>Re-run analysis</button>
-        </div>
-      </div>
-      {processError && <div className="field-error">{processError}</div>}
-      <JobProgress job={job} />
+      <h2 className="section-kicker">Pipeline</h2>
       <div className="channels">{detail.pipeline.map(stage =>
         <span className={`channel ${stage.status}`} title={stage.error ?? undefined} key={stage.stage}>
           {stage.label}: {stage.status}{stage.error ? ` — ${stage.error}` : ""}
@@ -105,7 +57,7 @@ export function FilingPage() {
     {detail.what_changed.map((row, index) => <section className="section" key={index}><h2 className="section-kicker">Transmission channels</h2><div className="channels">{row.channels.map(channel => <span className={`channel ${channel.direction}`} key={channel.label}>{channel.label} ({channel.direction}{channel.magnitude ? `, ${channel.magnitude}` : ""})</span>)}</div><p className="gln">Guidance: {row.guidance} · Liquidity: {row.liquidity} · Net: {row.net}</p></section>)}
     {filing.owned && <section className="section"><h2 className="section-kicker">Thesis impact</h2>{detail.thesis_impact.length ? detail.thesis_impact.map(row => <p key={row.ticker}><strong>{row.ticker}:</strong> {row.no_thesis ? "No thesis provided — RipplX degrades gracefully without one." : `thesis ${row.verdict}`}</p>) : <p className="empty-line">No thesis impact assessed.</p>}</section>}
     <section className="section"><div className="page-header"><h2 className="section-kicker">Verified numbers</h2><Link className="button" to={`/companies/${filing.ticker}${demo ? "?demo=1" : ""}`}>Full company view</Link></div>{detail.verified_numbers?.empty ? <p className="empty-line">{detail.verified_numbers.empty}</p> : detail.verified_numbers ? <MetricTable rows={detail.verified_numbers.rows} /> : <p className="empty-line">no verified financials yet (XBRL facts insufficient or not yet ingested).</p>}</section>
-    {!demo && <section className="section audit"><div className="page-header"><h2 className="section-kicker">Verification audit</h2><button className="button" onClick={reverify}>Re-verify</button></div>{verifyError && <div className="field-error">{verifyError}</div>}{audit ? <><PosturePill posture={audit.verdict === "FAIL" ? "critical_review" : audit.verdict === "PASS_WITH_WARNINGS" ? "risk_review" : "monitor"} /><div className="channels">{audit.checks.map(check => <span className="channel" key={check.check_id}>{check.check_id}: {check.verdict}</span>)}</div></> : <p className="empty-line">No verification result yet.</p>}</section>}
+    {!demo && <section className="section audit"><h2 className="section-kicker">Verification audit</h2>{audit ? <><PosturePill posture={audit.verdict === "FAIL" ? "critical_review" : audit.verdict === "PASS_WITH_WARNINGS" ? "risk_review" : "monitor"} /><div className="channels">{audit.checks.map(check => <span className="channel" key={check.check_id}>{check.check_id}: {check.verdict}</span>)}</div></> : <p className="empty-line">No verification result yet.</p>}</section>}
     <DisclaimerFooter text={detail.disclaimer} />
   </main>;
 }

@@ -21,17 +21,10 @@ from finwatch.metrics.service import MetricsService
 from finwatch.pipeline.orchestrator import (
     FilingAnalysis,
     Orchestrator,
-    assemble_verify_bundle,
 )
 from finwatch.pipeline.progress import ProgressCallback, StageReporter, stages_from
 from finwatch.preprocess.forms import base_form
 from finwatch.preprocess.preprocessor import Preprocessor, route_sections
-from finwatch.verify.checks import VerificationReport, run_all
-from finwatch.verify.orchestrator import (
-    fact_values_from_repo,
-    persist_report,
-    section_texts_from_repo,
-)
 
 CompanyFactsProvider = Callable[[str], dict]
 HtmlFetcher = Callable[[str], str]      # primary_doc_url -> decoded HTML
@@ -77,36 +70,30 @@ def holding_records(repo: Repo) -> list[dict]:
     ]
 
 
-# A filing is "done" only once the pipeline completed and the verifier ran. Anything else —
-# never started ('fetched'/'sectioned') or errored mid-pipeline ('failed') — is retried, so a
-# transient P2/network error does not permanently strand a half-analyzed filing (its P1 is
-# committed before later stages run, so a P1-present check would wrongly skip it forever).
-# Manual-review (``analyzed``) filings remain retryable; only a verified filing is done.
-_DONE_STATUS = frozenset({"verified"})
+# Automatic launch runs never backfill. The newest supported filing is selected first; if
+# that filing is already terminal, the run is a no-op rather than falling through to older
+# history. ``analyzed`` means verification completed but withheld output for manual review,
+# so it is terminal too—repeated clicks must not rebill the same failed artifact.
+_TERMINAL_STATUS = frozenset({"verified", "analyzed"})
 _ANALYZABLE_FORMS = frozenset({"10-K", "10-Q", "8-K"})
 
 
-def unanalyzed_filings(
-    repo: Repo, cik: str | None = None, forms: frozenset[str] | None = None
-) -> list[Filing]:
-    """Supported filings not yet analyzed + verified (oldest first for CLI backfills).
+def newest_filing_to_analyze(repo: Repo, cik: str | None = None) -> Filing | None:
+    """Return the newest supported filing in scope only when it needs analysis.
 
-    ``forms`` optionally narrows the queue to specific base form types (e.g.
-    ``{"10-Q"}``). Matching is on ``base_form`` — case-insensitive and amendment-aware,
-    so requesting ``8-K`` also selects an ``8-K/A``. ``None`` = every analyzable form
-    (unchanged behavior). The ``_ANALYZABLE_FORMS`` gate still applies, so an
-    unsupported request narrows to nothing rather than admitting new forms.
+    Unsupported SEC forms are excluded before newest selection. Crucially, an already
+    terminal newest filing returns ``None``; it never exposes an older filing for implicit
+    historical replay.
     """
-    wanted = None if forms is None else {f.strip().upper() for f in forms}
-    todo = [
+    candidates = [
         filing
         for filing in repo.list_filings(cik)
-        if filing.status not in _DONE_STATUS
-        and base_form(filing.form_type) in _ANALYZABLE_FORMS
-        and (wanted is None or base_form(filing.form_type) in wanted)
+        if base_form(filing.form_type) in _ANALYZABLE_FORMS
     ]
-    todo.sort(key=lambda f: (f.filed_at, f.accession_number))
-    return todo
+    if not candidates:
+        return None
+    newest = max(candidates, key=lambda f: (f.filed_at or "", f.accession_number))
+    return None if newest.status in _TERMINAL_STATUS else newest
 
 
 @dataclass
@@ -270,50 +257,26 @@ def process_parsing(
     return ProcessResult(filing.accession_number, ticker, True, verdict="PARSED")
 
 
-def process_tracked(
+def process_latest(
     repo: Repo,
     orch: Orchestrator,
     fetch_html: HtmlFetcher,
     *,
     cik: str | None = None,
-    limit: int | None = None,
     now_fn: Callable[[], str] = _now_iso,
 ) -> list[ProcessResult]:
-    """Run the pipeline over every not-yet-analyzed filing (optionally one CIK / capped)."""
+    """Run exactly one newest filing in scope, or return an empty no-op result."""
     records = holding_records(repo)
-    todo = unanalyzed_filings(repo, cik)
-    if limit is not None:
-        todo = todo[:limit]
-    return [process_filing(orch, repo, f, fetch_html=fetch_html, records=records,
-                           now_fn=now_fn)
-            for f in todo]
-
-
-def reverify(
-    repo: Repo,
-    accession: str,
-    *,
-    created_at: str | None = None,
-) -> VerificationReport | None:
-    """Re-run the deterministic verifier (V1/V4/V5) on a STORED analysis, purely from the
-    DB — no LLM, no network. Rebuilds the bundle from the persisted P1/P2 output, the
-    filing sections, and the XBRL fact values, then persists the fresh report. Returns
-    None if the accession has no stored P1 analysis."""
-    from finwatch.llm.schemas import P1Output, P2Output
-    from finwatch.metrics.envelope import MetricsBundle
-
-    p1a = repo.latest_analysis(accession, "P1")
-    if p1a is None:
-        return None
-    p1 = P1Output.model_validate_json(p1a.output_json)
-    p2a = repo.latest_analysis(accession, "P2")
-    p2 = P2Output.model_validate_json(p2a.output_json) if p2a else None
-    filing = repo.get_filing(accession)
-    cik = filing.cik if filing else p1.accession_number
-    bundle = assemble_verify_bundle(
-        p1, p2, MetricsBundle(),
-        section_texts_from_repo(repo, accession),
-        fact_values_from_repo(repo, cik))
-    report = run_all(bundle)
-    persist_report(repo, p1a.id, report, created_at=created_at or _now_iso())
-    return report
+    filing = newest_filing_to_analyze(repo, cik)
+    if filing is None:
+        return []
+    return [
+        process_filing(
+            orch,
+            repo,
+            filing,
+            fetch_html=fetch_html,
+            records=records,
+            now_fn=now_fn,
+        )
+    ]

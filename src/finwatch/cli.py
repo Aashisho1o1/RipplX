@@ -178,15 +178,14 @@ def _require_models(cfg: Config) -> None:
         raise typer.Exit(code=1)
 
 
-def _run_pipeline(cfg: Config, *, cik: str | None, limit: int | None):
-    """Build the production Orchestrator (real EdgarClient + LiteLLM) and process every
-    not-yet-analyzed filing (optionally one CIK / capped). Returns the result list."""
+def _run_pipeline(cfg: Config, *, cik: str | None):
+    """Build the production orchestrator and process only the newest filing in scope."""
     from pathlib import Path
 
     from finwatch.db import Repo, init_db
     from finwatch.ingest import EdgarClient
     from finwatch.llm.router import LiteLLMClient
-    from finwatch.pipeline.run import build_orchestrator, process_tracked
+    from finwatch.pipeline.run import build_orchestrator, process_latest
 
     conn = init_db(cfg.db_path)
     repo = Repo(conn)
@@ -206,7 +205,7 @@ def _run_pipeline(cfg: Config, *, cik: str | None, limit: int | None):
         return edgar.fetch_primary_doc(url).decode("utf-8", "replace")
 
     try:
-        return process_tracked(repo, orch, fetch_html, cik=cik, limit=limit)
+        return process_latest(repo, orch, fetch_html, cik=cik)
     finally:
         edgar.close()
         conn.close()
@@ -229,12 +228,8 @@ def _print_pipeline_results(results) -> None:
 @app.command()
 def analyze(
     ticker: str = typer.Argument(..., help="Ticker to analyze (must be tracked + ingested)."),
-    limit: int | None = typer.Option(
-        None, "--limit", help="Max filings to analyze (default: all not-yet-analyzed)."
-    ),
 ) -> None:
-    """Run the analysis pipeline over a tracked ticker's ingested filings (watch semantics
-    if it is not an owned holding); does not add a holding."""
+    """Analyze the newest supported filing for a tracked ticker; never backfill history."""
     from finwatch.db import Repo, init_db
 
     cfg = _config_or_exit()
@@ -248,11 +243,11 @@ def analyze(
             f"(or [bold]finwatch add {ticker} ...[/]) then [bold]finwatch ingest[/] first."
         )
         raise typer.Exit(code=1)
-    results = _run_pipeline(cfg, cik=company.cik, limit=limit)
+    results = _run_pipeline(cfg, cik=company.cik)
     if not results:
         console.print(
-            f"No un-analyzed filings for {ticker}. Run [bold]finwatch ingest[/] "
-            f"to pull new filings."
+            f"The newest filing for {ticker} is already terminal. Run [bold]finwatch ingest[/] "
+            "to pull a newer filing."
         )
         return
     _print_pipeline_results(results)
@@ -304,10 +299,8 @@ def process(
     ticker: str | None = typer.Option(
         None, "--ticker", help="Only process this tracked ticker's filings."
     ),
-    limit: int | None = typer.Option(None, "--limit", help="Max filings to process this run."),
 ) -> None:
-    """Run the analysis pipeline (P0→P1→metrics→P2→verify) over ingested-but-not-yet-
-    analyzed filings, persisting the analyses the digest renders from."""
+    """Analyze only the newest supported filing in scope and persist its verified result."""
     from finwatch.db import Repo, init_db
 
     cfg = _config_or_exit()
@@ -324,9 +317,9 @@ def process(
             )
             raise typer.Exit(code=1)
         cik = company.cik
-    results = _run_pipeline(cfg, cik=cik, limit=limit)
+    results = _run_pipeline(cfg, cik=cik)
     if not results:
-        console.print("No un-analyzed filings. Run [bold]finwatch ingest[/] to pull filings.")
+        console.print("The newest filing is already terminal. Run [bold]finwatch ingest[/].")
         return
     _print_pipeline_results(results)
 
@@ -481,32 +474,6 @@ def eval(
     finally:
         edgar.close()
     console.print(render_report(bakeoff(reports)))
-
-
-@app.command()
-def verify(
-    accession: str = typer.Argument(..., help="Accession number to re-verify."),
-) -> None:
-    """Re-run the deterministic verifier (V1/V4/V5) on a stored analysis — offline, from
-    the DB, no LLM or network."""
-    from finwatch.db import Repo, init_db
-    from finwatch.pipeline.run import reverify
-
-    cfg = _config_or_exit()
-    conn = init_db(cfg.db_path)
-    try:
-        report = reverify(Repo(conn), accession)
-    finally:
-        conn.close()
-    if report is None:
-        console.print(
-            f"[red]No stored analysis for {accession}.[/] Run [bold]finwatch process[/] first."
-        )
-        raise typer.Exit(code=1)
-    colour = {"PASS": "green", "PASS_WITH_WARNINGS": "yellow", "FAIL": "red"}[report.verdict]
-    console.print(f"[{colour}]{report.verdict}[/] — {accession}")
-    for c in report.results:
-        console.print(f"  {c.check_id}: {c.verdict}" + (f" — {c.detail}" if c.detail else ""))
 
 
 @app.command()

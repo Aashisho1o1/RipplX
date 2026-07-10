@@ -9,12 +9,12 @@ import { MetricTable } from "../components/MetricTable";
 import { SectionHeader } from "../components/SectionHeader";
 import { useBootstrap } from "../context/BootstrapContext";
 import { useResource } from "../hooks/useResource";
-import type { Brief, FormType, Job } from "../types";
+import type { Brief, Job } from "../types";
 
 export function BriefPage() {
   const location = useLocation(); const navigate = useNavigate(); const { bootstrap } = useBootstrap();
   const params = new URLSearchParams(location.search); const demo = params.get("demo") === "1"; const panel = params.get("panel");
-  const [job, setJob] = useState<Job | null>(null); const [actionError, setActionError] = useState(""); const [form, setForm] = useState<FormType | "">("");
+  const [job, setJob] = useState<Job | null>(null); const [actionError, setActionError] = useState("");
   const load = useCallback((signal: AbortSignal) => api<Brief>(`/api/brief?demo=${demo}`, { signal }), [demo]);
   const resource = useResource(load, [demo]);
   useEffect(() => {
@@ -22,7 +22,7 @@ export function BriefPage() {
     const timer = window.setInterval(() => api<Job>(`/api/jobs/${job.id}`).then(next => { setJob(next); if (!["queued", "running"].includes(next.state)) resource.refresh(); }), 700);
     return () => window.clearInterval(timer);
   }, [job, resource.refresh]);
-  async function start(kind: "sync" | "analyze") { setActionError(""); try { setJob(await api<Job>(`/api/jobs/${kind === "sync" ? "sync" : "analyze"}`, { method: "POST", body: JSON.stringify(kind === "analyze" ? { limit: 1, ...(form ? { form } : {}) } : {}) })); } catch (reason) { setActionError(reason instanceof ApiError ? reason.message : "Operation could not start."); } }
+  async function start(kind: "sync" | "analyze") { setActionError(""); try { setJob(await api<Job>(`/api/jobs/${kind === "sync" ? "sync" : "analyze"}`, { method: "POST", body: "{}" })); } catch (reason) { setActionError(reason instanceof ApiError ? reason.message : "Operation could not start."); } }
   function closePanel() { params.delete("panel"); navigate({ pathname: location.pathname, search: params.toString() }, { replace: true }); }
   if (!resource.data && resource.loading) return <main className="page"><p className="loading">Loading the brief…</p></main>;
   if (!resource.data) return <main className="page"><div className="notice">{resource.error?.message ?? "The brief is unavailable."}</div></main>;
@@ -41,6 +41,6 @@ export function BriefPage() {
     <section className="section"><SectionHeader index="05" title="Open questions" />{brief.open_questions.length ? <ul>{brief.open_questions.map((question, index) => <li className="muted" key={index}>{question}</li>)}</ul> : <p className="empty-line">None.</p>}</section>
     {brief.boring_filings && <div className="faint section">{brief.boring_filings}</div>}
     <DisclaimerFooter text={brief.disclaimer} />
-    {panel === "analysis" && <Drawer title="Run analysis" onClose={closePanel}>{bootstrap.analysis_configured ? <div><p className="muted">Analyze the newest ingested filing of the chosen type. One filing keeps this prototype run fast and bounded.</p><div className="field"><label>Form type</label><div className="segmented">{(["", "8-K", "10-Q", "10-K"] as const).map(value => <button type="button" key={value || "any"} className={form === value ? "active" : ""} onClick={() => setForm(value)}>{value || "Any"}</button>)}</div></div><button className="button primary" onClick={() => { closePanel(); start("analyze"); }}>Analyze latest filing</button></div> : <div className="notice neutral"><p>Analysis needs a language-model key and model name to read filings. Everything else — verified numbers, the demo brief, and holdings — works without one.</p><div className="actions"><button className="button secondary" onClick={() => navigate("/settings")}>Configure analysis</button><button className="button" onClick={() => navigate("/brief?demo=1")}>See the demo brief</button></div></div>}</Drawer>}
+    {panel === "analysis" && <Drawer title="Run analysis" onClose={closePanel}>{bootstrap.analysis_configured ? <div><p className="muted">Analyze only the newest supported filing. If it is already complete or withheld for manual review, this is a no-op.</p><button className="button primary" onClick={() => { closePanel(); start("analyze"); }}>Analyze latest filing</button></div> : <div className="notice neutral"><p>Analysis needs a language-model key and model name to read filings. Everything else — verified numbers, the demo brief, and holdings — works without one.</p><div className="actions"><button className="button secondary" onClick={() => navigate("/settings")}>Configure analysis</button><button className="button" onClick={() => navigate("/brief?demo=1")}>See the demo brief</button></div></div>}</Drawer>}
   </main>;
 }

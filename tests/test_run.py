@@ -1,7 +1,7 @@
 """Production pipeline runner (F1): add -> ingest(seeded) -> process -> digest, offline.
 
 Drives pipeline/run.py with a FakeLLMClient and a fixture HTML fetcher — no network — the
-    same code path the CLI `process`/`analyze`/`verify` commands use with real clients.
+    same code path the CLI `process` and `analyze` commands use with real clients.
 """
 from __future__ import annotations
 
@@ -13,11 +13,10 @@ from finwatch.digest import render_digest
 from finwatch.llm.router import FakeLLMClient
 from finwatch.pipeline.run import (
     build_orchestrator,
+    newest_filing_to_analyze,
     process_filing,
+    process_latest,
     process_parsing,
-    process_tracked,
-    reverify,
-    unanalyzed_filings,
 )
 
 FX = Path(__file__).parent / "fixtures"
@@ -73,12 +72,12 @@ def _orch(repo):
         now_fn=lambda: "t")
 
 
-def test_process_tracked_runs_pipeline_persists_and_digest_renders():
+def test_process_latest_runs_pipeline_persists_and_digest_renders():
     repo = Repo(init_db(":memory:"))
     _seed(repo)
-    assert [f.accession_number for f in unanalyzed_filings(repo)] == [ACCN]
+    assert newest_filing_to_analyze(repo).accession_number == ACCN
 
-    results = process_tracked(repo, _orch(repo), fetch_html=lambda _u: TENQ, now_fn=lambda: "t")
+    results = process_latest(repo, _orch(repo), fetch_html=lambda _u: TENQ, now_fn=lambda: "t")
     assert len(results) == 1 and results[0].ok
     assert results[0].verdict in ("PASS", "PASS_WITH_WARNINGS")
 
@@ -95,12 +94,12 @@ def test_process_is_idempotent():
     repo = Repo(init_db(":memory:"))
     _seed(repo)
     orch = _orch(repo)
-    process_tracked(repo, orch, fetch_html=lambda _u: TENQ, now_fn=lambda: "t")
-    assert unanalyzed_filings(repo) == []                      # already has a P1
-    assert process_tracked(repo, orch, fetch_html=lambda _u: TENQ) == []   # nothing to redo
+    process_latest(repo, orch, fetch_html=lambda _u: TENQ, now_fn=lambda: "t")
+    assert newest_filing_to_analyze(repo) is None
+    assert process_latest(repo, orch, fetch_html=lambda _u: TENQ) == []
 
 
-def test_analysis_queue_excludes_unsupported_sec_forms():
+def test_latest_selector_excludes_newer_unsupported_sec_forms():
     repo = Repo(init_db(":memory:"))
     _seed(repo)
     repo.upsert_filing(Filing(
@@ -111,15 +110,10 @@ def test_analysis_queue_excludes_unsupported_sec_forms():
         accession_number="0000789019-24-000072", cik=CIK, form_type="20-F",
         filed_at="2024-08-03", primary_doc_url="https://www.sec.gov/20f.htm",
     ))
-    repo.upsert_filing(Filing(
-        accession_number="0000789019-24-000073", cik=CIK, form_type="8-K/A",
-        filed_at="2024-08-04", primary_doc_url="https://www.sec.gov/8ka.htm",
-    ))
-
-    assert [filing.form_type for filing in unanalyzed_filings(repo)] == ["10-Q", "8-K/A"]
+    assert newest_filing_to_analyze(repo).accession_number == ACCN
 
 
-def test_analysis_queue_filters_by_form_type():
+def test_latest_selector_never_falls_through_to_older_history():
     repo = Repo(init_db(":memory:"))
     _seed(repo)   # a 10-Q at 2024-08-01
     repo.upsert_filing(Filing(accession_number="0000789019-24-000081", cik=CIK, form_type="8-K",
@@ -129,22 +123,34 @@ def test_analysis_queue_filters_by_form_type():
     repo.upsert_filing(Filing(accession_number="0000789019-24-000083", cik=CIK, form_type="8-K/A",
                               filed_at="2024-08-04", primary_doc_url="https://www.sec.gov/8ka.htm"))
 
-    def queued(form):
-        return [f.form_type for f in unanalyzed_filings(repo, forms=frozenset({form}))]
+    newest = newest_filing_to_analyze(repo)
+    assert newest is not None and newest.form_type == "8-K/A"
+    repo.set_filing_status(newest.accession_number, "verified", processed_at="t")
+    assert newest_filing_to_analyze(repo) is None
+    # The three older, unprocessed filings remain deliberately inaccessible.
+    assert sum(f.status not in {"verified", "analyzed"} for f in repo.list_filings(CIK)) == 3
 
-    # a single requested form narrows the queue; an amendment matches its base form
-    assert queued("8-K") == ["8-K", "8-K/A"]
-    assert queued("10-K") == ["10-K"]
-    assert queued("10-Q") == ["10-Q"]
-    assert queued("8-k") == ["8-K", "8-K/A"]     # case-insensitive
-    # None (default) preserves the full eligible queue, oldest-first
-    assert [f.form_type for f in unanalyzed_filings(repo)] == ["10-Q", "8-K", "10-K", "8-K/A"]
+
+def test_manual_review_newest_is_terminal_and_not_rebilled():
+    repo = Repo(init_db(":memory:"))
+    _seed(repo)
+    repo.upsert_filing(Filing(
+        accession_number="0000789019-24-000080",
+        cik=CIK,
+        form_type="8-K",
+        filed_at="2024-08-02",
+        primary_doc_url="https://www.sec.gov/8k.htm",
+        status="analyzed",
+    ))
+
+    assert newest_filing_to_analyze(repo) is None
+    assert process_latest(repo, _orch(repo), fetch_html=lambda _u: TENQ) == []
 
 
 def test_process_reports_errors_without_aborting():
     repo = Repo(init_db(":memory:"))
     _seed(repo, url=None)                                       # no primary-doc URL
-    r = process_tracked(repo, _orch(repo), fetch_html=lambda _u: TENQ, now_fn=lambda: "t")
+    r = process_latest(repo, _orch(repo), fetch_html=lambda _u: TENQ, now_fn=lambda: "t")
     assert len(r) == 1 and not r[0].ok and "primary-document URL" in r[0].error
 
     repo2 = Repo(init_db(":memory:"))
@@ -152,7 +158,7 @@ def test_process_reports_errors_without_aborting():
 
     def boom(_url):
         raise RuntimeError("network down")
-    r2 = process_tracked(repo2, _orch(repo2), fetch_html=boom, now_fn=lambda: "t")
+    r2 = process_latest(repo2, _orch(repo2), fetch_html=boom, now_fn=lambda: "t")
     assert not r2[0].ok and "fetch failed" in r2[0].error
     assert repo2.get_filing(ACCN).status == "failed"
 
@@ -173,12 +179,12 @@ def test_transient_failure_is_retried_and_not_rendered_clean():
     orch = build_orchestrator(repo, llm_extract=llm, llm_reason=llm,
                               companyfacts_provider=lambda _c: MSFT_CF, price_provider=repo,
                               model_extract="x", model_reason="r", now_fn=lambda: "t")
-    r = process_tracked(repo, orch, fetch_html=lambda _u: TENQ, now_fn=lambda: "t")
+    r = process_latest(repo, orch, fetch_html=lambda _u: TENQ, now_fn=lambda: "t")
     assert not r[0].ok and "pipeline failed" in r[0].error
     assert repo.get_filing(ACCN).status == "failed"
     assert repo.latest_analysis(ACCN, "P1") is not None       # P1 was committed
     # retried, not stranded, on the next run
-    assert [f.accession_number for f in unanalyzed_filings(repo)] == [ACCN]
+    assert newest_filing_to_analyze(repo).accession_number == ACCN
     # digest flags it, does not present it as clean
     md = render_digest(repo, since="2024-01-01").markdown
     assert "manual review required" in md
@@ -186,7 +192,7 @@ def test_transient_failure_is_retried_and_not_rendered_clean():
     p1_calls = sum("portfolio manager" not in system and "investment committee" not in system
                    for system, _ in llm.calls)
     llm.responder = _responder
-    retry = process_tracked(repo, orch, fetch_html=lambda _u: TENQ, now_fn=lambda: "t")
+    retry = process_latest(repo, orch, fetch_html=lambda _u: TENQ, now_fn=lambda: "t")
     assert retry[0].ok
     assert len([a for a in repo.list_analyses(ACCN) if a.stage == "P1"]) == 1
     assert sum("portfolio manager" not in system and "investment committee" not in system
@@ -196,7 +202,7 @@ def test_transient_failure_is_retried_and_not_rendered_clean():
 def test_parse_only_rerun_invalidates_stale_analysis_and_stops_after_p0():
     repo = Repo(init_db(":memory:"))
     _seed(repo)
-    process_tracked(repo, _orch(repo), fetch_html=lambda _u: TENQ, now_fn=lambda: "t")
+    process_latest(repo, _orch(repo), fetch_html=lambda _u: TENQ, now_fn=lambda: "t")
     assert repo.latest_analysis(ACCN, "P1") is not None
 
     result = process_parsing(
@@ -214,7 +220,7 @@ def test_parse_only_rerun_invalidates_stale_analysis_and_stops_after_p0():
 def test_analysis_only_rerun_reuses_sections_without_fetching_document():
     repo = Repo(init_db(":memory:"))
     _seed(repo)
-    process_tracked(repo, _orch(repo), fetch_html=lambda _u: TENQ, now_fn=lambda: "t")
+    process_latest(repo, _orch(repo), fetch_html=lambda _u: TENQ, now_fn=lambda: "t")
 
     def unexpected_fetch(_url):
         raise AssertionError("analysis-only rerun must not fetch the filing")
@@ -236,7 +242,7 @@ def test_analysis_only_rerun_reuses_sections_without_fetching_document():
 def test_failed_parse_rerun_keeps_previous_verified_analysis():
     repo = Repo(init_db(":memory:"))
     _seed(repo)
-    process_tracked(repo, _orch(repo), fetch_html=lambda _u: TENQ, now_fn=lambda: "t")
+    process_latest(repo, _orch(repo), fetch_html=lambda _u: TENQ, now_fn=lambda: "t")
     previous = repo.latest_analysis(ACCN, "P1")
 
     result = process_parsing(
@@ -251,18 +257,6 @@ def test_failed_parse_rerun_keeps_previous_verified_analysis():
     assert repo.get_filing_stage(ACCN, "parse").status == "failed"
 
 
-def test_reverify_reruns_from_db_offline():
-    repo = Repo(init_db(":memory:"))
-    _seed(repo)
-    process_tracked(repo, _orch(repo), fetch_html=lambda _u: TENQ, now_fn=lambda: "t")
-    report = reverify(repo, ACCN, created_at="t")
-    assert report is not None
-    assert report.verdict in ("PASS", "PASS_WITH_WARNINGS")
-    ids = {c.check_id for c in report.results}
-    assert {"V1", "V4", "V5"} <= ids
-    assert reverify(repo, "0000000000-00-000000") is None      # unknown accession
-
-
 # ---- CLI guardrails (no network) -------------------------------------------
 def test_cli_process_requires_models(monkeypatch, tmp_path):
     from typer.testing import CliRunner
@@ -275,14 +269,3 @@ def test_cli_process_requires_models(monkeypatch, tmp_path):
     monkeypatch.delenv("FINWATCH_MODEL_REASON", raising=False)
     result = CliRunner().invoke(app, ["process"])
     assert result.exit_code == 1 and "models not configured" in result.output.lower()
-
-
-def test_cli_verify_missing_analysis(monkeypatch, tmp_path):
-    from typer.testing import CliRunner
-
-    from finwatch.cli import app
-
-    monkeypatch.setenv("SEC_USER_AGENT", "Test t@e.com")
-    monkeypatch.setenv("FINWATCH_DB", str(tmp_path / "fw.db"))
-    result = CliRunner().invoke(app, ["verify", "0000000000-00-000000"])
-    assert result.exit_code == 1 and "No stored analysis" in result.output

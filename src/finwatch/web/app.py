@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import urlsplit
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from finwatch.config import Config
 from finwatch.db import Holding, Repo, init_db
@@ -63,11 +63,9 @@ class SettingsUpdate(BaseModel):
 
 
 class JobRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     ticker: str | None = None
-    accession: str | None = None
-    mode: Literal["auto", "parse", "analysis"] = "auto"
-    limit: int = Field(default=1, ge=1, le=10)
-    form: Literal["8-K", "10-Q", "10-K"] | None = None   # None = newest of any form
 
 
 def _since_for_period(period: str) -> str:
@@ -198,18 +196,6 @@ def create_app(*, db_path: str | None = None, web_dist: str | Path | None = None
             if result is None:
                 raise ApiProblem(404, "filing_not_found", "Filing not found.")
             return result
-
-    @app.post("/api/filings/{accession}/reverify")
-    def reverify_filing(accession: str):
-        from finwatch.pipeline.run import reverify
-
-        with repo_context() as repo:
-            report = reverify(repo, accession)
-            if report is None:
-                raise ApiProblem(
-                    404, "analysis_not_found", "No stored analysis can be re-verified."
-                )
-            return report
 
     @app.get("/api/holdings")
     def holdings():
@@ -382,10 +368,7 @@ def create_app(*, db_path: str | None = None, web_dist: str | Path | None = None
 
         return work
 
-    def analysis_work(
-        ticker: str | None, limit: int, accession: str | None, mode: str,
-        form: str | None = None,
-    ):
+    def analysis_work(ticker: str | None):
         def work(job_id: str, registry: JobRegistry) -> bool:
             from pathlib import Path as FilePath
 
@@ -395,9 +378,8 @@ def create_app(*, db_path: str | None = None, web_dist: str | Path | None = None
             from finwatch.pipeline.run import (
                 build_orchestrator,
                 holding_records,
+                newest_filing_to_analyze,
                 process_filing,
-                process_parsing,
-                unanalyzed_filings,
             )
 
             connection = init_db(app.state.db_path)
@@ -406,10 +388,10 @@ def create_app(*, db_path: str | None = None, web_dist: str | Path | None = None
             if not settings.sec_user_agent:
                 connection.close()
                 raise RuntimeError("SEC User-Agent is not configured.")
-            if mode != "parse" and (not settings.model_extract or not settings.model_reason):
+            if not settings.model_extract or not settings.model_reason:
                 connection.close()
                 raise RuntimeError("Analysis models are not configured.")
-            if mode != "parse" and not settings.api_key_configured:
+            if not settings.api_key_configured:
                 connection.close()
                 raise RuntimeError("A provider API key is not configured.")
             cik = None
@@ -425,45 +407,30 @@ def create_app(*, db_path: str | None = None, web_dist: str | Path | None = None
                 else None
             )
             edgar = EdgarClient(settings.sec_user_agent, cache_dir=cache)
-            orchestrator = None
-            if mode != "parse":
-                key = app.state.secrets.api_key()
-                orchestrator = build_orchestrator(
-                    repo,
-                    llm_extract=LiteLLMClient(settings.model_extract, api_key=key),
-                    llm_reason=LiteLLMClient(settings.model_reason, api_key=key),
-                    companyfacts_provider=lambda selected_cik: edgar.companyfacts(selected_cik),
-                    price_provider=repo,
-                    model_extract=settings.model_extract,
-                    model_reason=settings.model_reason,
-                )
+            key = app.state.secrets.api_key()
+            orchestrator = build_orchestrator(
+                repo,
+                llm_extract=LiteLLMClient(settings.model_extract, api_key=key),
+                llm_reason=LiteLLMClient(settings.model_reason, api_key=key),
+                companyfacts_provider=lambda selected_cik: edgar.companyfacts(selected_cik),
+                price_provider=repo,
+                model_extract=settings.model_extract,
+                model_reason=settings.model_reason,
+            )
             partial = False
             try:
                 records = holding_records(repo)
-                if accession:
-                    # An explicit accession pins one filing; the form filter is ignored
-                    # here (the accession already determines the form).
-                    selected = repo.get_filing(accession)
-                    if selected is None:
-                        raise RuntimeError(f"Filing {accession} was not found.")
-                    if cik is not None and selected.cik != cik:
-                        raise RuntimeError(f"Filing {accession} does not belong to {ticker}.")
-                    filings = [selected]
-                else:
-                    # Browser actions process the newest eligible filing(s), optionally
-                    # narrowed to one form; CLI backfills keep their oldest-first order.
-                    wanted = frozenset({form}) if form else None
-                    filings = list(reversed(unanalyzed_filings(repo, cik, forms=wanted)))[:limit]
-                if not filings:
+                filing = newest_filing_to_analyze(repo, cik)
+                if filing is None:
                     registry.add_item(
                         job_id,
                         JobItem(
                             key=ticker.upper() if ticker else "portfolio",
                             state="completed",
-                            message=f"No unanalyzed {form or '10-K, 10-Q, or 8-K'} filings.",
+                            message="The newest supported filing is already terminal.",
                         ),
                     )
-                for filing in filings:
+                else:
                     company = repo.get_company(filing.cik)
                     filing_key = (
                         f"{company.ticker if company else filing.cik} "
@@ -484,21 +451,14 @@ def create_app(*, db_path: str | None = None, web_dist: str | Path | None = None
 
                     def fetch(url):
                         return edgar.fetch_primary_doc(url).decode("utf-8", "replace")
-                    if mode == "parse":
-                        result = process_parsing(
-                            repo, filing, fetch_html=fetch, on_stage=progress
-                        )
-                    else:
-                        assert orchestrator is not None
-                        result = process_filing(
-                            orchestrator,
-                            repo,
-                            filing,
-                            fetch_html=fetch,
-                            records=records,
-                            rerun_from="extract" if mode == "analysis" else None,
-                            on_stage=progress,
-                        )
+                    result = process_filing(
+                        orchestrator,
+                        repo,
+                        filing,
+                        fetch_html=fetch,
+                        records=records,
+                        on_stage=progress,
+                    )
                     partial = partial or not result.ok or result.manual_review
                     registry.add_item(
                         job_id,
@@ -534,7 +494,7 @@ def create_app(*, db_path: str | None = None, web_dist: str | Path | None = None
     def start_analysis(payload: JobRequest):
         with repo_context() as repo:
             settings = resolve_settings(repo, app.state.secrets)
-        if payload.mode != "parse" and (
+        if (
             not settings.model_extract
             or not settings.model_reason
             or not settings.api_key_configured
@@ -545,13 +505,7 @@ def create_app(*, db_path: str | None = None, web_dist: str | Path | None = None
         try:
             return app.state.jobs.start(
                 "analysis",
-                analysis_work(
-                    _trimmed(payload.ticker),
-                    payload.limit,
-                    _trimmed(payload.accession),
-                    payload.mode,
-                    payload.form,
-                ),
+                analysis_work(_trimmed(payload.ticker)),
             )
         except JobConflictError as exc:
             raise ApiProblem(409, "job_conflict", str(exc)) from exc
@@ -563,7 +517,11 @@ def create_app(*, db_path: str | None = None, web_dist: str | Path | None = None
             raise ApiProblem(404, "job_not_found", "Job not found.")
         return job
 
-    @app.get("/api/{path:path}", include_in_schema=False)
+    @app.api_route(
+        "/api/{path:path}",
+        methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
+        include_in_schema=False,
+    )
     def unknown_api(path: str):
         raise ApiProblem(404, "api_route_not_found", f"API route /api/{path} was not found.")
 
