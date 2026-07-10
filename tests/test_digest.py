@@ -16,6 +16,7 @@ from finwatch.db import (
     Holding,
     Repo,
     SignalShadowLog,
+    VerificationResult,
     init_db,
 )
 from finwatch.demo import DEMO_SINCE, build_demo_db
@@ -105,6 +106,20 @@ def test_legacy_p3_and_shadow_rows_are_never_rendered():
 
 
 # ---- focused renderer unit tests -------------------------------------------
+def _mark_verified(repo: Repo, analysis_id: int, accession: str) -> None:
+    repo.insert_verification_results([
+        VerificationResult(
+            analysis_id=analysis_id,
+            check_id=check_id,
+            verdict="pass",
+            severity="blocking",
+            created_at="t",
+        )
+        for check_id in ("V1", "V4", "V5")
+    ])
+    repo.set_filing_status(accession, "verified", processed_at="t")
+
+
 def _seed_min(repo, *, thesis, severity="medium"):
     repo.upsert_company(Company(cik="1", ticker="ZZZ", name="Z", sic_code="7372",
                                 is_financial=0, added_at="t"))
@@ -128,6 +143,7 @@ def _seed_min(repo, *, thesis, severity="medium"):
     repo.insert_analysis(Analysis(accession_number="a-1", ticker="ZZZ", stage="P2",
                                   model="m", prompt_version="v", output_json=json.dumps(p2),
                                   created_at="t"))
+    _mark_verified(repo, aid, "a-1")
     return aid
 
 
@@ -167,8 +183,10 @@ def test_material_no_impact_filing_lands_in_boring_not_dropped():
           "classification": {"items_8k": [], "overall_severity": "medium"},
           "claims": [], "material_items": [], "guidance_direction": {"value": "none_stated"},
           "red_flags": [], "extraction_confidence": "high", "gaps": []}
-    repo.insert_analysis(Analysis(accession_number="q-1", ticker="QQQ", stage="P1", model="m",
-                                  prompt_version="v", output_json=json.dumps(p1), created_at="t"))
+    aid = repo.insert_analysis(Analysis(
+        accession_number="q-1", ticker="QQQ", stage="P1", model="m",
+        prompt_version="v", output_json=json.dumps(p1), created_at="t"
+    ))
     p2 = {"accession_number": "q-1", "records_affected": [{
         "ticker": "QQQ", "owned": False, "impact_class": "no_impact", "channels": {},
         "guidance_direction": "none_stated", "liquidity_read": "unclear",
@@ -177,6 +195,7 @@ def test_material_no_impact_filing_lands_in_boring_not_dropped():
         "claims": [], "portfolio_level_notes": None}
     repo.insert_analysis(Analysis(accession_number="q-1", ticker="QQQ", stage="P2", model="m",
                                   prompt_version="v", output_json=json.dumps(p2), created_at="t"))
+    _mark_verified(repo, aid, "q-1")
     md = render_digest(repo, since="2024-01-01").markdown
     assert "1 routine filing(s) with no material findings (QQQ 8-K)" in md
 

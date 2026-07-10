@@ -159,9 +159,7 @@ def build_demo_db(db_path: str = ":memory:") -> sqlite3.Connection:
         metrics, companyfacts_provider=_companyfacts, now_fn=now_fn)
 
     records = [
-        {"ticker": h.ticker, "owned": bool(h.owned), "shares": h.shares,
-         "cost_basis": h.cost_basis, "target_weight_pct": h.target_weight_pct,
-         "thesis": h.thesis}
+        {"ticker": h.ticker, "owned": bool(h.owned)}
         for h in repo.list_holdings()
     ]
     for case in _CASES:
@@ -169,8 +167,17 @@ def build_demo_db(db_path: str = ":memory:") -> sqlite3.Connection:
                         filed_at=case.filed, primary_doc_url=case.primary_doc)
         repo.upsert_filing(filing)
         llm.stage_outputs = case.stage_outputs()
-        orch.process_html(filing=filing, html=case.html_path.read_text(), as_of=case.filed,
-                          records=records)
+        analysis = orch.process_html(
+            filing=filing,
+            html=case.html_path.read_text(),
+            as_of=case.filed,
+            records=records,
+        )
+        repo.set_filing_status(
+            case.accn,
+            "analyzed" if analysis.manual_review else "verified",
+            processed_at=_NOW,
+        )
     return conn
 
 

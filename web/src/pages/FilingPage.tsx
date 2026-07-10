@@ -34,10 +34,11 @@ export function FilingPage() {
     <header className="section">
       <h1 className="page-title">{filing.ticker} — {filing.form} filed {filing.filed}</h1>
       <div className="filing-heading">
-        <SeverityBadge severity={filing.severity} />
+        {filing.severity && <SeverityBadge severity={filing.severity} />}
       </div>
     </header>
     {filing.manual_review && <div className="notice">⚠ manual review required</div>}
+    {detail.withheld_reason && <div className="notice">{detail.withheld_reason}</div>}
     {detail.insufficient_reason && <div className="notice neutral"><PosturePill posture="insufficient_data" /> {detail.insufficient_reason}</div>}
 
     {!demo && <section className="section">

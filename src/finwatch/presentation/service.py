@@ -120,10 +120,7 @@ class PresentationService:
             owned=bool(view.holding and view.holding.owned),
             form=view.filing.form_type,
             filed=_date(view.filing.filed_at),
-            severity=_severity(view.severity),
-            watch_label=None
-            if view.holding and view.holding.owned
-            else "watch — company-level filing read",
+            severity=_severity(view.severity) if view.llm_output_allowed else None,
             material_items=[
                 MaterialItemView(headline=item.headline, event_type=item.event_type)
                 for item in (p1.material_items if p1 else [])
@@ -238,7 +235,7 @@ class PresentationService:
     ) -> BriefView:
         holdings = self.repo.list_holdings()
         views = self._views(since, until)
-        analyzed = [view for view in views if view.p1]
+        analyzed = [view for view in views if view.analysis_present]
         critical = [view for view in analyzed if view.is_critical]
         impactful = [view for view in analyzed if has_impact(view)]
         manual = [view for view in analyzed if view.manual_review]
@@ -272,7 +269,8 @@ class PresentationService:
             boring_line = f"{len(boring)} routine filing(s) with no material findings ({listing})."
         questions = []
         for view in analyzed:
-            questions.extend(f"{view.ticker}: {gap}" for gap in view.p1.gaps)
+            if view.p1:
+                questions.extend(f"{view.ticker}: {gap}" for gap in view.p1.gaps)
             questions.extend(
                 f"{view.ticker}: data-quality check {check_id} — {detail}"
                 for check_id, detail in view.data_quality
@@ -296,6 +294,7 @@ class PresentationService:
             verified_numbers=[self._issuer_metrics(h) for h in holdings if h.owned],
             open_questions=questions,
             boring_filings=boring_line,
+            withheld_filings=[self._filing_item(view) for view in manual],
             tracked_but_unanalyzed=bool(holdings and not analyzed),
             sample_data=sample_data,
         )
@@ -325,7 +324,11 @@ class PresentationService:
                             check_id=c.check_id,
                             verdict=c.verdict.upper(),
                             severity=c.severity,
-                            detail=c.detail,
+                            detail=(
+                                "Verification detail withheld with the LLM-derived analysis."
+                                if view.manual_review and c.detail
+                                else c.detail
+                            ),
                         )
                         for c in checks
                     ],
@@ -334,14 +337,19 @@ class PresentationService:
         if view.p1 and view.p1.extraction_confidence == "low" and view.p1.gaps:
             insufficient_reason = "; ".join(view.p1.gaps)
         stored_stages = {row.stage: row for row in self.repo.list_filing_stages(accession)}
+        has_p2_analysis = self.repo.latest_analysis(accession, "P2") is not None
         inferred = {
             "download": "completed" if filing.status != "fetched" else "pending",
             "parse": "completed" if self.repo.list_filing_sections(accession) else "pending",
-            "extract": "completed" if view.p1 else "pending",
+            "extract": "completed" if view.analysis_present else "pending",
             "metrics": "completed"
             if self.repo.latest_computations(view.ticker)
             else "pending",
-            "impact": "completed" if view.p2 else "skipped" if view.p1 else "pending",
+            "impact": "completed"
+            if has_p2_analysis
+            else "skipped"
+            if view.analysis_present
+            else "pending",
             "verify": "completed" if verification else "pending",
         }
         pipeline = []
@@ -353,13 +361,18 @@ class PresentationService:
                     diagnostics = json.loads(stored.diagnostics_json)
                 except json.JSONDecodeError:
                     diagnostics = {"raw": stored.diagnostics_json}
+            error = stored.error if stored else None
+            if view.manual_review and stage in {"extract", "impact", "verify"}:
+                diagnostics = {}
+                if error:
+                    error = "Stage detail withheld because verification did not pass."
             pipeline.append(
                 PipelineStageView(
                     stage=stage,
                     label=STAGE_LABELS[stage],
                     status=stored.status if stored else inferred[stage],
                     attempts=stored.attempts if stored else 0,
-                    error=stored.error if stored else None,
+                    error=error,
                     diagnostics=diagnostics,
                 )
             )
@@ -370,6 +383,7 @@ class PresentationService:
             verified_numbers=self._issuer_metrics(holding) if holding else None,
             verification=verification,
             insufficient_reason=insufficient_reason,
+            withheld_reason=view.withheld_reason,
             pipeline=pipeline,
         )
 

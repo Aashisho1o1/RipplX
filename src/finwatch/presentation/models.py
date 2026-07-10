@@ -34,8 +34,7 @@ class FilingItemView(BaseModel):
     owned: bool
     form: str
     filed: str
-    severity: Severity
-    watch_label: str | None = None
+    severity: Severity | None = None
     material_items: list[MaterialItemView] = Field(default_factory=list)
     flags: list[RedFlagView] = Field(default_factory=list)
     manual_review: bool = False
@@ -102,6 +101,7 @@ class BriefView(BaseModel):
     verified_numbers: list[IssuerMetricsView] = Field(default_factory=list)
     open_questions: list[str] = Field(default_factory=list)
     boring_filings: str | None = None
+    withheld_filings: list[FilingItemView] = Field(default_factory=list)
     tracked_but_unanalyzed: bool = False
     disclaimer: str = DISCLAIMER
     sample_data: bool = False
@@ -135,6 +135,7 @@ class FilingDetailView(BaseModel):
     verified_numbers: IssuerMetricsView | None = None
     verification: VerificationView | None = None
     insufficient_reason: str | None = None
+    withheld_reason: str | None = None
     pipeline: list[PipelineStageView] = Field(default_factory=list)
     disclaimer: str = DISCLAIMER
 

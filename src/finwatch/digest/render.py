@@ -156,6 +156,19 @@ def _critical_section(critical: list[_FilingView]) -> list[str]:
     return out
 
 
+def _withheld_section(withheld: list[_FilingView]) -> list[str]:
+    if not withheld:
+        return []
+    out = ["## Withheld analyses", ""]
+    for view in withheld:
+        out.append(
+            f"- {view.ticker} {view.filing.form_type} filed {_date(view.filing.filed_at)} — "
+            "LLM-derived analysis withheld because deterministic verification did not pass."
+        )
+    out.append("")
+    return out
+
+
 def _what_changed_section(material: list[_FilingView]) -> list[str]:
     out = ["## What changed", ""]
     rows = [v for v in material if v.p2 is not None]
@@ -358,17 +371,21 @@ def render_digest(
     filings = [f for f in repo.list_filings() if _in_window(f, since, until)]
     filings.sort(key=lambda f: (f.filed_at, f.accession_number), reverse=True)
     views = [_load_view(repo, f) for f in filings]
-    analyzed = [v for v in views if v.p1 is not None]
+    analyzed = [v for v in views if v.analysis_present]
 
     # Exhaustive buckets so no analyzed filing is silently dropped (determinism doctrine):
     # a filing is shown in Critical (if critical), and/or What-changed (if it has renderable
     # portfolio impact), and otherwise falls to the single Boring line.
     critical = [v for v in analyzed if v.is_critical]
     impactful = [v for v in analyzed if _has_impact(v)]
-    boring = [v for v in analyzed if not v.is_critical and not _has_impact(v)]
+    withheld = [v for v in analyzed if v.manual_review]
+    boring = [
+        v for v in analyzed if not v.manual_review and not v.is_critical and not _has_impact(v)
+    ]
 
     lines: list[str] = []
     lines += _header(views, holdings, since, until)
+    lines += _withheld_section(withheld)
     lines += _critical_section(critical)
     lines += _what_changed_section(impactful)
     lines += _thesis_section(impactful)
