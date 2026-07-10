@@ -41,11 +41,6 @@ P2_JSON = json.dumps({
 })
 
 
-class _FakePrice:
-    def close_on_or_before(self, ticker, date_iso):
-        return 450.0
-
-
 def _orchestrator(repo):
     llm = FakeLLMClient(
         responder=lambda s, _u: P2_JSON if "portfolio manager and risk officer" in s else P1_JSON)
@@ -53,7 +48,7 @@ def _orchestrator(repo):
         repo, Preprocessor(repo, now_fn=lambda: "t"),
         P1Extractor(llm, repo, model_label="fake/m", now_fn=lambda: "t"),
         P2Explainer(llm, repo, model_label="fake/m", now_fn=lambda: "t"),
-        MetricsService(repo, _FakePrice(), lambda _cik: MSFT_CF, now_fn=lambda: "t"),
+        MetricsService(repo, lambda _cik: MSFT_CF, now_fn=lambda: "t"),
         companyfacts_provider=lambda _cik: MSFT_CF, now_fn=lambda: "t",
     )
 
@@ -143,7 +138,7 @@ def test_launch_pipeline_never_calls_p3_or_writes_shadow_rows():
         repo, Preprocessor(repo, now_fn=lambda: "t"),
         P1Extractor(llm, repo, model_label="fake/m", now_fn=lambda: "t"),
         P2Explainer(llm, repo, model_label="fake/m", now_fn=lambda: "t"),
-        MetricsService(repo, _FakePrice(), lambda _c: MSFT_CF, now_fn=lambda: "t"),
+        MetricsService(repo, lambda _c: MSFT_CF, now_fn=lambda: "t"),
         companyfacts_provider=lambda _c: MSFT_CF, now_fn=lambda: "t")
 
     records = [{"ticker": "MSFT", "owned": True, "shares": 100, "cost_basis": 300.0,

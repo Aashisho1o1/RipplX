@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 
 from finwatch.db.repositories import Computation, Filing, Holding, Repo
+from finwatch.metrics.catalog import STARTER_METRIC_LABELS, STARTER_METRICS
 from finwatch.metrics.envelope import MetricResult
 from finwatch.pipeline.progress import PIPELINE_STAGES, STAGE_LABELS
 from finwatch.presentation.formatting import format_metric_value
@@ -36,22 +37,6 @@ from finwatch.presentation.projection import (
     load_filing_projection,
 )
 
-STARTER_METRICS = (
-    "revenue_growth",
-    "net_income_trend",
-    "cfo_trend",
-    "liquidity_basics",
-    "share_count_change",
-    "simple_leverage",
-)
-METRIC_LABELS = {
-    "revenue_growth": "Revenue growth",
-    "net_income_trend": "Net income trend",
-    "cfo_trend": "Operating cash flow",
-    "liquidity_basics": "Liquidity",
-    "share_count_change": "Share count Δ",
-    "simple_leverage": "Leverage",
-}
 CHANNEL_LABELS = {
     "C1": "revenue",
     "C2": "margins",
@@ -202,13 +187,11 @@ class PresentationService:
             )
         return rows
 
-    def _metric_rows(self, computations: list[Computation], show_all: bool) -> list[MetricRowView]:
+    def _metric_rows(self, computations: list[Computation]) -> list[MetricRowView]:
         by_name = {
             row.tool: MetricResult.model_validate_json(row.result_json) for row in computations
         }
-        names = (
-            sorted(by_name) if show_all else [name for name in STARTER_METRICS if name in by_name]
-        )
+        names = [name for name in STARTER_METRICS if name in by_name]
         result = []
         for name in names:
             metric = by_name[name]
@@ -223,7 +206,7 @@ class PresentationService:
                 value = f"— {state_label}"
             result.append(
                 MetricRowView(
-                    metric=METRIC_LABELS.get(
+                    metric=STARTER_METRIC_LABELS.get(
                         metric.metric, metric.metric.replace("_", " ").title()
                     ),
                     value=value,
@@ -234,9 +217,9 @@ class PresentationService:
             )
         return result
 
-    def _issuer_metrics(self, holding: Holding, *, show_all: bool = False) -> IssuerMetricsView:
+    def _issuer_metrics(self, holding: Holding) -> IssuerMetricsView:
         computations = self.repo.latest_computations(holding.ticker)
-        rows = self._metric_rows(computations, show_all)
+        rows = self._metric_rows(computations)
         empty = (
             None
             if any(row.state == "computed" for row in rows)
@@ -431,11 +414,6 @@ class PresentationService:
                     ticker=holding.ticker,
                     cik=holding.cik,
                     owned=bool(holding.owned),
-                    shares=holding.shares,
-                    cost_basis=holding.cost_basis,
-                    target_weight_pct=holding.target_weight_pct,
-                    horizon=holding.horizon,
-                    thesis=holding.thesis,
                     severity=severity,
                     last_filing=_date(latest.filed_at) if latest else None,
                     compressed_verified_read=compressed,
@@ -445,13 +423,13 @@ class PresentationService:
         watching = sorted((row for row in result if not row.owned), key=lambda row: row.ticker)
         return HoldingsView(owned=owned, watching=watching)
 
-    def metrics(self, ticker: str, *, as_of: str, show_all: bool = False) -> MetricsView | None:
+    def metrics(self, ticker: str, *, as_of: str) -> MetricsView | None:
         company = self.repo.get_company_by_ticker(ticker)
         if not company:
             return None
         holding = self.repo.get_holding_by_cik(company.cik)
         computations = self.repo.computations_as_of(ticker.upper(), as_of)
-        rows = self._metric_rows(computations, show_all)
+        rows = self._metric_rows(computations)
         filings = self.repo.list_filings(company.cik)
         before_first = bool(filings and as_of < min(_date(f.filed_at) for f in filings))
         empty = (

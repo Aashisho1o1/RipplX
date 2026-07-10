@@ -1,7 +1,7 @@
 """Production pipeline runner — assembles the Orchestrator from real (or fake) clients
 and drives it over ingested filings.
 
-`finwatch ingest` only indexes filings + XBRL + prices; this is the step that actually
+`finwatch ingest` only indexes filings + XBRL; this is the step that actually
 runs P0→P1→metrics→P2→verify and persists the analyses the digest renders from
 (closing the gap where the production CLI never reached the pipeline). Everything here is
 dependency-injected so tests drive it with a FakeLLMClient and a fixture fetcher — no
@@ -16,7 +16,6 @@ from datetime import UTC, datetime
 from finwatch.db.repositories import Filing, Repo
 from finwatch.llm.router import LLMClient
 from finwatch.llm.stages import P1Extractor, P2Explainer
-from finwatch.metrics.formulas import PriceProvider
 from finwatch.metrics.service import MetricsService
 from finwatch.pipeline.orchestrator import (
     FilingAnalysis,
@@ -40,7 +39,6 @@ def build_orchestrator(
     llm_extract: LLMClient,
     llm_reason: LLMClient,
     companyfacts_provider: CompanyFactsProvider,
-    price_provider: PriceProvider | None = None,
     model_extract: str | None = None,
     model_reason: str | None = None,
     now_fn: Callable[[], str] | None = None,
@@ -52,7 +50,7 @@ def build_orchestrator(
     evidence justifies bringing it back.
     """
     now_fn = now_fn or _now_iso
-    metrics = MetricsService(repo, price_provider, companyfacts_provider, now_fn=now_fn)
+    metrics = MetricsService(repo, companyfacts_provider, now_fn=now_fn)
     return Orchestrator(
         repo, Preprocessor(repo, now_fn=now_fn),
         P1Extractor(llm_extract, repo, model_label=model_extract, now_fn=now_fn),
@@ -61,11 +59,9 @@ def build_orchestrator(
 
 
 def holding_records(repo: Repo) -> list[dict]:
-    """The P2 `records` list (owned + watch), from the tracked holdings."""
+    """Minimal P2 issuer identities; never disclose portfolio accounting or thesis data."""
     return [
-        {"ticker": h.ticker, "owned": bool(h.owned), "shares": h.shares,
-         "cost_basis": h.cost_basis, "target_weight_pct": h.target_weight_pct,
-         "thesis": h.thesis}
+        {"ticker": h.ticker, "owned": bool(h.owned)}
         for h in repo.list_holdings()
     ]
 

@@ -1,4 +1,4 @@
-"""Shared test fixtures: in-memory DB + fixture-backed EDGAR/Stooq clients (no network)."""
+"""Shared test fixtures: in-memory DB + fixture-backed EDGAR clients (no network)."""
 from __future__ import annotations
 
 import json
@@ -9,7 +9,7 @@ import httpx
 import pytest
 
 from finwatch.db import Repo, init_db
-from finwatch.ingest import EdgarClient, IngestService, StooqClient
+from finwatch.ingest import EdgarClient, IngestService
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -64,11 +64,6 @@ def edgar_client(mock_transport) -> EdgarClient:
 
 
 @pytest.fixture
-def stooq_client(mock_transport) -> StooqClient:
-    return StooqClient(client=httpx.Client(transport=mock_transport))
-
-
-@pytest.fixture
-def ingest_service(repo, edgar_client, stooq_client) -> IngestService:
+def ingest_service(repo, edgar_client) -> IngestService:
     # Fixed as_of so backfill-cutoff assertions are deterministic.
-    return IngestService(repo, edgar_client, stooq_client, as_of=date(2024, 12, 1))
+    return IngestService(repo, edgar_client, as_of=date(2024, 12, 1))

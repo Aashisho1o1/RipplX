@@ -12,7 +12,7 @@ from urllib.parse import urlsplit
 from pydantic import BaseModel, ConfigDict, Field
 
 from finwatch.config import Config
-from finwatch.db import Holding, Repo, init_db
+from finwatch.db import Repo, init_db
 from finwatch.demo import DEMO_SINCE, build_demo_db
 from finwatch.ingest import TickerNotFoundError, build_service
 from finwatch.presentation import PresentationService
@@ -36,22 +36,9 @@ class ApiProblem(Exception):
 
 
 class HoldingCreate(BaseModel):
-    ticker: str
-    owned: bool
-    shares: float | None = Field(default=None, gt=0)
-    cost_basis: float | None = Field(default=None, ge=0)
-    target_weight_pct: float | None = Field(default=None, ge=0, le=100)
-    horizon: Literal["trading", "1-3y", "5y+", "indefinite"] | None = None
-    thesis: str | None = None
+    model_config = ConfigDict(extra="forbid")
 
-
-class HoldingUpdate(BaseModel):
-    owned: bool | None = None
-    shares: float | None = Field(default=None, gt=0)
-    cost_basis: float | None = Field(default=None, ge=0)
-    target_weight_pct: float | None = Field(default=None, ge=0, le=100)
-    horizon: Literal["trading", "1-3y", "5y+", "indefinite"] | None = None
-    thesis: str | None = None
+    ticker: str = Field(min_length=1, max_length=15, pattern=r"^[A-Za-z][A-Za-z0-9.-]*$")
 
 
 class SettingsUpdate(BaseModel):
@@ -82,7 +69,6 @@ def _compute_synced_metrics(service, cik: str, *, as_of: str) -> int:
     from finwatch.metrics.service import MetricsService
 
     bundle, _ = MetricsService(
-        service.repo,
         service.repo,
         lambda selected_cik: service.edgar.companyfacts(selected_cik),
     ).compute_and_store(cik, as_of=as_of)
@@ -204,10 +190,6 @@ def create_app(*, db_path: str | None = None, web_dist: str | Path | None = None
 
     @app.post("/api/holdings", status_code=201)
     def create_holding(payload: HoldingCreate):
-        if payload.owned and (payload.shares is None or payload.cost_basis is None):
-            raise ApiProblem(
-                422, "holding_fields_required", "Owned holdings require shares and cost basis."
-            )
         with repo_context() as repo:
             settings = resolve_settings(repo, app.state.secrets)
         if not settings.sec_user_agent:
@@ -222,48 +204,16 @@ def create_app(*, db_path: str | None = None, web_dist: str | Path | None = None
         )
         connection, service = build_service(config)
         try:
-            company = service.add_holding(
-                payload.ticker,
-                owned=payload.owned,
-                shares=payload.shares,
-                cost_basis=payload.cost_basis,
-                target_weight_pct=payload.target_weight_pct,
-                horizon=payload.horizon,
-                thesis=_trimmed(payload.thesis),
-            )
+            company = service.add_holding(payload.ticker)
         except TickerNotFoundError as exc:
             raise ApiProblem(404, "ticker_not_found", "Ticker not found on EDGAR.") from exc
         finally:
             service.edgar.close()
-            service.stooq.close()
             connection.close()
         with repo_context() as repo:
             view = PresentationService(repo).holdings()
-            rows = view.owned if payload.owned else view.watching
+            rows = view.owned + view.watching
             return next(row for row in rows if row.ticker == company.ticker)
-
-    @app.patch("/api/holdings/{ticker}")
-    def update_holding(ticker: str, payload: HoldingUpdate):
-        with repo_context() as repo:
-            company = repo.get_company_by_ticker(ticker)
-            current = repo.get_holding_by_cik(company.cik) if company else None
-            if current is None:
-                raise ApiProblem(404, "holding_not_found", "Holding not found.")
-            values = current.model_dump()
-            for name in payload.model_fields_set:
-                values[name] = getattr(payload, name)
-            values["owned"] = int(values["owned"])
-            values["thesis"] = _trimmed(values.get("thesis"))
-            if values["owned"] and (
-                values.get("shares") is None or values.get("cost_basis") is None
-            ):
-                raise ApiProblem(
-                    422, "holding_fields_required", "Owned holdings require shares and cost basis."
-                )
-            repo.upsert_holding(Holding(**values))
-            view = PresentationService(repo).holdings()
-            rows = view.owned if values["owned"] else view.watching
-            return next(row for row in rows if row.ticker == current.ticker)
 
     @app.delete("/api/holdings/{ticker}", status_code=204)
     def delete_holding(ticker: str):
@@ -273,14 +223,10 @@ def create_app(*, db_path: str | None = None, web_dist: str | Path | None = None
                 raise ApiProblem(404, "holding_not_found", "Holding not found.")
 
     @app.get("/api/companies/{ticker}/metrics")
-    def company_metrics(
-        ticker: str, as_of: str | None = None, show_all: bool = False, demo: bool = False
-    ):
+    def company_metrics(ticker: str, as_of: str | None = None, demo: bool = False):
         selected_date = as_of or date.today().isoformat()
         with repo_context(demo) as repo:
-            result = PresentationService(repo).metrics(
-                ticker, as_of=selected_date, show_all=show_all
-            )
+            result = PresentationService(repo).metrics(ticker, as_of=selected_date)
             if result is None:
                 raise ApiProblem(404, "company_not_found", "Company not found.")
             return result
@@ -344,7 +290,7 @@ def create_app(*, db_path: str | None = None, web_dist: str | Path | None = None
                         metrics_error = str(exc)
                     details = (
                         f"{result.filings_indexed} filings ({result.filings_new} new), "
-                        f"{result.xbrl_facts} XBRL facts, {result.prices} prices, "
+                        f"{result.xbrl_facts} XBRL facts, "
                         f"{metrics_computed} verified metrics"
                     )
                     message = result.error or details
@@ -362,7 +308,6 @@ def create_app(*, db_path: str | None = None, web_dist: str | Path | None = None
                     )
             finally:
                 service.edgar.close()
-                service.stooq.close()
                 connection.close()
             return partial
 
@@ -413,7 +358,6 @@ def create_app(*, db_path: str | None = None, web_dist: str | Path | None = None
                 llm_extract=LiteLLMClient(settings.model_extract, api_key=key),
                 llm_reason=LiteLLMClient(settings.model_reason, api_key=key),
                 companyfacts_provider=lambda selected_cik: edgar.companyfacts(selected_cik),
-                price_provider=repo,
                 model_extract=settings.model_extract,
                 model_reason=settings.model_reason,
             )

@@ -143,11 +143,6 @@ class HoldingView(BaseModel):
     ticker: str
     cik: str
     owned: bool
-    shares: float | None = None
-    cost_basis: float | None = None
-    target_weight_pct: float | None = None
-    horizon: str | None = None
-    thesis: str | None = None
     severity: Severity | None = None
     last_filing: str | None = None
     compressed_verified_read: str | None = None

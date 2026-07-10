@@ -1,8 +1,7 @@
-"""Metrics orchestration — builds compute_all's inputs from the DB and persists results.
+"""Launch metrics orchestration — compute and persist the six starter metrics.
 
-`compute_all` (formulas.py, Tier 1) is the only metrics entry point; this service is
-the thin adapter that supplies it: SectorInfo from the stored company, a FactStore
-from companyfacts, the owned Holding + portfolio market value, and a PriceProvider.
+This service supplies only a point-in-time FactStore and issuer sector. Price, position,
+valuation, target-weight, and portfolio inputs are deliberately absent from the launch path.
 Every MetricResult is persisted verbatim (`model_dump_json`) to the `computations`
 table (SYSTEM_DESIGN §4.3).
 """
@@ -10,13 +9,12 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
-from datetime import UTC, date, datetime
+from datetime import UTC, datetime
 
 from finwatch.core.types import SectorInfo, sector_from_sic
-from finwatch.db.repositories import Computation, Holding, Repo
+from finwatch.db.repositories import Computation, Repo
 from finwatch.metrics.envelope import MetricsBundle
-from finwatch.metrics.formulas import Holding as MetricHolding
-from finwatch.metrics.formulas import PriceProvider, compute_all
+from finwatch.metrics.formulas import compute_starter
 from finwatch.verify.checks import CheckResult
 from finwatch.verify.orchestrator import data_quality_report
 from finwatch.xbrl.normalize import FactStore
@@ -62,24 +60,15 @@ def as_of_facts(companyfacts: dict, as_of: str | None) -> dict:
     return {**companyfacts, "facts": new_facts}
 
 
-def _to_metric_holding(h: Holding) -> MetricHolding:
-    return MetricHolding(
-        ticker=h.ticker, owned=bool(h.owned), shares=h.shares, cost_basis=h.cost_basis,
-        target_weight_pct=h.target_weight_pct, thesis=h.thesis, horizon=h.horizon,
-    )
-
-
 class MetricsService:
     def __init__(
         self,
         repo: Repo,
-        price_provider: PriceProvider | None,
         companyfacts_provider: CompanyFactsProvider,
         *,
         now_fn: Callable[[], str] | None = None,
     ) -> None:
         self.repo = repo
-        self.price_provider = price_provider
         self.companyfacts_provider = companyfacts_provider
         self._now_fn = now_fn or (lambda: datetime.now(UTC).isoformat())
 
@@ -92,39 +81,9 @@ class MetricsService:
             as_of_facts(self.companyfacts_provider(cik), as_of))
         return store, build_sector(company.sic_code), company
 
-    # Beyond ~a quarter, current-state holdings are no longer a fair proxy for the
-    # point-in-time position, so weight/position metrics are withheld (see below).
-    _POSITION_STALE_DAYS = 92
-
     def compute(self, cik: str, *, as_of: str) -> MetricsBundle:
-        store, sector, company = self._store_and_sector(cik, as_of)
-
-        holding_row = self.repo.get_holding_by_cik(cik)
-        holding = None
-        portfolio_mv = None
-        # Position/weight metrics are CURRENT-STATE (no holdings history is stored), so
-        # only attach the holding on a live/recent run. On a historical backfill or
-        # shadow replay they would be anachronistic and pollute M5/M7 + the shadow log.
-        if holding_row is not None and holding_row.owned and not self._is_historical(as_of):
-            holding = _to_metric_holding(holding_row)
-            portfolio_mv = self._portfolio_market_value(as_of)
-
-        return compute_all(
-            store, sector, ticker=company.ticker, price_provider=self.price_provider,
-            as_of=as_of, holding=holding, portfolio_market_value=portfolio_mv,
-        )
-
-    def _is_historical(self, as_of: str) -> bool:
-        """True when ``as_of`` is materially before 'now' — a backfill or shadow-log
-        replay, where current-state holdings no longer represent the point-in-time
-        position. A malformed/absent date (e.g. a test sentinel now_fn) is treated as
-        live, so weight metrics still compute in those paths."""
-        try:
-            as_of_day = date.fromisoformat((as_of or "")[:10])
-            now_day = date.fromisoformat((self._now_fn() or "")[:10])
-        except ValueError:
-            return False
-        return (now_day - as_of_day).days > self._POSITION_STALE_DAYS
+        store, sector, _company = self._store_and_sector(cik, as_of)
+        return compute_starter(store, sector, as_of=as_of)
 
     def data_quality(self, cik: str, *, as_of: str, form_type: str) -> list[CheckResult]:
         """V2 accounting-identity audit for a filing (F10) — separate from the LLM gate."""
@@ -149,21 +108,3 @@ class MetricsService:
             for r in bundle.all_results()
         ]
         return self.repo.insert_computations(rows)
-
-    def _portfolio_market_value(self, as_of: str) -> float | None:
-        """Total market value of owned, share-bearing holdings — or None if ANY of them
-        is unpriced (F13). Dropping unpriced positions from the denominator while pricing
-        the rest inflates the priced ones' weights (e.g. a false 100%), which would trip
-        the M5 concentration cap; incomplete coverage must make weights unavailable so the
-        weight-dependent rules skip cleanly."""
-        if self.price_provider is None:
-            return None
-        total = 0.0
-        for h in self.repo.list_holdings(owned=True):
-            if h.shares is None:
-                continue                      # no share count -> not in the weighted base
-            px = self.price_provider.close_on_or_before(h.ticker, as_of)
-            if px is None:
-                return None                   # incomplete price coverage -> no weights
-            total += px * h.shares
-        return total or None

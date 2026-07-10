@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 from finwatch.db import Repo, init_db
 from finwatch.demo import build_demo_db
-from finwatch.web.app import JobRequest, _compute_synced_metrics, create_app
+from finwatch.web.app import HoldingCreate, JobRequest, _compute_synced_metrics, create_app
 
 
 def _client(tmp_path: Path) -> tuple[TestClient, Path]:
@@ -24,6 +24,29 @@ def test_web_job_request_accepts_only_an_optional_ticker():
     for legacy in ({"limit": 2}, {"form": "10-Q"}, {"accession": "a-1"}, {"mode": "parse"}):
         with pytest.raises(ValueError):
             JobRequest(**legacy)
+
+
+def test_holding_create_is_ticker_only_and_legacy_rows_do_not_leak_private_fields(tmp_path):
+    assert HoldingCreate(ticker="BRK-B").ticker == "BRK-B"
+    for legacy in (
+        {"ticker": "MSFT", "shares": 10},
+        {"ticker": "MSFT", "cost_basis": 100},
+        {"ticker": "MSFT", "target_weight_pct": 5},
+        {"ticker": "MSFT", "thesis": "private"},
+        {"ticker": "MSFT", "owned": False},
+    ):
+        with pytest.raises(ValueError):
+            HoldingCreate(**legacy)
+
+    db_path = tmp_path / "finwatch.db"
+    build_demo_db(str(db_path)).close()
+    client = TestClient(create_app(db_path=str(db_path), web_dist=tmp_path / "missing-dist"))
+    rows = client.get("/api/holdings").json()["owned"]
+    assert rows
+    assert {"shares", "cost_basis", "target_weight_pct", "horizon", "thesis"}.isdisjoint(
+        rows[0]
+    )
+    assert client.patch("/api/holdings/MSFT", json={"shares": 1}).status_code == 404
 
 
 def test_analyze_endpoint_rejects_historical_replay_controls(tmp_path):

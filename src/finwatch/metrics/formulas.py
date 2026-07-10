@@ -4,7 +4,8 @@ Every function returns a MetricResult (envelope.py). Rules:
   * Never raise on missing data — return status=unavailable with the missing list.
   * Sector inapplicability -> status=not_applicable with a reason.
   * All inputs recorded in inputs_used; all formulas versioned.
-`compute_all` is the single entry point the pipeline may call.
+The launch pipeline calls ``compute_starter``. ``compute_all`` remains available only for
+isolated research/evaluation of the deferred catalog.
 """
 from __future__ import annotations
 
@@ -623,11 +624,26 @@ def rebalance_check(current_weight_pct: Optional[float],
 
 
 # ------------------------------------------------------------ entry point --
+def compute_starter(store: FactStore, sector: SectorInfo, *, as_of: str) -> MetricsBundle:
+    """Compute exactly the six metrics exposed by the launch product.
+
+    No price, position, valuation, scoring, or portfolio inputs enter this path.
+    """
+    bundle = MetricsBundle()
+    bundle.results["revenue_growth"] = revenue_growth(store, sector, as_of)
+    bundle.results["net_income_trend"] = net_income_trend(store, sector, as_of)
+    bundle.results["cfo_trend"] = cfo_trend(store, sector, as_of)
+    bundle.results["liquidity_basics"] = liquidity_basics(store, sector, as_of)
+    bundle.results["share_count_change"] = share_count_change(store, sector, as_of)
+    bundle.results["simple_leverage"] = simple_leverage(store, sector, as_of)
+    return bundle
+
+
 def compute_all(store: FactStore, sector: SectorInfo, *, ticker: str,
                 price_provider: Optional[PriceProvider], as_of: str,
                 holding: Optional[Holding] = None,
                 portfolio_market_value: Optional[float] = None) -> MetricsBundle:
-    """The ONLY metrics entry point the pipeline may call."""
+    """Deferred research catalog; not called by the launch pipeline."""
     b = MetricsBundle()
     b.results["revenue_growth"] = revenue_growth(store, sector, as_of)
     b.results["net_income_trend"] = net_income_trend(store, sector, as_of)

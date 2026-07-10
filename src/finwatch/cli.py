@@ -107,64 +107,22 @@ def serve(
 
 @app.command()
 def add(
-    ticker: str = typer.Argument(..., help="Ticker to add as an owned holding."),
-    shares: float = typer.Option(..., "--shares", help="Number of shares held."),
-    cost: float = typer.Option(..., "--cost", help="Cost basis per share."),
-    target_weight: float | None = typer.Option(
-        None, "--target-weight", help="Target portfolio weight (%)."
-    ),
-    horizon: str | None = typer.Option(
-        None, "--horizon", help="Holding horizon: trading|1-3y|5y+|indefinite."
-    ),
-    thesis: str | None = typer.Option(
-        None, "--thesis", help="Investment thesis (OPTIONAL by design)."
-    ),
+    ticker: str = typer.Argument(..., help="Ticker to track."),
 ) -> None:
-    """Add an owned holding (thesis optional by design)."""
+    """Track one ticker; no portfolio accounting data is collected."""
     cfg = _config_or_exit()
     conn, service = build_service(cfg)
     try:
-        company = service.add_holding(
-            ticker,
-            owned=True,
-            shares=shares,
-            cost_basis=cost,
-            target_weight_pct=target_weight,
-            horizon=horizon,
-            thesis=thesis,
-        )
+        company = service.add_holding(ticker)
     except TickerNotFoundError as exc:
         console.print(f"[red]{exc}[/]")
         raise typer.Exit(code=1) from exc
     finally:
         service.edgar.close()
-        service.stooq.close()
         conn.close()
     console.print(
-        f"[green]✓[/] Added [bold]{company.ticker}[/] (CIK {company.cik}) as an owned "
-        f"holding. Run [bold]finwatch ingest[/] to pull filings, XBRL facts, and prices."
-    )
-
-
-@app.command()
-def watch(
-    ticker: str = typer.Argument(..., help="Ticker to track without ownership."),
-) -> None:
-    """Track a company without ownership context."""
-    cfg = _config_or_exit()
-    conn, service = build_service(cfg)
-    try:
-        company = service.add_holding(ticker, owned=False)
-    except TickerNotFoundError as exc:
-        console.print(f"[red]{exc}[/]")
-        raise typer.Exit(code=1) from exc
-    finally:
-        service.edgar.close()
-        service.stooq.close()
-        conn.close()
-    console.print(
-        f"[green]✓[/] Watching [bold]{company.ticker}[/] (CIK {company.cik}). "
-        f"Run [bold]finwatch ingest[/] to pull filings and financials."
+        f"[green]✓[/] Tracking [bold]{company.ticker}[/] (CIK {company.cik}). "
+        f"Run [bold]finwatch ingest[/] to pull filings and XBRL facts."
     )
 
 
@@ -196,7 +154,6 @@ def _run_pipeline(cfg: Config, *, cik: str | None):
         llm_extract=LiteLLMClient(cfg.model_extract),
         llm_reason=LiteLLMClient(cfg.model_reason),
         companyfacts_provider=lambda c: edgar.companyfacts(c),
-        price_provider=repo,
         model_extract=cfg.model_extract,
         model_reason=cfg.model_reason,
     )
@@ -239,8 +196,8 @@ def analyze(
     conn.close()
     if company is None:
         console.print(
-            f"[red]{ticker} is not tracked.[/] Run [bold]finwatch watch {ticker}[/] "
-            f"(or [bold]finwatch add {ticker} ...[/]) then [bold]finwatch ingest[/] first."
+            f"[red]{ticker} is not tracked.[/] Run [bold]finwatch add {ticker}[/] then "
+            "[bold]finwatch ingest[/] first."
         )
         raise typer.Exit(code=1)
     results = _run_pipeline(cfg, cik=company.cik)
@@ -259,38 +216,35 @@ def ingest(
         None, "--backfill", help="Quarters of filing history to index (default 8)."
     ),
 ) -> None:
-    """Pull filings + companyfacts (and EOD prices) for tracked CIKs."""
+    """Pull filings and SEC companyfacts for tracked CIKs."""
     cfg = _config_or_exit()
     conn, service = build_service(cfg)
     quarters = backfill if backfill is not None else DEFAULT_BACKFILL_QUARTERS
     try:
         if not service.repo.list_tracked_ciks():
             console.print(
-                "No tracked companies yet. Add one with "
-                "[bold]finwatch add TICKER --shares N --cost X[/] or "
-                "[bold]finwatch watch TICKER[/]."
+                "No tracked companies yet. Add one with [bold]finwatch add TICKER[/]."
             )
             return
         summary = service.ingest_all(backfill_quarters=quarters)
     finally:
         service.edgar.close()
-        service.stooq.close()
         conn.close()
 
     for r in summary.results:
         if r.error:
             console.print(
                 f"[yellow]![/] {r.ticker}: {r.filings_indexed} filings, "
-                f"{r.xbrl_facts} facts, {r.prices} prices — [red]{r.error}[/]"
+                f"{r.xbrl_facts} facts — [red]{r.error}[/]"
             )
         else:
             console.print(
                 f"[green]✓[/] {r.ticker}: {r.filings_indexed} filings "
-                f"({r.filings_new} new), {r.xbrl_facts} XBRL facts, {r.prices} prices"
+                f"({r.filings_new} new), {r.xbrl_facts} XBRL facts"
             )
     console.print(
         f"[bold]Ingest complete:[/] {summary.companies} companies, "
-        f"{summary.filings} filings, {summary.xbrl_facts} XBRL facts, {summary.prices} prices."
+        f"{summary.filings} filings, {summary.xbrl_facts} XBRL facts."
     )
 
 
@@ -313,7 +267,7 @@ def process(
         if company is None:
             console.print(
                 f"[red]{ticker} is not tracked.[/] "
-                f"[bold]finwatch watch {ticker} && finwatch ingest[/] first."
+                f"[bold]finwatch add {ticker} && finwatch ingest[/] first."
             )
             raise typer.Exit(code=1)
         cik = company.cik
@@ -346,12 +300,9 @@ def metrics(
     backfill: int | None = typer.Option(
         None, "--backfill", help="Quarters of filing history to pull (default 8)."
     ),
-    show_all: bool = typer.Option(
-        False, "--all", help="Show every computed metric, not just the digest starter set."
-    ),
 ) -> None:
     """Compute and print a company's verified numbers straight from SEC XBRL — deterministic,
-    NO LLM key needed. Ingests the ticker if needed (adding it as a watch entry), runs the
+    NO LLM key needed. Ingests the ticker if needed, runs the
     metrics engine, and prints the results. A fast way to see the trust layer work on real data."""
     from datetime import date
 
@@ -367,26 +318,24 @@ def metrics(
         company = service.repo.get_company_by_ticker(ticker_u)
         if company is None:
             try:
-                company = service.add_holding(ticker_u, owned=False)
+                company = service.add_holding(ticker_u)
             except TickerNotFoundError as exc:
                 console.print(f"[red]{exc}[/]")
                 raise typer.Exit(code=1) from exc
             console.print(
-                f"[dim]{company.ticker} was not tracked — added as a watch entry (non-owned) "
-                f"so its metrics can be computed.[/]"
+                f"[dim]{company.ticker} was not tracked — added to tracked tickers.[/]"
             )
         result = service.ingest_one(company.cik, backfill_quarters=quarters)
         if result.error:
             console.print(f"[yellow]![/] ingest note for {company.ticker}: {result.error}")
-        ms = MetricsService(service.repo, service.repo, lambda c: service.edgar.companyfacts(c))
+        ms = MetricsService(service.repo, lambda c: service.edgar.companyfacts(c))
         bundle, _ = ms.compute_and_store(company.cik, as_of=as_of_date)
         ticker_out = company.ticker
     finally:
         service.edgar.close()
-        service.stooq.close()
         conn.close()
 
-    rows = metric_view_rows(bundle, show_all=show_all)
+    rows = metric_view_rows(bundle)
     _print_metrics_table(ticker_out, as_of_date, rows)
     if not any(mark == "✓" for *_, mark in rows):
         console.print(

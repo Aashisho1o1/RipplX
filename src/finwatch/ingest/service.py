@@ -1,10 +1,9 @@
 """Ingestion orchestration.
 
-`add`/`watch` register a company + holding (keyed on CIK). `ingest` runs, for every
+`add` registers a tracked company (keyed on CIK). `ingest` runs, for every
 tracked CIK: refresh the issuer profile + filing index (bounded by a backfill window,
-idempotent for incremental polling), flatten companyfacts into ``xbrl_facts``, and
-pull Stooq EOD prices. Each CIK's steps fail independently so one bad ticker never
-aborts the batch; partial progress is recorded.
+idempotent for incremental polling), and flatten companyfacts into ``xbrl_facts``.
+Each CIK's steps fail independently so one bad ticker never aborts the batch.
 """
 from __future__ import annotations
 
@@ -16,9 +15,8 @@ from pydantic import BaseModel
 
 from finwatch.config import Config
 from finwatch.core.types import sector_from_sic
-from finwatch.db.repositories import Company, Filing, Holding, Price, Repo, XbrlFact
+from finwatch.db.repositories import Company, Filing, Holding, Repo, XbrlFact
 from finwatch.ingest.edgar import EdgarClient, EdgarHTTPError, normalize_cik
-from finwatch.ingest.stooq import StooqClient
 from finwatch.ingest.tickers import resolve_ticker
 
 DEFAULT_BACKFILL_QUARTERS = 8
@@ -37,7 +35,6 @@ class CikIngestResult(BaseModel):
     filings_indexed: int = 0
     filings_new: int = 0
     xbrl_facts: int = 0
-    prices: int = 0
     error: str | None = None
 
 
@@ -59,11 +56,6 @@ class IngestSummary(BaseModel):
     @property
     def xbrl_facts(self) -> int:
         return sum(r.xbrl_facts for r in self.results)
-
-    @property
-    def prices(self) -> int:
-        return sum(r.prices for r in self.results)
-
 
 def companyfacts_to_rows(cf_json: dict, cik: str) -> list[XbrlFact]:
     """Flatten SEC companyfacts JSON into ``XbrlFact`` rows.
@@ -105,14 +97,12 @@ class IngestService:
         self,
         repo: Repo,
         edgar: EdgarClient,
-        stooq: StooqClient,
         *,
         as_of: date | None = None,
         now_fn: Callable[[], str] | None = None,
     ) -> None:
         self.repo = repo
         self.edgar = edgar
-        self.stooq = stooq
         self._as_of = as_of
         self._now_fn = now_fn or _now_iso
 
@@ -120,15 +110,8 @@ class IngestService:
     def add_holding(
         self,
         ticker: str,
-        *,
-        owned: bool,
-        shares: float | None = None,
-        cost_basis: float | None = None,
-        target_weight_pct: float | None = None,
-        horizon: str | None = None,
-        thesis: str | None = None,
     ) -> Company:
-        """Resolve CIK, register the company (identity only) and the holding."""
+        """Resolve CIK and register one ticker without portfolio accounting data."""
         ticker = ticker.strip().upper()
         rec = resolve_ticker(self.edgar.company_tickers(), ticker)
         if rec is None:
@@ -140,9 +123,10 @@ class IngestService:
         now = self._now_fn()
         self.repo.upsert_company(Company(cik=rec.cik, ticker=ticker, name=rec.title, added_at=now))
         self.repo.upsert_holding(Holding(
-            cik=rec.cik, ticker=ticker, owned=int(owned), shares=shares,
-            cost_basis=cost_basis, target_weight_pct=target_weight_pct,
-            horizon=horizon, thesis=thesis, added_at=now,
+            cik=rec.cik,
+            ticker=ticker,
+            owned=1,
+            added_at=now,
         ))
         company = self.repo.get_company(rec.cik)
         assert company is not None  # just upserted
@@ -160,7 +144,7 @@ class IngestService:
     def ingest_one(
         self, cik: str, *, backfill_quarters: int | None = DEFAULT_BACKFILL_QUARTERS
     ) -> CikIngestResult:
-        """Ingest a single CIK (profile+SIC, filings, companyfacts, prices) — the per-ticker
+        """Ingest a single CIK (profile, filings, and companyfacts) — the per-ticker
         path behind ``ingest_all``, exposed so ``finwatch metrics`` can scope to one company
         without pulling the whole tracked portfolio."""
         return self._ingest_cik(cik, backfill_quarters)
@@ -194,11 +178,6 @@ class IngestService:
             result.xbrl_facts = self._ingest_companyfacts(cik)
         except Exception as exc:  # noqa: BLE001
             errors.append(f"companyfacts: {exc}")
-
-        try:
-            result.prices = self._ingest_prices(ticker)
-        except Exception as exc:  # noqa: BLE001
-            errors.append(f"prices: {exc}")
 
         if errors:
             result.error = "; ".join(errors)
@@ -288,12 +267,6 @@ class IngestService:
             return self.repo.count_xbrl_facts(cik)
         return self.repo.replace_xbrl_facts(cik, rows)
 
-    def _ingest_prices(self, ticker: str) -> int:
-        history = self.stooq.fetch_history(ticker)
-        rows = [Price(ticker=ticker, date=d, close=c) for d, c in history]
-        return self.repo.upsert_prices(rows)
-
-
 def build_service(config: Config, *, conn=None) -> tuple:
     """Build an IngestService (and open connection) from resolved config."""
     from finwatch.db import Repo, init_db
@@ -304,7 +277,7 @@ def build_service(config: Config, *, conn=None) -> tuple:
         Path(config.db_path).parent / "cache" if config.db_path != ":memory:" else None
     )
     edgar = EdgarClient(config.sec_user_agent, cache_dir=cache_dir)
-    return conn, IngestService(Repo(conn), edgar, StooqClient())
+    return conn, IngestService(Repo(conn), edgar)
 
 
 __all__ = [

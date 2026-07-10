@@ -13,6 +13,7 @@ from finwatch.digest import render_digest
 from finwatch.llm.router import FakeLLMClient
 from finwatch.pipeline.run import (
     build_orchestrator,
+    holding_records,
     newest_filing_to_analyze,
     process_filing,
     process_latest,
@@ -68,7 +69,7 @@ def _orch(repo):
     llm = FakeLLMClient(responder=_responder)
     return build_orchestrator(
         repo, llm_extract=llm, llm_reason=llm, companyfacts_provider=lambda _c: MSFT_CF,
-        price_provider=repo, model_extract="fake/x", model_reason="fake/r",
+        model_extract="fake/x", model_reason="fake/r",
         now_fn=lambda: "t")
 
 
@@ -88,6 +89,12 @@ def test_process_latest_runs_pipeline_persists_and_digest_renders():
     assert repo.get_filing(ACCN).processed_at == "t"
     md = render_digest(repo, since="2024-01-01").markdown
     assert "MSFT" in md and "Services growth supports the thesis." in md
+
+
+def test_llm_records_never_include_portfolio_accounting_or_thesis():
+    repo = Repo(init_db(":memory:"))
+    _seed(repo)
+    assert holding_records(repo) == [{"ticker": "MSFT", "owned": True}]
 
 
 def test_process_is_idempotent():
@@ -177,7 +184,7 @@ def test_transient_failure_is_retried_and_not_rendered_clean():
 
     llm = FakeLLMClient(responder=flaky)
     orch = build_orchestrator(repo, llm_extract=llm, llm_reason=llm,
-                              companyfacts_provider=lambda _c: MSFT_CF, price_provider=repo,
+                              companyfacts_provider=lambda _c: MSFT_CF,
                               model_extract="x", model_reason="r", now_fn=lambda: "t")
     r = process_latest(repo, orch, fetch_html=lambda _u: TENQ, now_fn=lambda: "t")
     assert not r[0].ok and "pipeline failed" in r[0].error

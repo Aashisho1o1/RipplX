@@ -12,8 +12,8 @@ describe("trust vocabulary", () => {
   it("distinguishes computed, unavailable, and not-applicable metrics", () => {
     render(<MetricTable rows={[
       { metric: "Revenue growth", value: "+17.5%", formula: "revenue_growth.v1", state: "computed", state_label: "Computed from SEC XBRL facts" },
-      { metric: "Leverage", value: "— data missing", formula: "simple_leverage.v1", state: "unavailable", state_label: "Data missing" },
-      { metric: "EV/EBITDA", value: "— not applicable", formula: "ev_ebitda.v1", state: "not_applicable", state_label: "Not applicable for this issuer" },
+      { metric: "CFO trend", value: "— data missing", formula: "cfo_trend.v1", state: "unavailable", state_label: "Data missing" },
+      { metric: "Simple leverage", value: "— not applicable", formula: "simple_leverage.v1", state: "not_applicable", state_label: "Not applicable for this issuer" },
     ]} />);
     expect(screen.getByLabelText("Computed from SEC XBRL facts")).toHaveTextContent("✓");
     expect(screen.getByLabelText("Data missing")).toHaveTextContent("—");

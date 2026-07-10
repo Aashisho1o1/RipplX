@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 
 from finwatch.db.repositories import Filing, Holding, Repo
 from finwatch.llm.schemas import P1Output
+from finwatch.metrics.catalog import STARTER_METRIC_LABELS, STARTER_METRICS
 from finwatch.metrics.envelope import MetricResult, MetricsBundle
 from finwatch.presentation.formatting import format_metric_value as _format_metric_value
 from finwatch.presentation.projection import (
@@ -32,23 +33,6 @@ from finwatch.presentation.projection import (
     load_filing_projection as _load_view,
 )
 
-# Starter-set metrics surfaced in the digest (CLAUDE.md §9 "conservative surface").
-_STARTER = (
-    "revenue_growth",
-    "net_income_trend",
-    "cfo_trend",
-    "liquidity_basics",
-    "share_count_change",
-    "simple_leverage",
-)
-_STARTER_LABELS = {
-    "revenue_growth": "Revenue growth",
-    "net_income_trend": "Net income trend",
-    "cfo_trend": "Operating cash flow",
-    "liquidity_basics": "Liquidity",
-    "share_count_change": "Share count Δ",
-    "simple_leverage": "Leverage",
-}
 _CRITICAL_SEVERITIES = frozenset({"critical", "high"})
 # P2 transmission channels (skip C8, the driver-type label, and any "not implicated").
 _CHANNEL_LABELS = {
@@ -268,7 +252,9 @@ def _verified_numbers_section(repo: Repo, holdings: list[Holding]) -> list[str]:
     for h in owned:
         comps = {c.tool: c for c in repo.latest_computations(h.ticker)}
         results = [
-            MetricResult.model_validate_json(comps[n].result_json) for n in _STARTER if n in comps
+            MetricResult.model_validate_json(comps[n].result_json)
+            for n in STARTER_METRICS
+            if n in comps
         ]
         if not any(r.status.value == "computed" for r in results):
             # Nothing computed for this issuer — one honest line beats six "unavailable" rows.
@@ -295,7 +281,7 @@ def _verified_numbers_section(repo: Repo, holdings: list[Holding]) -> list[str]:
 def _metric_rows(results: list[MetricResult]) -> list[str]:
     rows = []
     for r in results:
-        label = _STARTER_LABELS.get(r.metric, r.metric)
+        label = STARTER_METRIC_LABELS.get(r.metric, r.metric)
         if r.status.value == "computed":
             rows.append(f"| {label} | {format_metric_value(r)} | `{r.formula_version}` | ✓ |")
         elif r.status.value == "not_applicable":
@@ -307,21 +293,17 @@ def _metric_rows(results: list[MetricResult]) -> list[str]:
     return rows
 
 
-def metric_view_rows(bundle: MetricsBundle, *, show_all: bool) -> list[tuple[str, str, str, str]]:
+def metric_view_rows(bundle: MetricsBundle) -> list[tuple[str, str, str, str]]:
     """Display rows ``(label, value, formula_version, ✓|—)`` for the ``finwatch metrics`` CLI.
 
-    Default = the digest's conservative starter surface (``_STARTER``); ``show_all`` = every
-    metric in the bundle, computed first. Shares metric selection and value formatting with the
-    digest's ``_verified_numbers_section`` so terminal output and the markdown digest can't drift.
+    Selection and value formatting are shared with the digest; deferred research metrics are
+    ignored even if a legacy caller supplies a broader bundle.
     """
-    if show_all:
-        results = sorted(bundle.all_results(), key=lambda r: (not r.computed, r.metric))
-    else:
-        by_name = {r.metric: r for r in bundle.all_results()}
-        results = [by_name[n] for n in _STARTER if n in by_name]
+    by_name = {r.metric: r for r in bundle.all_results()}
+    results = [by_name[n] for n in STARTER_METRICS if n in by_name]
     rows: list[tuple[str, str, str, str]] = []
     for r in results:
-        label = _STARTER_LABELS.get(r.metric, r.metric)
+        label = STARTER_METRIC_LABELS.get(r.metric, r.metric)
         if r.status.value == "computed":
             rows.append((label, format_metric_value(r), r.formula_version, "✓"))
         elif r.status.value == "not_applicable":

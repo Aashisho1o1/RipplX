@@ -224,48 +224,6 @@ def test_review_v2_nci_imbalance_does_not_block_the_filing():
     assert not any(c.verdict == "fail" and c.severity == "blocking" for c in combined)
 
 
-# ---- F13: incomplete price coverage -> weights unavailable ------------------
-def test_f13_unpriced_holding_makes_portfolio_weights_unavailable():
-    from finwatch.db import Company, Holding, Price, Repo, init_db
-    from finwatch.metrics.service import MetricsService
-
-    repo = Repo(init_db(":memory:"))
-    for cik, tkr in (("1", "AAA"), ("2", "BBB")):
-        repo.upsert_company(Company(cik=cik, ticker=tkr, sic_code="7372", is_financial=0,
-                                    added_at="t"))
-        repo.upsert_holding(Holding(cik=cik, ticker=tkr, owned=1, shares=10, cost_basis=1.0,
-                                    added_at="t"))
-    repo.upsert_prices([Price(ticker="AAA", date="2024-01-01", close=100.0)])   # BBB unpriced
-    svc = MetricsService(repo, repo, lambda _c: {"facts": {}}, now_fn=lambda: "t")
-    assert svc._portfolio_market_value("2024-06-01") is None        # incomplete coverage
-    repo.upsert_prices([Price(ticker="BBB", date="2024-01-01", close=100.0)])
-    assert svc._portfolio_market_value("2024-06-01") == 2000.0      # both priced
-
-
-def test_position_metrics_withheld_on_historical_replay():
-    from finwatch.db import Company, Holding, Price, Repo, init_db
-    from finwatch.metrics.service import MetricsService
-
-    repo = Repo(init_db(":memory:"))
-    repo.upsert_company(Company(cik="1", ticker="AAA", sic_code="7372", is_financial=0,
-                                added_at="t"))
-    repo.upsert_holding(Holding(cik="1", ticker="AAA", owned=1, shares=10, cost_basis=1.0,
-                                target_weight_pct=10.0, added_at="t"))
-    repo.upsert_prices([Price(ticker="AAA", date="2023-01-01", close=100.0),
-                        Price(ticker="AAA", date="2025-05-01", close=100.0)])
-    svc = MetricsService(repo, repo, lambda _c: {"facts": {}}, now_fn=lambda: "2025-06-01")
-
-    # Recent as_of (within a quarter of 'now') -> current weights are a fair proxy.
-    recent = svc.compute("1", as_of="2025-05-15")
-    assert "position_metrics" in recent.results
-
-    # Historical replay (2+ years before 'now') -> withhold position/weight metrics so
-    # anachronistic current weights never feed M5/M7 or pollute the shadow-log record.
-    old = svc.compute("1", as_of="2023-01-15")
-    assert "position_metrics" not in old.results
-    assert "rebalance_check" not in old.results
-
-
 # ---- F15: golden gate scores recall through the real severity-gated adapter --
 def test_f15_recall_uses_critical_code_severity_gate():
     from finwatch.pipeline.adapters import critical_code

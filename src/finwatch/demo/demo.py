@@ -151,8 +151,7 @@ def build_demo_db(db_path: str = ":memory:") -> sqlite3.Connection:
         return _NOW
 
     llm = DemoLLM()
-    metrics = MetricsService(repo, price_provider=repo, companyfacts_provider=_companyfacts,
-                             now_fn=now_fn)
+    metrics = MetricsService(repo, companyfacts_provider=_companyfacts, now_fn=now_fn)
     orch = Orchestrator(
         repo, Preprocessor(repo, now_fn=now_fn),
         P1Extractor(llm, repo, model_label=_MODEL, now_fn=now_fn),
