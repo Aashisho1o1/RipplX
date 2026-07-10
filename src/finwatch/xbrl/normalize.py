@@ -20,6 +20,7 @@ from typing import Iterable, Optional
 from pydantic import BaseModel, FiniteFloat
 
 from finwatch.metrics.envelope import InputUsed
+from finwatch.xbrl.companyfacts import FactRejection, iter_companyfacts
 
 # Priority-ordered tag lists. "dei:" prefix selects the dei taxonomy.
 CONCEPT_MAP: dict[str, list[str]] = {
@@ -133,7 +134,9 @@ class ResolvedFact(BaseModel):
 
 
 class FactStore:
-    def __init__(self, facts: Iterable[Fact]) -> None:
+    def __init__(
+        self, facts: Iterable[Fact], *, rejected: Iterable[FactRejection] | None = None
+    ) -> None:
         deduped: dict[tuple, Fact] = {}
         for f in facts:
             k = f.period_key()
@@ -144,26 +147,56 @@ class FactStore:
         self._by_tag: dict[tuple[str, str], list[Fact]] = {}
         for f in self._facts:
             self._by_tag.setdefault((f.taxonomy, f.tag), []).append(f)
+        # Rejected (unusable-value) entries indexed by the exact (taxonomy, tag, unit)
+        # a series accessor resolves against, so `_newest_rejected_after` can fail closed
+        # when the datapoint we would present as "current" may not be the true newest.
+        self._rejected_ends: dict[tuple[str, str, str], list[str | None]] = {}
+        for r in (rejected or ()):
+            self._rejected_ends.setdefault((r.taxonomy, r.tag, r.unit), []).append(r.end)
 
     # -- construction -----------------------------------------------------
     @classmethod
     def from_companyfacts(cls, cf_json: dict) -> "FactStore":
+        valid, rejected = iter_companyfacts(cf_json)
         out: list[Fact] = []
-        for taxonomy, tags in (cf_json.get("facts") or {}).items():
-            for tag, body in tags.items():
-                for unit, entries in (body.get("units") or {}).items():
-                    for e in entries:
-                        if e.get("val") is None:
-                            continue
-                        out.append(Fact(
-                            taxonomy=taxonomy, tag=tag, unit=unit,
-                            value=float(e["val"]),
-                            start=e.get("start"), end=e.get("end"),
-                            fy=e.get("fy"), fp=e.get("fp"), form=e.get("form"),
-                            accn=e.get("accn"), filed=e.get("filed"),
-                            frame=e.get("frame"),
-                        ))
-        return cls(out)
+        for entry in valid:
+            e = entry.entry
+            out.append(Fact(
+                taxonomy=entry.taxonomy, tag=entry.tag, unit=entry.unit,
+                value=entry.value,
+                start=e.get("start"), end=e.get("end"),
+                fy=e.get("fy"), fp=e.get("fp"), form=e.get("form"),
+                accn=e.get("accn"), filed=e.get("filed"),
+                frame=e.get("frame"),
+            ))
+        return cls(out, rejected=rejected)
+
+    def _newest_rejected_after(
+        self, taxo: str, tag: str, unit: str, newest_end: str | None
+    ) -> bool:
+        """True if a rejected value for this (taxo, tag, unit) could be at least as
+        recent as ``newest_end`` — i.e. the current-period datapoint may have been the
+        one we dropped. A missing/unparseable date (on either side) is treated as
+        possibly-current: we fail closed rather than risk presenting an older period as
+        current (the stale-looks-current hazard)."""
+        ends = self._rejected_ends.get((taxo, tag, unit))
+        if not ends:
+            return False
+        if not newest_end:
+            return True
+        try:
+            newest = date.fromisoformat(newest_end)
+        except (TypeError, ValueError):
+            return True
+        for end in ends:
+            if not end:
+                return True
+            try:
+                if date.fromisoformat(end) > newest:
+                    return True
+            except (TypeError, ValueError):
+                return True
+        return False
 
     # -- concept resolution ------------------------------------------------
     def _tags_for(self, concept: str) -> list[tuple[str, str]]:
@@ -231,6 +264,13 @@ class FactStore:
                 out.append(r)
                 if len(out) >= n:
                     break
+            # Poison guard: if an unusable value for this exact tag+unit could be newer
+            # than the newest fact we kept, the true current datapoint may have been
+            # dropped — refuse the series (→ unavailable) rather than let an older
+            # period masquerade as current.
+            if out and self._newest_rejected_after(taxo, tag, out[0].fact.unit,
+                                                   out[0].fact.end):
+                return []
             return out
         return []
 

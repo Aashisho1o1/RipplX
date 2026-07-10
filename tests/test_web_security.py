@@ -31,8 +31,17 @@ def test_remote_app_refuses_missing_or_weak_security_configuration(tmp_path):
         )
     with pytest.raises(RuntimeError, match="ALLOWED_HOSTS"):
         create_app(remote=True, auth_token=TOKEN, allowed_hosts=[], **kwargs)
-    with pytest.raises(RuntimeError, match=r"never '\*'"):
-        create_app(remote=True, auth_token=TOKEN, allowed_hosts=["*"], **kwargs)
+    # A bare "*", a leading-"*." wildcard (which Starlette's TrustedHostMiddleware
+    # treats as a real subdomain match), and leading-dot patterns must all be
+    # rejected — the exact-host guarantee (AGENTS.md §12) forbids any wildcard.
+    for bad_hosts in (
+        ["*"],
+        ["*.example.com"],
+        [".example.com"],
+        ["alpha.example", "*.evil.com"],
+    ):
+        with pytest.raises(RuntimeError, match="wildcards"):
+            create_app(remote=True, auth_token=TOKEN, allowed_hosts=bad_hosts, **kwargs)
 
 
 def test_remote_api_requires_bearer_token_but_health_is_public(tmp_path):
@@ -70,6 +79,24 @@ def test_remote_host_allowlist_applies_before_api_use(tmp_path):
         "/api/bootstrap", headers={"Authorization": f"Bearer {TOKEN}"}
     )
     assert response.status_code == 400
+
+
+def test_demo_parameter_is_ignored_in_remote_mode(tmp_path):
+    # LOW-6: the bundled demo dataset is a local-only convenience; ?demo=true must not
+    # serve sample data on a hosted deployment.
+    app = create_app(
+        db_path=str(tmp_path / "db.sqlite"),
+        web_dist=tmp_path / "missing",
+        remote=True,
+        auth_token=TOKEN,
+        allowed_hosts=["alpha.example"],
+    )
+    client = TestClient(app, base_url="https://alpha.example")
+    response = client.get(
+        "/api/brief?demo=true", headers={"Authorization": f"Bearer {TOKEN}"}
+    )
+    assert response.status_code == 200
+    assert response.json()["sample_data"] is False
 
 
 def test_local_api_remains_auth_free(tmp_path):

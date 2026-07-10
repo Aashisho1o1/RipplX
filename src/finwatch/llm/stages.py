@@ -108,6 +108,11 @@ def _run_stage(
             last_error = exc
             if attempt == 1:
                 raise StageError(f"{stage} output invalid after schema repair: {exc}") from exc
+            # Do NOT echo str(exc) back to the model: pydantic's message names the
+            # exact failed constraint, which is an unnecessary hint that adversarial
+            # filing content could use to steer a more precise second attempt. The
+            # schema itself is sufficient for a good-faith repair; the real error is
+            # preserved on the raised StageError (server-side only) via `from exc`.
             active_inputs = {
                 **inputs,
                 "_schema_repair": {
@@ -115,7 +120,6 @@ def _run_stage(
                         "Your previous response failed validation. Recreate the complete "
                         "JSON output using the exact field names and constraints in this schema."
                     ),
-                    "validation_error": str(exc),
                     "json_schema": schema_cls.model_json_schema(),
                 },
             }

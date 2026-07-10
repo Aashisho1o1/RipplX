@@ -255,6 +255,46 @@ def test_prose_cross_reference_not_mistaken_for_header():
     assert "Actual MD&A body" in secs["mdna"].text
 
 
+def test_prose_item_reference_inside_body_does_not_truncate_that_section():
+    # M4 regression: a prose "Item 8 contains..." line INSIDE the MD&A body must not
+    # act as a truncation boundary. Previously every raw "Item N" match was a boundary,
+    # so this prose line cut MD&A off early and dropped the liquidity paragraph after it.
+    doc = (
+        "Item 1. Business\nWe design devices.\n"
+        "Item 1A. Risk Factors\nRisks exist here for us.\n"
+        "Item 7. Management's Discussion and Analysis\n"
+        "Revenue rose strongly across all regions this year.\n"
+        "Item 8 contains our audited consolidated financial statements referenced herein.\n"
+        "Liquidity remained solid with ample operating cash flow throughout the period.\n"
+        "Item 8. Financial Statements\nConsolidated balance sheets are presented.\n"
+    )
+    secs = {s.section_key: s for s in split_10k(html_to_text(doc))}
+    assert "Revenue rose strongly" in secs["mdna"].text
+    # the paragraph AFTER the prose 'Item 8 contains' line stays inside MD&A
+    assert "Liquidity remained solid" in secs["mdna"].text
+    # the real Item 8 header still terminates MD&A (financials is not swallowed into it)
+    assert "Consolidated balance sheets" in secs["financials"].text
+    assert "Liquidity remained solid" not in secs["financials"].text
+
+
+def test_prose_part_reference_does_not_reassign_item_to_wrong_part():
+    # M4 regression: a line-start prose "Part II ..." sentence must not be treated as a
+    # Part boundary. If it were, Item 2 would be reassigned to Part II, where (II, '2')
+    # is unmapped, and MD&A would be silently dropped.
+    doc = (
+        "PART I — FINANCIAL INFORMATION\n"
+        "Item 1. Financial Statements\nBalance sheets follow.\n"
+        "Part II of this report is referenced here for various cross-referenced disclosures.\n"
+        "Item 2. Management's Discussion and Analysis\nMD&A body: revenue grew this quarter.\n"
+        "PART II — OTHER INFORMATION\n"
+        "Item 1A. Risk Factors\nUpdated risk disclosures appear here.\n"
+    )
+    secs = {s.section_key: s for s in split_10q(html_to_text(doc))}
+    assert "mdna" in secs
+    assert "revenue grew this quarter" in secs["mdna"].text
+    assert "risk_factor_changes" in secs
+
+
 def test_br_tag_injects_line_break_for_header_detection():
     doc = html_to_text(
         "<div><b>Overview.</b><br/>Item 7A. Quantitative and Qualitative Disclosures "

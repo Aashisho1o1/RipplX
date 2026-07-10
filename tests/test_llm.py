@@ -226,6 +226,24 @@ def test_p1_rejects_numbers_in_headlines_and_severity_inconsistency():
         })
 
 
+def test_finding_headline_rejects_gerund_trade_advice_and_number_words():
+    # UX1 seam (P1 schema): the expanded policy must reject gerund/positive-recommendation
+    # advice and the added number words in an authored headline, not just the old verbs.
+    from pydantic import ValidationError
+
+    for headline in (
+        "We recommend buying the shares",
+        "Investors should consider adding shares",
+        "Revenue quadrupled this year",
+    ):
+        with pytest.raises(ValidationError):
+            P1Output.model_validate({
+                **VALID_P1,
+                "classification": {"overall_severity": "medium"},
+                "findings": [_finding(headline=headline)],
+            })
+
+
 def test_p2_dangling_thesis_judgment_claim_ref_is_rejected():
     from pydantic import ValidationError
 
@@ -374,6 +392,30 @@ def test_p1_extractor_repairs_one_schema_invalid_response():
     )
     assert out.findings == []
     assert len(llm.calls) == 2
+
+
+def test_schema_repair_prompt_does_not_leak_validation_error_text_to_model():
+    # LOW-9: pydantic's ValidationError names the exact failed constraint (here it
+    # echoes the bad input value). That detail must NOT be fed back to the model on the
+    # repair attempt — the schema alone drives a good-faith repair. Adversarial filing
+    # content should not get a precise hint about how validation failed.
+    repo = Repo(init_db(":memory:"))
+    sentinel = "ZZZSENTINEL"
+
+    def respond(_system, user):
+        if '"_schema_repair"' in user:
+            return json.dumps(VALID_P1)
+        return json.dumps({**VALID_P1, "extraction_confidence": sentinel})
+
+    llm = FakeLLMClient(responder=respond)
+    P1Extractor(llm, repo).run(
+        filing_meta={"accession_number": "a-1", "ticker": "T"}, sections={})
+
+    assert len(llm.calls) == 2
+    repair_user = llm.calls[1][1]
+    assert "_schema_repair" in repair_user and "json_schema" in repair_user
+    assert "validation_error" not in repair_user
+    assert sentinel not in repair_user
 
 
 def test_more_than_three_findings_is_stage_error_and_leaves_no_orphan_row():

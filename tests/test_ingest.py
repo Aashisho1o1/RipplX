@@ -148,7 +148,7 @@ def test_empty_companyfacts_does_not_wipe_history(ingest_service):
     assert svc.repo.count_xbrl_facts(CIK) == 7
     # an anomalous but valid (HTTP 200) payload with no facts must NOT erase history
     svc.edgar.companyfacts = lambda cik, **kw: {"facts": {}}
-    assert svc._ingest_companyfacts(CIK) == 7
+    assert svc._ingest_companyfacts(CIK) == (7, 0)  # (facts_kept, values_rejected)
     assert svc.repo.count_xbrl_facts(CIK) == 7
 
 

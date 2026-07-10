@@ -18,6 +18,7 @@ from finwatch.core.types import sector_from_sic
 from finwatch.db.repositories import Company, Filing, Holding, Repo, XbrlFact
 from finwatch.ingest.edgar import EdgarClient, EdgarHTTPError, normalize_cik
 from finwatch.ingest.tickers import resolve_ticker
+from finwatch.xbrl.companyfacts import CompanyFactsEntry, iter_companyfacts
 
 DEFAULT_BACKFILL_QUARTERS = 8
 _ARCHIVE_URL = "https://www.sec.gov/Archives/edgar/data/{cik_int}/{accn_nodash}/{doc}"
@@ -35,6 +36,7 @@ class CikIngestResult(BaseModel):
     filings_indexed: int = 0
     filings_new: int = 0
     xbrl_facts: int = 0
+    xbrl_rejected: int = 0
     error: str | None = None
 
 
@@ -57,35 +59,44 @@ class IngestSummary(BaseModel):
     def xbrl_facts(self) -> int:
         return sum(r.xbrl_facts for r in self.results)
 
+    @property
+    def xbrl_rejected(self) -> int:
+        return sum(r.xbrl_rejected for r in self.results)
+
+
+def _rows_from_valid(valid: list[CompanyFactsEntry], cik: str) -> list[XbrlFact]:
+    rows: list[XbrlFact] = []
+    for entry in valid:
+        e = entry.entry
+        start, end = e.get("start"), e.get("end")
+        is_instant = start is None
+        dec = e.get("decimals")
+        fy = e.get("fy")
+        rows.append(XbrlFact(
+            cik=cik, taxonomy=entry.taxonomy, tag=entry.tag, value=entry.value,
+            unit_ref=entry.unit, decimals=None if dec is None else str(dec),
+            period_start=start,
+            period_end=None if is_instant else end,
+            instant=end if is_instant else None,
+            fy=None if fy is None else str(fy),
+            fp=e.get("fp"), form=e.get("form"),
+            accession_number=e.get("accn"), dimensions_json="{}",
+        ))
+    return rows
+
+
 def companyfacts_to_rows(cf_json: dict, cik: str) -> list[XbrlFact]:
     """Flatten SEC companyfacts JSON into ``XbrlFact`` rows.
 
     Mirrors the FactStore.from_companyfacts split: durations carry period_start +
     period_end; instants (no ``start``) carry ``instant`` only. companyfacts is
-    consolidated/undimensioned, so ``dimensions_json`` stays '{}'.
+    consolidated/undimensioned, so ``dimensions_json`` stays '{}'. Shares the
+    fail-closed value validator with FactStore (:func:`iter_companyfacts`), so one
+    malformed value (NaN/Infinity/non-numeric) skips only that entry instead of
+    aborting the whole issuer's facts.
     """
-    rows: list[XbrlFact] = []
-    for taxonomy, tags in (cf_json.get("facts") or {}).items():
-        for tag, body in (tags or {}).items():
-            for unit, entries in ((body or {}).get("units") or {}).items():
-                for e in entries or []:
-                    if e.get("val") is None:
-                        continue
-                    start, end = e.get("start"), e.get("end")
-                    is_instant = start is None
-                    dec = e.get("decimals")
-                    fy = e.get("fy")
-                    rows.append(XbrlFact(
-                        cik=cik, taxonomy=taxonomy, tag=tag, value=float(e["val"]),
-                        unit_ref=unit, decimals=None if dec is None else str(dec),
-                        period_start=start,
-                        period_end=None if is_instant else end,
-                        instant=end if is_instant else None,
-                        fy=None if fy is None else str(fy),
-                        fp=e.get("fp"), form=e.get("form"),
-                        accession_number=e.get("accn"), dimensions_json="{}",
-                    ))
-    return rows
+    valid, _rejected = iter_companyfacts(cf_json)
+    return _rows_from_valid(valid, cik)
 
 
 def _now_iso() -> str:
@@ -175,7 +186,7 @@ class IngestService:
             errors.append(f"submissions/filings: {exc}")
 
         try:
-            result.xbrl_facts = self._ingest_companyfacts(cik)
+            result.xbrl_facts, result.xbrl_rejected = self._ingest_companyfacts(cik)
         except Exception as exc:  # noqa: BLE001
             errors.append(f"companyfacts: {exc}")
 
@@ -253,19 +264,23 @@ class IngestService:
                 new += 1
         return indexed, new
 
-    def _ingest_companyfacts(self, cik: str) -> int:
+    def _ingest_companyfacts(self, cik: str) -> tuple[int, int]:
+        """Return ``(facts_persisted, values_rejected)``. A malformed value skips only
+        that entry (shared fail-closed validator), so one bad datapoint no longer
+        discards the whole issuer's facts; the rejected count is surfaced for visibility."""
         try:
             cf = self.edgar.companyfacts(cik)
         except EdgarHTTPError as exc:
             if exc.status_code == 404:
-                return 0  # issuer has no structured XBRL (e.g. some foreign filers)
+                return 0, 0  # issuer has no structured XBRL (e.g. some foreign filers)
             raise
-        rows = companyfacts_to_rows(cf, cik)
+        valid, rejected = iter_companyfacts(cf)
+        rows = _rows_from_valid(valid, cik)
         if not rows:
             # Anomalous but valid (HTTP 200) payload with no usable facts — do NOT
             # replace, or we would silently wipe previously-ingested history.
-            return self.repo.count_xbrl_facts(cik)
-        return self.repo.replace_xbrl_facts(cik, rows)
+            return self.repo.count_xbrl_facts(cik), len(rejected)
+        return self.repo.replace_xbrl_facts(cik, rows), len(rejected)
 
 def build_service(config: Config, *, conn=None) -> tuple:
     """Build an IngestService (and open connection) from resolved config."""
