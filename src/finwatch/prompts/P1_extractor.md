@@ -37,10 +37,13 @@ T2. APPLY THESE HARD SEVERITY FLOORS WHEN THE EVENT ACTUALLY OCCURRED (not when
     exposure, or a prolonged outage. A routine Item 2.02 is LOW.
 
 T3. BACK EVERY FINDING DIRECTLY. Attach one to three exact quotations from the
-    provided canonical section text. `char_start` and `char_end` are offsets
-    relative to that section's `text`, and `text[char_start:char_end]` MUST equal
-    `snippet` byte-for-byte. Each snippet is at most 25 words. Never use a broad
-    surrounding span and never cite a judgment in place of filing text.
+    provided canonical section text. Return only the `section_key` and the exact
+    `snippet` — copy it VERBATIM (character-for-character) from that section's `text`,
+    and make it long enough to occur EXACTLY ONCE in the section. Do NOT return
+    character offsets; the server derives them by locating your snippet. A snippet that
+    is not a verbatim, unique substring of its section is discarded. Each snippet is at
+    most 25 words. Never use a broad surrounding span and never cite a judgment in
+    place of filing text.
 
 T4. KEEP HEADLINES QUALITATIVE. A headline summarizes only its attached quotes,
     contains no digits or numeric values, and gives no advice or prediction. Any
@@ -73,8 +76,8 @@ T5. CLASSIFY THE FILING. `overall_severity` must equal the highest finding
       "critical_flag": "<controlled code above>" | null,
       "evidence": [{
         "accession_number": str, "form_type": str, "section_key": str,
-        "exhibit": str|null, "char_start": int, "char_end": int,
-        "html_element_id": str|null, "snippet": str
+        "exhibit": str|null, "html_element_id": str|null,
+        "snippet": str
       }]
   }],
   "extraction_confidence": "high|medium|low",

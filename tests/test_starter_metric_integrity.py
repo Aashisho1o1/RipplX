@@ -164,7 +164,7 @@ def test_noncontiguous_quarters_are_never_summed_as_ttm():
     result = revenue_growth(FactStore(facts), GENERAL, AS_OF)
 
     assert result.status == MetricStatus.COMPUTED
-    assert result.formula_version == "revenue_growth.v2"
+    assert result.formula_version == "revenue_growth.v3"
     assert "ttm_revenue" not in result.components
 
 

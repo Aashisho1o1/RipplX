@@ -22,13 +22,14 @@ TENQ = (FX / "tenq_sample.html").read_text()
 MSFT_CF = json.loads((FX / "companyfacts" / "MSFT.json").read_text())
 ACCN, CIK = "0000789019-24-000070", "0000789019"
 
+# New evidence contract: the model returns section_key + exact snippet only; the server
+# anchors it to derive char_start/char_end. No offsets here on purpose.
 _P1 = json.dumps({
     "accession_number": ACCN, "ticker": "MSFT", "form_type": "10-Q",
     "classification": {"overall_severity": "medium"},
     "findings": [{"headline": "Services growth", "severity": "medium",
         "critical_flag": None, "evidence": [{
             "accession_number": ACCN, "form_type": "10-Q", "section_key": "mdna",
-            "char_start": 98, "char_end": 135,
             "snippet": "Net sales increased 5% year over year"}]}],
     "extraction_confidence": "high", "gaps": [],
 })
@@ -93,6 +94,59 @@ def test_process_latest_runs_pipeline_persists_and_digest_renders():
     md = render_digest(repo, since="2024-01-01").markdown
     assert "MSFT" in md and "Services growth" in md
     assert "Net sales increased 5% year over year" in md
+
+
+def test_server_anchors_evidence_and_ignores_model_supplied_offsets():
+    # The DeepSeek-Flash failure mode: the model returns a verbatim quote but a WRONG
+    # character span. The server must re-anchor to the true offsets and publish — not
+    # withhold — and the persisted offsets must be the server's, not the model's.
+    repo = Repo(init_db(":memory:"))
+    _seed(repo)
+    wrong_offsets = json.dumps({
+        "accession_number": ACCN, "ticker": "MSFT", "form_type": "10-Q",
+        "classification": {"overall_severity": "medium"},
+        "findings": [{"headline": "Services growth", "severity": "medium",
+            "critical_flag": None, "evidence": [{
+                "accession_number": ACCN, "form_type": "10-Q", "section_key": "mdna",
+                "char_start": 0, "char_end": 3,  # deliberately wrong
+                "snippet": "Net sales increased 5% year over year"}]}],
+        "extraction_confidence": "high", "gaps": [],
+    })
+    llm = FakeLLMClient(responder=lambda _s, _u: wrong_offsets)
+    orch = build_orchestrator(repo, llm=llm, companyfacts_provider=lambda _c: MSFT_CF,
+                              model="fake/model", now_fn=lambda: "t")
+    result = process_latest(repo, orch, fetch_html=lambda _u: TENQ, now_fn=lambda: "t")
+
+    assert result[0].ok and not result[0].manual_review  # published, not withheld
+    ev = json.loads(repo.latest_analysis(ACCN, "P1").output_json)["findings"][0]["evidence"][0]
+    section = next(
+        s.text for s in repo.list_filing_sections(ACCN) if s.section_key == "mdna"
+    )
+    assert section[ev["char_start"]:ev["char_end"]] == "Net sales increased 5% year over year"
+    assert (ev["char_start"], ev["char_end"]) != (0, 3)  # model offsets were overwritten
+
+
+def test_non_verbatim_evidence_snippet_is_withheld():
+    # A snippet that is not an exact substring of its section cannot be anchored → the
+    # fresh attempt fails → nothing is published (fail-closed preserved).
+    repo = Repo(init_db(":memory:"))
+    _seed(repo)
+    fabricated = json.dumps({
+        "accession_number": ACCN, "ticker": "MSFT", "form_type": "10-Q",
+        "classification": {"overall_severity": "medium"},
+        "findings": [{"headline": "Fabricated claim", "severity": "medium",
+            "critical_flag": None, "evidence": [{
+                "accession_number": ACCN, "form_type": "10-Q", "section_key": "mdna",
+                "snippet": "This exact sentence never appears in the filing text at all."}]}],
+        "extraction_confidence": "high", "gaps": [],
+    })
+    llm = FakeLLMClient(responder=lambda _s, _u: fabricated)
+    orch = build_orchestrator(repo, llm=llm, companyfacts_provider=lambda _c: MSFT_CF,
+                              model="fake/model", now_fn=lambda: "t")
+    result = process_latest(repo, orch, fetch_html=lambda _u: TENQ, now_fn=lambda: "t")
+
+    assert not (result[0].ok and not result[0].manual_review)  # never published
+    assert "Fabricated claim" not in render_digest(repo, since="2024-01-01").markdown
 
 
 def test_extraction_prompt_never_includes_legacy_portfolio_accounting_or_thesis():
@@ -293,7 +347,7 @@ def test_transient_verify_failure_retries_one_fresh_complete_attempt(monkeypatch
     assert newest_filing_to_analyze(repo).accession_number == ACCN
     # digest flags it, does not present it as clean
     md = render_digest(repo, since="2024-01-01").markdown
-    assert "withheld pending manual review" in md
+    assert "withheld — could not be verified" in md
 
     p1_calls = len(llm.calls)
     updated_html = TENQ.replace(
@@ -350,7 +404,7 @@ def test_failed_filing_stops_after_one_full_retry_and_third_click_is_free():
     extract = repo.get_filing_stage(ACCN, "extract")
     assert extract is not None and extract.attempts == 2
     assert repo.get_filing(ACCN).status == "failed"
-    assert "withheld pending manual review" in render_digest(
+    assert "withheld — could not be verified" in render_digest(
         repo, since="2024-01-01"
     ).markdown
 
@@ -361,6 +415,8 @@ def test_cli_process_requires_model(monkeypatch, tmp_path):
 
     from finwatch.cli import app
 
+    # Isolate from any developer .env in the repo root (load_config reads ./.env).
+    monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("SEC_USER_AGENT", "Test t@e.com")
     monkeypatch.setenv("FINWATCH_DB", str(tmp_path / "fw.db"))
     monkeypatch.delenv("FINWATCH_MODEL", raising=False)

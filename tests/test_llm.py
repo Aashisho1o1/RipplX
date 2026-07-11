@@ -49,9 +49,9 @@ def test_prompt_loader_splices_foundation_and_versions():
     assert "[FOUNDATION BLOCK]" not in text
     assert "R1. NUMBERS" in text            # foundation content spliced in
     assert "senior buy-side research analyst" in text  # P1 role
-    assert version == "P1_extractor.v3+foundation.v2"
+    assert version == "P1_extractor.v4+foundation.v2"
     assert '"findings"' in text and '"critical_flag"' in text
-    assert "text[char_start:char_end]" in text
+    assert "the server derives them" in text  # offsets are server-anchored, not model-supplied
 
 
 def test_foundation_prompt_has_its_own_version():
@@ -331,11 +331,14 @@ def test_p1_extractor_persists_embedded_findings_without_claim_rows():
     }
     llm = FakeLLMClient(responder=lambda _s, _u: json.dumps(p1_json))
     out, aid, _ = P1Extractor(llm, repo, model_label="fake/m", now_fn=lambda: "t").run(
-        filing_meta={"accession_number": "a-1", "ticker": "T"}, sections={})
+        filing_meta={"accession_number": "a-1", "ticker": "T"},
+        sections={"item_2_02": {"text": "hello"}})
     assert isinstance(out, P1Output)
     stored = repo.get_analysis(aid)
     assert stored.stage == "P1" and stored.model == "fake/m"
     assert out.findings[0].evidence[0].snippet == "hello"
+    # offsets are server-anchored from the section text, not the model's echoed values
+    assert (out.findings[0].evidence[0].char_start, out.findings[0].evidence[0].char_end) == (0, 5)
     assert repo.list_analysis_claims(aid) == []
 
 

@@ -299,12 +299,26 @@ def check_v2_identities(store: FactStore, sector: SectorInfo) -> list[CheckResul
         gp = store.latest_annual("gross_profit")
         oi = store.latest_annual("operating_income")
         if rev and gp and oi:
-            ok = rev.fact.value >= gp.fact.value >= oi.fact.value
-            out.append(CheckResult(check_id="V2c",
-                                   verdict="pass" if ok else "fail",
-                                   severity="blocking",
-                                   detail=f"rev={rev.fact.value} gp={gp.fact.value} "
-                                          f"oi={oi.fact.value}"))
+            aligned = (
+                rev.fact.start == gp.fact.start == oi.fact.start
+                and rev.fact.end == gp.fact.end == oi.fact.end
+                and rev.fact.unit == gp.fact.unit == oi.fact.unit
+            )
+            if not aligned:
+                # Comparing Rev ≥ GP ≥ OpInc across different period-ends is meaningless
+                # (e.g. a revenue leg on a migrated tag ending in a different fiscal year
+                # than gross profit). Skip rather than emit a spurious data-quality warning.
+                out.append(CheckResult(check_id="V2c", verdict="skipped_not_applicable",
+                                       severity="info",
+                                       detail="revenue/gross profit/operating income "
+                                              "span different periods or units"))
+            else:
+                ok = rev.fact.value >= gp.fact.value >= oi.fact.value
+                out.append(CheckResult(check_id="V2c",
+                                       verdict="pass" if ok else "fail",
+                                       severity="blocking",
+                                       detail=f"rev={rev.fact.value} gp={gp.fact.value} "
+                                              f"oi={oi.fact.value}"))
         else:
             out.append(CheckResult(check_id="V2c",
                                    verdict="skipped_not_applicable",

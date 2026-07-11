@@ -41,11 +41,17 @@ def load_filing_projection(repo: Repo, filing: Filing) -> FilingProjection:
     p1a = repo.latest_analysis(filing.accession_number, "P1")
     analysis_present = p1a is not None
     results = repo.list_verification_results(p1a.id) if p1a else []
-    by_id = {row.check_id: row for row in results}
-    required_passed = all(
-        check_id in by_id and by_id[check_id].verdict == "pass"
-        for check_id in _REQUIRED_PUBLICATION_CHECKS
-    )
+    # Strict publication gate: each required check must have exactly one persisted row
+    # and that row must PASS. With server-side offset anchoring, production V4 is
+    # deterministic — it passes on unique verbatim evidence or blocking-fails on
+    # missing/ambiguous/corrupted evidence — so there is no legitimate "warning" state
+    # on a required check to tolerate. V2 data-quality warnings are non-blocking and are
+    # NOT required publication checks, so they never gate here.
+    def _passed(check_id: str) -> bool:
+        rows = [row for row in results if row.check_id == check_id]
+        return len(rows) == 1 and rows[0].verdict == "pass"
+
+    required_passed = all(_passed(check_id) for check_id in _REQUIRED_PUBLICATION_CHECKS)
     blocking = any(
         row.verdict == "fail" and row.severity == "blocking" for row in results
     )

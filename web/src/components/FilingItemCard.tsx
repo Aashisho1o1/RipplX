@@ -8,6 +8,6 @@ export function FilingItemCard({ filing, withholdFindings = false }: { filing: F
   const withheld = withholdFindings || filing.manual_review || Boolean(filing.withheld_reason);
   return <article className="filing-card">
     <div className="filing-heading"><Link className="filing-link" to={`/filings/${filing.accession}${demo ? "?demo=1" : ""}`}><strong>{filing.ticker}</strong></Link><span className="mono muted">{filing.form} · {filing.filed}</span></div>
-    {withheld ? <p className="notice">{filing.withheld_reason ?? "Findings withheld pending manual review."}</p> : filing.findings.length ? <FindingList findings={filing.findings} /> : <p className="empty-line">No evidence-backed changes were selected.</p>}
+    {withheld ? <p className="notice">{filing.withheld_reason ?? "Findings withheld — could not be verified."}</p> : filing.findings.length ? <FindingList findings={filing.findings} /> : <p className="empty-line">No evidence-backed changes were selected.</p>}
   </article>;
 }

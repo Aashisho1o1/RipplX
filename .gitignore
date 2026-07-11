@@ -18,6 +18,8 @@ coverage.xml
 
 # Environment / secrets (never commit real credentials)
 .env
+.env.*
+!.env.example
 
 # finwatch runtime data (DB + on-disk EDGAR cache are regenerable).
 # Root-anchored so they never swallow PACKAGED data dirs like

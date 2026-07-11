@@ -25,7 +25,7 @@ export function FilingPage() {
   const detail = resource.data;
   const filing = detail.filing;
   const audit = detail.verification;
-  const withheldReason = detail.withheld_reason ?? filing.withheld_reason ?? (filing.manual_review ? "Findings withheld pending manual review." : null);
+  const withheldReason = detail.withheld_reason ?? filing.withheld_reason ?? (filing.manual_review ? "Findings withheld — could not be verified." : null);
   const filingUrl = trustedSecUrl(filing.edgar_url);
   const sectionValue = detail.pipeline.find(stage => stage.stage === "parse")?.diagnostics.sections_found;
   const parsedSections = Array.isArray(sectionValue) ? sectionValue.map(String) : [];
@@ -36,7 +36,7 @@ export function FilingPage() {
       <h1 className="page-title">{filing.ticker} — {filing.form} filed {filing.filed}</h1>
       {filingUrl && <a className="citation" href={filingUrl} target="_blank" rel="noopener noreferrer">Open SEC filing ▸</a>}
     </header>
-    {filing.manual_review && <div className="notice">⚠ manual review required</div>}
+    {filing.manual_review && <div className="notice">⚠ Withheld — could not be verified</div>}
     {withheldReason && <div className="notice">{withheldReason}</div>}
 
     {!demo && <section className="section">

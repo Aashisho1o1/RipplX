@@ -13,6 +13,26 @@ from finwatch.ingest import EdgarClient, IngestService
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
+# Config/credential vars a developer's real ./.env may define. load_config() reads .env
+# via os.environ.setdefault, which persists for the whole pytest process once any CLI
+# test triggers it — leaking a real key into unrelated tests (e.g. provider-readiness
+# assertions). Clear them before every test so the suite is hermetic and matches a
+# no-.env baseline; tests set what they need explicitly.
+_LEAKY_ENV = (
+    "SEC_USER_AGENT",
+    "FINWATCH_DB",
+    "FINWATCH_MODEL",
+    "OPENAI_API_KEY",
+    "OPENAI_API_BASE",
+    "OPENROUTER_API_KEY",
+)
+
+
+@pytest.fixture(autouse=True)
+def _hermetic_env(monkeypatch):
+    for name in _LEAKY_ENV:
+        monkeypatch.delenv(name, raising=False)
+
 
 def read_fixture(name: str) -> str:
     return (FIXTURES / name).read_text(encoding="utf-8")

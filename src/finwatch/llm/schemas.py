@@ -106,21 +106,35 @@ class Classification(BaseModel):
 
 
 class FindingEvidence(BaseModel):
-    """One exact, section-relative quotation supporting a launch finding."""
+    """One exact, section-relative quotation supporting a launch finding.
+
+    The model supplies only ``section_key`` and the verbatim ``snippet`` (plus the
+    echoed accession/form, validated against trusted metadata). ``char_start`` and
+    ``char_end`` are SERVER-DERIVED: ``llm/stages.py`` anchors the snippet in its
+    canonical section (exact, unique substring) and computes the offsets; any offsets
+    the model returns are ignored and overwritten. Because LLMs cannot reliably count
+    characters, trusting model offsets withheld correct quotations — so the persisted
+    canonical output always carries the server-computed offsets, and V4 / the canonical
+    projection verify those real coordinates against the stored section text.
+    """
 
     model_config = _STRICT
     accession_number: str = Field(min_length=1, max_length=64)
     form_type: str = Field(min_length=1, max_length=16)
     section_key: str = Field(min_length=1, max_length=128)
     exhibit: str | None = Field(default=None, max_length=128)
-    char_start: int = Field(ge=0)
-    char_end: int = Field(gt=0)
+    char_start: int | None = Field(default=None, ge=0)
+    char_end: int | None = Field(default=None, gt=0)
     html_element_id: str | None = Field(default=None, max_length=256)
     snippet: str = Field(min_length=1, max_length=2_000)
 
     @model_validator(mode="after")
     def _valid_exact_span(self):
-        if self.char_end <= self.char_start:
+        # Offsets are server-derived: absent on model output, present (and consistent)
+        # once anchored and on every persisted/re-read canonical output.
+        if (self.char_start is None) != (self.char_end is None):
+            raise ValueError("evidence offsets are server-derived: provide both or neither")
+        if self.char_start is not None and self.char_end <= self.char_start:
             raise ValueError("evidence char_end must be greater than char_start")
         if len(self.snippet.split()) > 25:
             raise ValueError("evidence snippet must contain at most 25 words")

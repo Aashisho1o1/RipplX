@@ -41,6 +41,39 @@ class StageError(RuntimeError):
     """Raised when a stage output cannot be parsed/validated (triggers regeneration)."""
 
 
+def _anchor_p1_evidence(output: Any, sections: dict) -> None:
+    """Derive each evidence span server-side by locating the exact snippet in its
+    declared canonical section. Offsets returned by the model are ignored — LLMs cannot
+    reliably count characters, so a verbatim quote with a miscounted offset would
+    otherwise be withheld. Matching is literal (code-point equality against the exact
+    stored section text): no regex, fuzzy, whitespace/case folding, or normalization.
+    A snippet that is absent, or that occurs more than once (ambiguous), raises — routing
+    to the one bounded schema-repair attempt and then failing closed. The trust guarantee
+    is preserved: the quote must still be an exact, unique substring of the named SEC
+    section; only the pointer is computed, never the text."""
+    for finding in output.findings:
+        for evidence in finding.evidence:
+            section = sections.get(evidence.section_key)
+            text = section.get("text") if isinstance(section, dict) else None
+            if not text:
+                raise ValueError(
+                    f"evidence cites section {evidence.section_key!r} not in the filing"
+                )
+            first = text.find(evidence.snippet)
+            if first == -1:
+                raise ValueError(
+                    f"evidence snippet is not a verbatim substring of section "
+                    f"{evidence.section_key!r}"
+                )
+            if text.find(evidence.snippet, first + 1) != -1:
+                raise ValueError(
+                    f"evidence snippet is ambiguous (multiple matches) in section "
+                    f"{evidence.section_key!r}"
+                )
+            evidence.char_start = first
+            evidence.char_end = first + len(evidence.snippet)
+
+
 def _run_stage(
     *,
     llm: LLMClient,
@@ -103,6 +136,10 @@ def _run_stage(
                                 f"{section_key} requires a critical evidence-backed "
                                 f"{required_flag} finding"
                             )
+                # Derive evidence offsets server-side. A snippet that is absent or
+                # ambiguous in its declared section raises here and is treated exactly
+                # like a schema failure: one bounded repair, then fail closed.
+                _anchor_p1_evidence(output, inputs.get("sections") or {})
             break
         except Exception as exc:  # noqa: BLE001 — one bounded schema-repair attempt
             last_error = exc
@@ -129,10 +166,15 @@ def _run_stage(
 
     assert resp is not None
 
+    # Persist the CANONICAL validated output, not the raw model JSON. For P1 this is
+    # the anchored form (server-derived offsets); downstream V4/canonical read these.
+    persisted_json = (
+        output.model_dump_json() if stage == "P1" else json.dumps(data, ensure_ascii=False)
+    )
     analysis_id = repo.insert_analysis(Analysis(
         accession_number=accession_number, ticker=ticker, stage=stage,
         model=model_label or resp.model, prompt_version=version,
-        output_json=json.dumps(data, ensure_ascii=False),
+        output_json=persisted_json,
         tokens_in=resp.tokens_in, tokens_out=resp.tokens_out, cost_usd=resp.cost_usd,
         created_at=now_fn(),
     ))

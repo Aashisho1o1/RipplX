@@ -22,7 +22,7 @@ from finwatch.verify.checks import (
 )
 from finwatch.xbrl.normalize import FactStore
 
-MANUAL_REVIEW_NOTICE = "⚠ manual review required — automated verification failed"
+MANUAL_REVIEW_NOTICE = "⚠ withheld — automated verification did not pass"
 
 # Forms whose latest balance-sheet instant is a fiscal-year-end, so the V2b cash tie-out
 # (which compares a fiscal-YEAR change) is period-aligned. On a 10-Q the latest instant is a

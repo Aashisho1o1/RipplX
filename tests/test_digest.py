@@ -74,7 +74,7 @@ def test_demo_findings_are_evidence_backed_with_edgar_links():
 def test_demo_verified_numbers_table_is_formula_stamped_and_checked():
     md = _demo_markdown().markdown
     assert "### MSFT" in md
-    assert "Revenue growth" in md and "revenue_growth.v2" in md
+    assert "Revenue growth" in md and "revenue_growth.v3" in md
     assert "| ✓ |" in md                                  # verifier check mark
     # a holding with no XBRL facts degrades to one honest line, not six "unavailable" rows
     assert "DPLS:** no verified financials yet" in md

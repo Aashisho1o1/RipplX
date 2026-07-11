@@ -14,7 +14,7 @@ import typer
 from rich.console import Console
 
 from finwatch import __version__
-from finwatch.config import Config, ConfigError, load_config
+from finwatch.config import Config, ConfigError, load_config, load_dotenv
 from finwatch.ingest import (
     DEFAULT_BACKFILL_QUARTERS,
     TickerNotFoundError,
@@ -89,6 +89,10 @@ def serve(
     ),
 ) -> None:
     """Serve the local RipplX web application and API."""
+    # Make .env (FINWATCH_MODEL, OPENROUTER_API_KEY, SEC_USER_AGENT) available to the
+    # web app. Real environment variables still win (load_dotenv uses setdefault), and
+    # no key is required — the demo brief and verified numbers work without one.
+    load_dotenv()
     if host not in {"127.0.0.1", "localhost", "::1"} and not allow_remote:
         console.print(
             "[yellow]Refusing a non-loopback bind.[/] Pass [bold]--allow-remote[/] "
@@ -176,7 +180,7 @@ def _run_pipeline(cfg: Config, *, cik: str | None):
 def _print_pipeline_results(results) -> None:
     for r in results:
         if r.ok:
-            mark = "[yellow]⚠ manual review[/]" if r.manual_review else f"[green]{r.verdict}[/]"
+            mark = "[yellow]⚠ withheld[/]" if r.manual_review else f"[green]{r.verdict}[/]"
             console.print(f"[green]✓[/] {r.ticker} {r.accession} — {mark}")
         else:
             console.print(f"[yellow]![/] {r.ticker} {r.accession} — [red]{r.error}[/]")

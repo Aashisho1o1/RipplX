@@ -158,7 +158,7 @@ def _contiguous_quarters(rows: Sequence[ResolvedFact]) -> bool:
 
 # ---------------------------------------------------------------- metrics --
 def revenue_growth(store: FactStore, sector: SectorInfo, as_of: str) -> MetricResult:
-    V = "revenue_growth.v2"
+    V = "revenue_growth.v3"
     _, as_of_error = _parse_as_of(as_of)
     if as_of_error:
         return _unavailable("revenue_growth", V, as_of, [as_of_error])

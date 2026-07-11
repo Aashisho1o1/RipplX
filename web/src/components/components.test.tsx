@@ -53,7 +53,7 @@ describe("trust vocabulary", () => {
       }] }],
     }} /></MemoryRouter>);
 
-    expect(screen.getByText("Findings withheld pending manual review.")).toBeInTheDocument();
+    expect(screen.getByText("Findings withheld — could not be verified.")).toBeInTheDocument();
     expect(screen.queryByText("Unverified headline")).not.toBeInTheDocument();
     expect(screen.queryByText("Unverified evidence")).not.toBeInTheDocument();
   });

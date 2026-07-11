@@ -38,13 +38,16 @@ class RuntimeSecrets:
             return self._api_key
 
 
-def _environment_key_configured() -> bool:
-    # openai/* reads OPENAI_API_KEY; openrouter/* reads OPENROUTER_API_KEY. Either
-    # environment credential counts as configured for the matching model prefix.
-    return bool(
-        os.environ.get("OPENAI_API_KEY", "").strip()
-        or os.environ.get("OPENROUTER_API_KEY", "").strip()
-    )
+def _environment_key_for(model: str | None) -> bool:
+    # The credential must match the configured model's provider: openai/* reads
+    # OPENAI_API_KEY, openrouter/* reads OPENROUTER_API_KEY. A key for the OTHER
+    # provider does NOT enable analysis (litellm would route by the model prefix and
+    # never see it), so it must not report the model as ready.
+    if model and model.startswith("openai/"):
+        return bool(os.environ.get("OPENAI_API_KEY", "").strip())
+    if model and model.startswith("openrouter/"):
+        return bool(os.environ.get("OPENROUTER_API_KEY", "").strip())
+    return False
 
 
 def production_model() -> str | None:
@@ -58,12 +61,13 @@ def production_model() -> str | None:
 
 
 def resolve_settings(repo: Repo, secrets: RuntimeSecrets) -> ResolvedSettings:
+    model = production_model()
     session_key = secrets.api_key()
-    environment_key = _environment_key_configured()
+    environment_key = _environment_key_for(model)
     return ResolvedSettings(
         sec_user_agent=repo.get_setting(SETTING_USER_AGENT) or os.environ.get("SEC_USER_AGENT"),
         period=repo.get_setting(SETTING_PERIOD) or "90d",
-        model=production_model(),
+        model=model,
         api_key_configured=bool(session_key or environment_key),
         api_key_source="session" if session_key else "environment" if environment_key else None,
     )

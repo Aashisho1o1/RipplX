@@ -2,7 +2,10 @@
 
 Design (per CLAUDE.md §8):
   * Concept resolution via priority-ordered tag lists; first tag with usable
-    facts wins; the tag actually used is recorded on every resolved fact.
+    facts wins; the tag actually used is recorded on every resolved fact. Revenue
+    is the exception: because issuers migrate revenue tags over time, it resolves
+    to the FRESHEST coherent tag (fails closed on tags that disagree on the newest
+    period), never splicing values across tags.
   * Amendment supersession: for an identical (tag, unit, period), the fact from
     the latest `filed` date (tie-break: accession number) wins. Superseded
     values are retained in memory but excluded from series.
@@ -234,12 +237,51 @@ class FactStore:
         """Instant facts, newest first, one per date."""
         return self._series(concept, lambda f: f.is_instant, n)
 
-    def _series(self, concept: str, keep, n: int) -> list[ResolvedFact]:
-        """Deduped (by period-end, newest first) series from the first priority tag whose
-        facts pass `keep`. Unit choice is deterministic: headline monetary concepts prefer
-        USD, share counts prefer shares, and a sole alternate unit is accepted. Multiple
-        non-preferred units are ambiguous and fail closed instead of depending on JSON order."""
+    def _freshest_coherent_tag(self, concept: str, keep) -> Optional[tuple[str, str]]:
+        """Pick the candidate tag whose newest fact of the requested period type is the
+        MOST RECENT, so an abandoned tag's stale value never masquerades as current.
+
+        Companies migrate reporting tags over time — e.g. dropping
+        ``RevenueFromContractWithCustomerExcludingAssessedTax`` for ``Revenues`` — which
+        the "first priority tag with any facts wins" rule silently pins to the abandoned
+        (stale) tag. Priority order still breaks a tie on the SAME newest period-end, but
+        ONLY when the tied tags AGREE on that period's value; a genuine disagreement (a
+        total ``Revenues`` vs a Topic 606 contract-revenue subset for the same period) is
+        a conflict and fails closed (→ unavailable) rather than silently choosing a
+        meaning. Values are never spliced across tags — a single tag supplies the series."""
+        newest_by_tag: dict[tuple[str, str], tuple[str, float]] = {}
         for taxo, tag in self._tags_for(concept):
+            eligible = [
+                f for f in self._by_tag.get((taxo, tag), ()) if keep(f) and f.end
+            ]
+            if not eligible:
+                continue
+            top = max(eligible, key=lambda f: f.end)
+            newest_by_tag[(taxo, tag)] = (top.end, top.value)
+        if not newest_by_tag:
+            return None
+        latest_end = max(end for end, _v in newest_by_tag.values())
+        at_latest = {k: v for k, (end, v) in newest_by_tag.items() if end == latest_end}
+        if len(set(at_latest.values())) > 1:
+            return None  # tags disagree on the newest period's value → fail closed
+        priority = {tag: i for i, tag in enumerate(self._tags_for(concept))}
+        return min(at_latest, key=lambda tag: priority[tag])
+
+    def _resolution_order(self, concept: str, keep) -> list[tuple[str, str]]:
+        # Revenue tags migrate across filings, so choose the freshest coherent tag rather
+        # than the first-with-any-facts. Every other concept keeps its priority-ordered
+        # fallback (a primary tag carrying only the wrong period type must fall through).
+        if concept != "revenue":
+            return self._tags_for(concept)
+        chosen = self._freshest_coherent_tag(concept, keep)
+        return [chosen] if chosen is not None else []
+
+    def _series(self, concept: str, keep, n: int) -> list[ResolvedFact]:
+        """Deduped (by period-end, newest first) series from the resolved tag whose facts
+        pass `keep`. Unit choice is deterministic: headline monetary concepts prefer USD,
+        share counts prefer shares, and a sole alternate unit is accepted. Multiple
+        non-preferred units are ambiguous and fail closed instead of depending on JSON order."""
+        for taxo, tag in self._resolution_order(concept, keep):
             eligible = [f for f in self._by_tag.get((taxo, tag), ()) if keep(f)]
             if not eligible:
                 continue

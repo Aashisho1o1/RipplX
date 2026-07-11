@@ -338,6 +338,43 @@ def test_f11_annual_falls_through_to_usable_fallback_tag():
     assert store.quarterly("revenue")[0].fact.value == 50.0                    # primary tag
 
 
+def test_revenue_resolves_to_freshest_tag_across_a_tag_migration():
+    # An issuer that migrated RevenueFromContract... → Revenues: the abandoned tag's
+    # stale value must NOT be presented as current. Resolve to the freshest tag.
+    from finwatch.xbrl.normalize import FactStore
+
+    def dur(start, end, val):
+        return {"start": start, "end": end, "val": val, "filed": end, "form": "10-K"}
+
+    cf = {"cik": "1", "facts": {"us-gaap": {
+        "RevenueFromContractWithCustomerExcludingAssessedTax": {"units": {"USD": [
+            dur("2021-01-01", "2021-12-31", 300)]}},         # abandoned, stale
+        "Revenues": {"units": {"USD": [
+            dur("2023-01-01", "2023-12-31", 500),            # current
+            dur("2022-01-01", "2022-12-31", 400)]}}}}}
+    store = FactStore.from_companyfacts(cf)
+    latest = store.latest_annual("revenue")
+    assert latest.fact.tag == "Revenues" and latest.fact.value == 500.0
+    cur, prior = store.yoy_pair("revenue")
+    assert (cur.fact.value, prior.fact.value) == (500.0, 400.0)  # same tag, no splicing
+
+
+def test_revenue_conflict_at_newest_period_fails_closed():
+    # Two revenue tags claim the SAME newest period-end with DIFFERENT values (total vs a
+    # contract-revenue subset). We cannot know which the user means → unavailable.
+    from finwatch.xbrl.normalize import FactStore
+
+    def dur(start, end, val):
+        return {"start": start, "end": end, "val": val, "filed": end, "form": "10-K"}
+
+    cf = {"cik": "1", "facts": {"us-gaap": {
+        "RevenueFromContractWithCustomerExcludingAssessedTax": {"units": {"USD": [
+            dur("2024-01-01", "2024-12-31", 300)]}},
+        "Revenues": {"units": {"USD": [
+            dur("2024-01-01", "2024-12-31", 999)]}}}}}
+    assert FactStore.from_companyfacts(cf).latest_annual("revenue") is None
+
+
 # ---- F12: valuation history uses period-matched shares/net debt -------------
 class _FlatPrice:
     def close_on_or_before(self, ticker, date_iso):

@@ -162,7 +162,7 @@ class PresentationService:
         answer_posture = None
         if withheld:
             count = len(withheld)
-            answer = f"{count} filing{'s' if count != 1 else ''} withheld pending manual review."
+            answer = f"{count} filing{'s' if count != 1 else ''} withheld — could not be verified."
             answer_posture = "risk_review"
         elif severe_owned:
             answer = "One holding needs a critical review."

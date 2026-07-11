@@ -30,7 +30,7 @@ def test_service_computes_and_persists_verbatim():
     comps = {c.tool: c for c in repo.list_computations("CAT")}
     revenue_row = comps["revenue_growth"]
     assert revenue_row.status == "unavailable"
-    assert revenue_row.formula_version == "revenue_growth.v2"
+    assert revenue_row.formula_version == "revenue_growth.v3"
     assert revenue_row.as_of == "2025-05-01"
     # result_json round-trips the MetricResult
     assert json.loads(revenue_row.result_json)["value"] == bundle.get("revenue_growth").value
