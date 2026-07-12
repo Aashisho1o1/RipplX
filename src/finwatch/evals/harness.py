@@ -158,7 +158,7 @@ def score_case(case: GoldenCase, llm: LLMClient, html: str, *, now: str = "eval"
     assert filing is not None
     launch_entry = build_filing_entry(repo, load_filing_projection(repo, filing))
     launch_projection_pass = (
-        not launch_entry.manual_review
+        not launch_entry.withheld
         and case.expected_min_findings
         <= len(launch_entry.findings)
         <= case.expected_max_findings

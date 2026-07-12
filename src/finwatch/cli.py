@@ -180,7 +180,7 @@ def _run_pipeline(cfg: Config, *, cik: str | None):
 def _print_pipeline_results(results) -> None:
     for r in results:
         if r.ok:
-            mark = "[yellow]⚠ withheld[/]" if r.manual_review else f"[green]{r.verdict}[/]"
+            mark = "[yellow]⚠ withheld[/]" if r.withheld else f"[green]{r.verdict}[/]"
             console.print(f"[green]✓[/] {r.ticker} {r.accession} — {mark}")
         else:
             console.print(f"[yellow]![/] {r.ticker} {r.accession} — [red]{r.error}[/]")

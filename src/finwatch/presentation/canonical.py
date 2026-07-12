@@ -35,7 +35,7 @@ def _edgar_url(filing: Filing) -> tuple[str, bool]:
     )
 
 
-def _base_entry(view: FilingProjection, *, manual_review: bool | None = None) -> FilingDigestEntry:
+def _base_entry(view: FilingProjection, *, withheld: bool | None = None) -> FilingDigestEntry:
     url, _ = _edgar_url(view.filing)
     return FilingDigestEntry(
         accession=view.filing.accession_number,
@@ -43,13 +43,13 @@ def _base_entry(view: FilingProjection, *, manual_review: bool | None = None) ->
         form=view.filing.form_type,
         filed=_date(view.filing.filed_at),
         edgar_url=url,
-        manual_review=view.manual_review if manual_review is None else manual_review,
+        withheld=view.withheld if withheld is None else withheld,
         withheld_reason=view.withheld_reason,
     )
 
 
 def _withhold(view: FilingProjection) -> FilingDigestEntry:
-    entry = _base_entry(view, manual_review=True)
+    entry = _base_entry(view, withheld=True)
     return entry.model_copy(update={"findings": [], "withheld_reason": _WITHHELD})
 
 

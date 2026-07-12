@@ -18,7 +18,7 @@ class FilingProjection:
     p1: P1Output | None
     analysis_present: bool
     llm_output_allowed: bool
-    manual_review: bool
+    withheld: bool
     withheld_reason: str | None = None
     data_quality: list[tuple[str, str]] = field(default_factory=list)
 
@@ -72,10 +72,10 @@ def load_filing_projection(repo: Repo, filing: Filing) -> FilingProjection:
             if p1.extraction_confidence == "low" or p1.gaps:
                 llm_output_allowed = False
                 p1 = None
-    manual_review = filing.status == "failed" or bool(analysis_present and not llm_output_allowed)
+    withheld = filing.status == "failed" or bool(analysis_present and not llm_output_allowed)
     withheld_reason = (
         "LLM-derived analysis withheld because deterministic verification did not pass."
-        if manual_review and analysis_present
+        if withheld and analysis_present
         else None
     )
     data_quality: list[tuple[str, str]] = []
@@ -90,7 +90,7 @@ def load_filing_projection(repo: Repo, filing: Filing) -> FilingProjection:
         p1=p1,
         analysis_present=analysis_present,
         llm_output_allowed=llm_output_allowed,
-        manual_review=manual_review,
+        withheld=withheld,
         withheld_reason=withheld_reason,
         data_quality=data_quality,
     )

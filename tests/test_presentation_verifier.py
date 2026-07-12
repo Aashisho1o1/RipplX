@@ -131,7 +131,7 @@ def test_wrong_hash_fails():
 def test_non_sec_citation_and_withheld_content_fail():
     entry, sections = _fixture()
     mutated = entry.model_copy(
-        update={"edgar_url": "https://attacker.example/filing", "manual_review": True}
+        update={"edgar_url": "https://attacker.example/filing", "withheld": True}
     )
     errors = verify_filing_entry(mutated, sections)
     assert "withheld entry contains findings" in errors

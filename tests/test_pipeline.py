@@ -55,7 +55,7 @@ def test_pipeline_end_to_end_passes_and_persists():
         fa.metrics.get("revenue_growth").unavailable_missing
     )
     assert fa.verification.verdict in ("PASS", "PASS_WITH_WARNINGS")
-    assert not fa.manual_review
+    assert not fa.withheld
 
     # persisted: one P1 analysis with embedded evidence; no parallel claim graph
     stages = {a.stage for a in repo.list_analyses(ACCN)}

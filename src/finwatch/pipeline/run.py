@@ -115,7 +115,7 @@ class ProcessResult:
     ticker: str
     ok: bool
     verdict: str | None = None
-    manual_review: bool = False
+    withheld: bool = False
     error: str | None = None
 
 
@@ -182,10 +182,10 @@ def process_filing(
         repo.set_filing_status(filing.accession_number, "failed", processed_at=now_fn())
         return ProcessResult(filing.accession_number, ticker, False,
                              error="analysis pipeline failed")
-    status = "analyzed" if fa.manual_review else "verified"
+    status = "analyzed" if fa.withheld else "verified"
     repo.set_filing_status(filing.accession_number, status, processed_at=now_fn())
     return ProcessResult(filing.accession_number, fa.ticker, True,
-                         verdict=fa.verification.verdict, manual_review=fa.manual_review)
+                         verdict=fa.verification.verdict, withheld=fa.withheld)
 
 
 def process_latest(

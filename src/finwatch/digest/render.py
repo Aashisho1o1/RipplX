@@ -94,7 +94,7 @@ def _findings_section(entries: list[FilingDigestEntry]) -> list[str]:
         "each displayed quotation is exact; they do not prove the model's interpretation._",
         "",
     ]
-    material = [entry for entry in entries if entry.findings and not entry.manual_review]
+    material = [entry for entry in entries if entry.findings and not entry.withheld]
     if not material:
         out.extend(["_No evidence-backed changes were selected in this window._", ""])
         return out

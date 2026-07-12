@@ -4,7 +4,7 @@ export type MetricState = "computed" | "unavailable" | "not_applicable";
 
 export interface Evidence { claim_id: string; accession: string; section_key: string; char_start: number; char_end: number; quote: string; section_sha256: string; edgar_url: string }
 export interface Finding { finding_id: string; headline: string; severity: Severity; evidence: Evidence[] }
-export interface FilingDigestEntry { accession: string; ticker: string; form: string; filed: string; edgar_url: string; findings: Finding[]; manual_review: boolean; withheld_reason: string | null }
+export interface FilingDigestEntry { accession: string; ticker: string; form: string; filed: string; edgar_url: string; findings: Finding[]; withheld: boolean; withheld_reason: string | null }
 export interface MetricRow { metric: string; value: string; formula: string; state: MetricState; state_label: string; source_computation_id: number; effective_as_of: string }
 export interface IssuerMetrics { ticker: string; rows: MetricRow[]; empty: string | null }
 export interface Brief { period: { covered: string; filings_in_window: number; analyzed_filings: number }; portfolio: { owned: string[]; watching: string[] }; answer: string; answer_posture: Posture | null; filings: FilingDigestEntry[]; verified_numbers: IssuerMetrics[]; open_questions: string[]; boring_filings: string | null; withheld_filings: FilingDigestEntry[]; tracked_but_unanalyzed: boolean; disclaimer: string; sample_data: boolean }

@@ -612,13 +612,13 @@ def create_app(
                         fetch_html=fetch,
                         on_stage=progress,
                     )
-                    partial = partial or not result.ok or result.manual_review
+                    partial = partial or not result.ok or result.withheld
                     registry.add_item(
                         job_id,
                         JobItem(
                             key=f"{result.ticker} {result.accession}",
                             state="completed"
-                            if result.ok and not result.manual_review
+                            if result.ok and not result.withheld
                             else "failed",
                             message="",
                             verdict=result.verdict,

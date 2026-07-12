@@ -31,7 +31,7 @@ class FilingAnalysis:
     p1_analysis_id: int
     metrics: MetricsBundle
     verification: VerificationReport
-    manual_review: bool
+    withheld: bool
     starter_metrics: list = field(default_factory=list)
 
 def risk_diff_to_dict(diff: RiskFactorDiff) -> dict:
@@ -270,5 +270,5 @@ class Orchestrator:
         return FilingAnalysis(
             accession_number=filing.accession_number, ticker=ticker, p1=p1_out,
             p1_analysis_id=p1_aid, metrics=metrics,
-            verification=report, manual_review=report.verdict == "FAIL",
+            verification=report, withheld=report.verdict == "FAIL",
         )

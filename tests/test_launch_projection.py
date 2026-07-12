@@ -34,7 +34,7 @@ def test_launch_projection_requires_direct_evidence_for_every_finding():
 
         entry = _entry(repo)
 
-        assert entry.manual_review is True
+        assert entry.withheld is True
         assert entry.findings == []
         assert "Going concern doubt" not in entry.model_dump_json()
     finally:
@@ -60,7 +60,7 @@ def test_raw_p1_contract_rejects_more_than_three_findings():
 
         entry = _entry(repo)
 
-        assert entry.manual_review is True
+        assert entry.withheld is True
         assert entry.findings == []
     finally:
         conn.close()
@@ -84,7 +84,7 @@ def test_one_bad_evidence_span_withholds_every_finding():
 
         entry = _entry(repo)
 
-        assert entry.manual_review is True
+        assert entry.withheld is True
         assert entry.findings == []
     finally:
         conn.close()
@@ -145,7 +145,7 @@ def test_incomplete_persisted_extraction_is_withheld_despite_old_passes(
 
         entry = _entry(repo)
 
-        assert entry.manual_review is True
+        assert entry.withheld is True
         assert entry.findings == []
     finally:
         conn.close()
@@ -164,7 +164,7 @@ def test_section_hash_drift_withholds_exact_browser_projection():
 
         entry = _entry(repo)
 
-        assert entry.manual_review is True
+        assert entry.withheld is True
         assert entry.findings == []
     finally:
         conn.close()

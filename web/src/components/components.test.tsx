@@ -45,7 +45,7 @@ describe("trust vocabulary", () => {
   it("withholds findings whenever a filing requires manual review", () => {
     render(<MemoryRouter><FilingItemCard filing={{
       accession: "0000000000-25-000001", ticker: "TEST", form: "8-K", filed: "2025-07-01",
-      edgar_url: "https://www.sec.gov/Archives/example.htm", manual_review: true, withheld_reason: null,
+      edgar_url: "https://www.sec.gov/Archives/example.htm", withheld: true, withheld_reason: null,
       findings: [{ finding_id: "finding-1", headline: "Unverified headline", severity: "HIGH", evidence: [{
         claim_id: "claim-1", accession: "0000000000-25-000001", section_key: "item_8_01",
         char_start: 1, char_end: 20, quote: "Unverified evidence", section_sha256: "abc123",

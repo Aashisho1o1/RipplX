@@ -40,7 +40,7 @@ class FilingDigestEntry(BaseModel):
     filed: str = Field(min_length=1, max_length=32)
     edgar_url: str = Field(min_length=1, max_length=500)
     findings: list[FindingView] = Field(default_factory=list, max_length=3)
-    manual_review: bool = False
+    withheld: bool = False
     withheld_reason: str | None = None
 
 

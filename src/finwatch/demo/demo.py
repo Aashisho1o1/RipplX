@@ -157,7 +157,7 @@ def build_demo_db(db_path: str = ":memory:") -> sqlite3.Connection:
         )
         repo.set_filing_status(
             case.accn,
-            "analyzed" if analysis.manual_review else "verified",
+            "analyzed" if analysis.withheld else "verified",
             processed_at=_NOW,
         )
     return conn

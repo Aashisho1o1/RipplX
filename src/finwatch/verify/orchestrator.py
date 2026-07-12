@@ -83,7 +83,7 @@ def persist_report(
     """Persist every CheckResult in the report to ``verification_results``.
 
     A re-verify of the same analysis REPLACES the prior rows (not appends): stale
-    blocking FAILs are cleared first so ``manual_review`` (derived from any-blocking-
+    blocking FAILs are cleared first so ``withheld`` (derived from any-blocking-
     fail over all rows) reflects only the latest run, and rows don't accumulate on
     every retry.
     """

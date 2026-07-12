@@ -117,7 +117,7 @@ def test_server_anchors_evidence_and_ignores_model_supplied_offsets():
                               model="fake/model", now_fn=lambda: "t")
     result = process_latest(repo, orch, fetch_html=lambda _u: TENQ, now_fn=lambda: "t")
 
-    assert result[0].ok and not result[0].manual_review  # published, not withheld
+    assert result[0].ok and not result[0].withheld  # published, not withheld
     ev = json.loads(repo.latest_analysis(ACCN, "P1").output_json)["findings"][0]["evidence"][0]
     section = next(
         s.text for s in repo.list_filing_sections(ACCN) if s.section_key == "mdna"
@@ -145,7 +145,7 @@ def test_non_verbatim_evidence_snippet_is_withheld():
                               model="fake/model", now_fn=lambda: "t")
     result = process_latest(repo, orch, fetch_html=lambda _u: TENQ, now_fn=lambda: "t")
 
-    assert not (result[0].ok and not result[0].manual_review)  # never published
+    assert not (result[0].ok and not result[0].withheld)  # never published
     assert "Fabricated claim" not in render_digest(repo, since="2024-01-01").markdown
 
 

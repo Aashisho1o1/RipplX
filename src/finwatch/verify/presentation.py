@@ -24,7 +24,7 @@ def verify_filing_entry(
 ) -> list[str]:
     """Return deterministic publication errors for one exact browser/Markdown DTO."""
     errors: list[str] = []
-    if entry.manual_review and entry.findings:
+    if entry.withheld and entry.findings:
         errors.append("withheld entry contains findings")
     if len(entry.findings) > 3:
         errors.append("more than three findings")

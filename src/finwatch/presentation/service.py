@@ -137,12 +137,12 @@ class PresentationService:
         views = self._views(since, until)
         analyzed = [view for view in views if view.analysis_present]
         entries = [build_filing_entry(self.repo, view) for view in views]
-        published = [entry for entry in entries if entry.findings and not entry.manual_review]
-        withheld = [entry for entry in entries if entry.manual_review]
+        published = [entry for entry in entries if entry.findings and not entry.withheld]
+        withheld = [entry for entry in entries if entry.withheld]
         boring = [
             entry
             for view, entry in zip(views, entries, strict=True)
-            if view.analysis_present and not entry.manual_review and not entry.findings
+            if view.analysis_present and not entry.withheld and not entry.findings
         ]
 
         owned = sorted(holding.ticker for holding in holdings if holding.owned)
