@@ -47,6 +47,10 @@ web/dist/
 *.swp
 .vscode/
 .idea/
+.clinerules
 
-# macOS Finder "duplicate" artifacts (e.g. "render 2.py", "App 2")
-*[ 2]*
+# Local scratch and generated test output (never commit)
+/tmp_test/
+/test_output.txt
+/test_full.txt
+/ruff_out.txt

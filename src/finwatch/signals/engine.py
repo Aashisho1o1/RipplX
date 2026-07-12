@@ -52,9 +52,9 @@ def computed_inputs_snapshot(metrics: MetricsBundle) -> list[dict]:
 @dataclass
 class SignalResult:
     decision: Decision
-    p3: P3Output | None = None #isn't P3 already deleted? why is it here? looks like remnants.
+    p3: P3Output | None = None  # dormant P3 remnant; this whole module is deleted in the lean cut
     analysis_id: int | None = None
-    shadow_log_id: int | None = None #also, this looks like we deleted while chopping down for lean proroptye?
+    shadow_log_id: int | None = None  # dormant shadow-log remnant; removed with signals/
     escalated: bool = False
 
 
