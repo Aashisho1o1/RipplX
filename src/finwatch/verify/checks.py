@@ -13,10 +13,8 @@ from typing import Any, Optional
 from pydantic import BaseModel, Field
 
 from finwatch.core.text_policy import contains_authored_quantity, contains_trade_instruction
-from finwatch.core.types import DISCLAIMER, FORBIDDEN_VOCABULARY, POSTURE_MAP, SectorInfo
+from finwatch.core.types import DISCLAIMER, FORBIDDEN_VOCABULARY, SectorInfo
 from finwatch.metrics.envelope import MetricsBundle
-from finwatch.signals.matrix import (Decision, ExtractionSummary, ImpactSummary,
-                                     Record, evaluate)
 from finwatch.xbrl.normalize import FactStore
 
 
@@ -46,11 +44,6 @@ class VerifyBundle(BaseModel):
     fact_store_values: list[float] = Field(default_factory=list)  # numeric XBRL leaves
     evidence_claims: list[EvidenceClaim] = Field(default_factory=list)
     section_texts: dict[str, str] = Field(default_factory=dict)   # f"{accn}:{section_key}"
-    # V3 inputs (present when a P3 decision exists):
-    decision: Optional[Decision] = None
-    record: Optional[Record] = None
-    extraction: Optional[ExtractionSummary] = None
-    impact: Optional[ImpactSummary] = None
     extraction_confidence: Optional[str] = None
     extraction_gaps: list[str] = Field(default_factory=list)
     # V5:
@@ -330,46 +323,6 @@ def check_v2_identities(store: FactStore, sector: SectorInfo) -> list[CheckResul
     return out
 
 
-# ================================================= V3 — rule re-derivation ==
-def check_v3_rederivation(bundle: VerifyBundle) -> list[CheckResult]:
-    if bundle.decision is None:
-        return [CheckResult(check_id="V3", verdict="skipped_not_applicable",
-                            severity="info", detail="no P3 decision in bundle")]
-    if None in (bundle.record, bundle.extraction, bundle.impact):
-        return [CheckResult(check_id="V3", verdict="fail", severity="blocking",
-                            detail="decision present but inputs missing")]
-    redo = evaluate(bundle.record, bundle.extraction, bundle.impact, bundle.metrics)
-    d = bundle.decision
-    expected_signal = redo.signal
-    if d.escalation:
-        frm, to = d.escalation.get("from"), d.escalation.get("to")
-        from finwatch.core.types import CAUTION_ORDER
-        if (frm != redo.signal
-                or CAUTION_ORDER.index(to) != CAUTION_ORDER.index(frm) - 1):
-            return [CheckResult(check_id="V3", verdict="fail",
-                                severity="blocking",
-                                detail=f"invalid escalation {frm}->{to} "
-                                       f"(engine base {redo.signal})")]
-        expected_signal = to
-    # Full-decision re-derivation (CLAUDE.md §14 V3): posture, signal, rules_fired,
-    # rules_skipped, and caps must all match a fresh evaluate() — escalation aside.
-    expected_posture = POSTURE_MAP.get(expected_signal)
-    mismatches = []
-    if d.signal != expected_signal:
-        mismatches.append(f"signal {d.signal} != {expected_signal}")
-    if d.posture != expected_posture:
-        mismatches.append(f"posture {d.posture} != {expected_posture}")
-    if sorted(set(d.rules_fired) - {"ESC"}) != sorted(set(redo.rules_fired)):
-        mismatches.append(f"rules_fired {d.rules_fired} != {redo.rules_fired}")
-    if d.rules_skipped != redo.rules_skipped:
-        mismatches.append(f"rules_skipped {d.rules_skipped} != {redo.rules_skipped}")
-    if d.caps_applied != redo.caps_applied:
-        mismatches.append(f"caps {d.caps_applied} != {redo.caps_applied}")
-    if mismatches:
-        return [CheckResult(check_id="V3", verdict="fail", severity="blocking",
-                            detail="; ".join(mismatches))]
-    return [CheckResult(check_id="V3", verdict="pass", severity="blocking",
-                        detail="re-derivation exact match")]
 
 
 # ================================================== V4 — citation integrity ==
@@ -466,7 +419,6 @@ def run_all(bundle: VerifyBundle, store: Optional[FactStore] = None,
     results += check_v1_numeric_provenance(bundle)
     if store is not None and sector is not None:
         results += check_v2_identities(store, sector)
-    results += check_v3_rederivation(bundle)
     results += check_v4_citations(bundle)
     results += check_v5_hygiene(bundle)
     blocking_fail = any(r.verdict == "fail" and r.severity == "blocking"

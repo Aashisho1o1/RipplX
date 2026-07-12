@@ -1,4 +1,4 @@
-"""MetricsService: builds compute_all inputs from the DB and persists to computations."""
+"""MetricsService: builds compute_starter inputs from the DB and persists to computations."""
 from __future__ import annotations
 
 import json

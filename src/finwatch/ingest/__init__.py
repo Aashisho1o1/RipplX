@@ -1,4 +1,4 @@
-"""EDGAR + Stooq ingestion: HTTP client, ticker→CIK, price provider, orchestration."""
+"""EDGAR ingestion: HTTP client, ticker→CIK resolution, filing/XBRL orchestration."""
 
 from finwatch.ingest.edgar import (
     EdgarClient,
@@ -16,11 +16,6 @@ from finwatch.ingest.service import (
     build_service,
     companyfacts_to_rows,
 )
-from finwatch.ingest.stooq import (
-    StooqClient,
-    parse_stooq_csv,
-    stooq_symbol,
-)
 from finwatch.ingest.tickers import TickerRecord, build_ticker_index, resolve_ticker
 
 __all__ = [
@@ -29,9 +24,6 @@ __all__ = [
     "RateLimiter",
     "RetryableHTTPError",
     "normalize_cik",
-    "StooqClient",
-    "parse_stooq_csv",
-    "stooq_symbol",
     "TickerRecord",
     "build_ticker_index",
     "resolve_ticker",

@@ -70,9 +70,9 @@ def test_pipeline_end_to_end_passes_and_persists():
     assert progress["verify"].status == "completed"
 
 
-def test_pipeline_runs_v2_data_quality_and_marks_v3_not_applicable():
-    # V2 accounting identities remain active. V3 is explicitly not applicable because
-    # the launch pipeline never constructs a P3 decision.
+def test_pipeline_runs_v1_v4_v5_and_v2_data_quality_without_v3():
+    # V1/V4/V5 gate publication and V2 accounting identities run as data-quality.
+    # V3 was removed with the P3 research code (no rule re-derivation in launch).
     repo = Repo(init_db(":memory:"))
     _seed(repo)
     fa = _orchestrator(repo).process_html(
@@ -80,8 +80,7 @@ def test_pipeline_runs_v2_data_quality_and_marks_v3_not_applicable():
     ids = {c.check_id for c in fa.verification.results}
     assert "V1" in ids and "V4" in ids and "V5" in ids
     assert {"V2a", "V2b", "V2c"} <= ids                 # V2 audit is present now
-    v3 = next(c for c in fa.verification.results if c.check_id == "V3")
-    assert v3.verdict == "skipped_not_applicable"
+    assert "V3" not in ids
     assert fa.verification.verdict in ("PASS", "PASS_WITH_WARNINGS")
 
 def test_launch_pipeline_never_calls_p2_or_p3_or_writes_shadow_rows():
@@ -111,6 +110,5 @@ def test_launch_pipeline_never_calls_p2_or_p3_or_writes_shadow_rows():
     assert repo.count_shadow_log() == 0
     assert all("chair the investment committee" not in system for system, _ in llm.calls)
     assert all("portfolio manager and risk officer" not in system for system, _ in llm.calls)
-    v3 = next(c for c in fa.verification.results if c.check_id == "V3")
-    assert v3.verdict == "skipped_not_applicable"
+    assert "V3" not in {c.check_id for c in fa.verification.results}
     assert fa.verification.verdict in ("PASS", "PASS_WITH_WARNINGS")

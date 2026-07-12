@@ -1,6 +1,7 @@
 """Mutation battery — the verifier's Definition of Done. Trust-critical (test-guarded): edit with care, keep the spec tests green.
-Builds a known-good bundle, then seeds five corruptions; each must FAIL on the
-correct check id, and the clean bundle must PASS."""
+Builds a known-good bundle, then seeds corruptions (V1 provenance, V2a identity,
+V4 citation, V5 hygiene); each must FAIL on the correct check id, and the clean
+bundle must PASS."""
 from __future__ import annotations
 
 import hashlib
@@ -9,7 +10,6 @@ import pytest
 
 from finwatch.core.types import DISCLAIMER, MetricStatus, SectorClass, SectorInfo
 from finwatch.metrics.envelope import MetricResult, MetricsBundle
-from finwatch.signals.matrix import ExtractionSummary, ImpactSummary, Record, evaluate
 from finwatch.verify.checks import (EvidenceClaim, VerifyBundle,
                                     check_v2_identities, run_all)
 from finwatch.xbrl.normalize import Fact, FactStore
@@ -36,11 +36,6 @@ def make_bundle(rendered=None, snippet="$1,234.5 million",
     metrics.results["revenue_growth"] = MetricResult(
         metric="revenue_growth", status=MetricStatus.COMPUTED, value=0.12,
         components={"yoy": 0.12}, formula_version="revenue_growth.v1", as_of=AS_OF)
-    record = Record(ticker="TEST", owned=True, current_weight_pct=5.0,
-                    target_weight_pct=10.0, thesis="t")
-    ext, imp = ExtractionSummary(), ImpactSummary(thesis_verdict="intact",
-                                                  net_direction="neutral")
-    decision = evaluate(record, ext, imp, metrics)
     rendered = rendered or ("Revenue grew 0.12 year over year; the filing cites "
                             "$1,234.5 million of net revenue.")
     return VerifyBundle(
@@ -53,7 +48,6 @@ def make_bundle(rendered=None, snippet="$1,234.5 million",
             snippet=snippet,
             text_sha256=hashlib.sha256(SECTION.encode()).hexdigest())],
         section_texts={KEY: SECTION},
-        decision=decision, record=record, extraction=ext, impact=imp,
         trade_action=None, disclaimer_text=DISCLAIMER)
 
 
@@ -85,13 +79,6 @@ def test_mutation_c_altered_snippet_fails_v4():
     b = make_bundle(snippet="$1,234.5 billion")       # one word altered
     r = run_all(b, make_store(), SectorInfo(SectorClass.GENERAL, False))
     assert "V4" in failing_ids(r)
-
-
-def test_mutation_d_changed_rule_id_fails_v3():
-    b = make_bundle()
-    b.decision = b.decision.model_copy(update={"rules_fired": ["M4"]})
-    r = run_all(b, make_store(), SectorInfo(SectorClass.GENERAL, False))
-    assert "V3" in failing_ids(r)
 
 
 def test_mutation_e_price_target_language_fails_v5():
