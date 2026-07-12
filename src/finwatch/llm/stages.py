@@ -3,8 +3,7 @@
 Parsing the response into the pydantic schema is the schema-validity gate (a
 ValidationError = malformed output → the pipeline regenerates). The trusted
 accession/ticker (from the filing being analyzed) are used for the DB keys, never
-the model's echoed values. Launch P1 stores evidence inside each finding; only the
-dormant P2 research schema still emits parallel claim rows.
+the model's echoed values. P1 stores evidence inside each finding.
 """
 from __future__ import annotations
 
@@ -13,7 +12,6 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
 
-from finwatch.claims.persist import to_analysis_claims
 from finwatch.db.repositories import Analysis, Repo
 from finwatch.llm.prompts import STAGE_P1, STAGE_P2, load_prompt
 from finwatch.llm.router import (
@@ -178,9 +176,6 @@ def _run_stage(
         tokens_in=resp.tokens_in, tokens_out=resp.tokens_out, cost_usd=resp.cost_usd,
         created_at=now_fn(),
     ))
-    claim_rows = to_analysis_claims(analysis_id, list(getattr(output, "claims", []) or []))
-    if claim_rows:
-        repo.insert_analysis_claims(claim_rows)
     return output, analysis_id, resp
 
 
