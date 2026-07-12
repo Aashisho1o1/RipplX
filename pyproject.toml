@@ -61,16 +61,14 @@ addopts = "-m 'not live'"
 line-length = 100
 target-version = "py311"
 src = ["src", "tests"]
-# TIER 1 trust-layer files are transcribed VERBATIM from CORE_CODE.md and must NOT be
-# reformatted or modified (SYSTEM_DESIGN.md §1). Exclude them from lint entirely.
+# Trust-layer files are kept dense and hand-formatted; exclude them from lint reflow so a
+# cosmetic autofix never touches the deterministic core. Editable with care (see CLAUDE.md).
 extend-exclude = [
     "src/finwatch/core/types.py",
     "src/finwatch/metrics/envelope.py",
     "src/finwatch/xbrl/normalize.py",
     "src/finwatch/metrics/formulas.py",
-    "src/finwatch/signals/matrix.py",
     "src/finwatch/verify/checks.py",
-    "tests/test_signals_matrix.py",
     "tests/test_verifier_mutations.py",
 ]
 

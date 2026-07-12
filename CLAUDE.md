@@ -8,43 +8,59 @@ principles the current code embodies. The code and tests remain the source of tr
 make the identical change to the other in the same commit. Tool-specific guidance belongs
 elsewhere; do not let these files drift again.
 
-This repository contains two things that must not be confused:
-
-1. a deliberately narrow launch product; and
-2. dormant v0.2 research infrastructure retained for possible later experiments.
-
 The launch cut validates one promise: **add tickers; when the newest SEC filing arrives, show at
-most three important changes, exact evidence, and six verified financial deltas.** P2 portfolio
-impact, P3 signals, shadow tracking, portfolio accounting, extended metrics, historical analysis
-replay, and offline re-verification are not current product behavior.
+most three important changes, exact evidence, and six verified financial deltas.**
 
-**Ground truth, in order:** (1) shipped code + tests, (2) this file, (3) `SYSTEM_DESIGN.md`.
-`CORE_CODE.md` and `docs/CLAUDE_v0.2_full_spec.md` are historical snapshots, not live law. If a
+**Ground truth, in order:** (1) shipped code + tests, (2) this file, (3) `SYSTEM_DESIGN.md`. If a
 current document disagrees with shipped behavior, fix the document.
+
+## Project vision: lean, simple, and clean
+
+RipplX / finwatch is one trust-first prototype, not a framework, compatibility warehouse, or
+archive of past experiments. Keep the shipped path small enough to understand end to end: track a
+ticker, sync its newest supported SEC filing, extract at most three qualitative findings with exact
+evidence, compute six deterministic SEC-XBRL metrics, verify everything, and present one canonical
+result.
+
+- Git history is the archive. Delete unreachable, commented-out, speculative, superseded, and
+  “maybe later” implementations instead of retaining dormant scaffolding in the active tree.
+- Keep one current product path, one name for each active concept, and one source of truth for each
+  contract. Avoid parallel schemas, duplicate persistence formats, compatibility aliases, and
+  generic frameworks that serve no shipped behavior.
+- A deletion is complete only when its imports, exports, types, database objects, repository
+  methods, prompts, tests, fixtures, DTOs, API routes, UI code, documentation, configuration,
+  dependencies, and CI references are removed or updated together.
+- Add an abstraction, dependency, route, table, configuration switch, or background mechanism only
+  when current prototype behavior needs it and a direct readable implementation is insufficient.
+- Prefer explicit control flow, deterministic checks, fixed failure states, and fail-closed
+  publication over speculative extensibility.
+- Compatibility is opt-in for the prototype. Preserve it only when explicitly required, documented,
+  and tested; otherwise back up data and make a clean break rather than carrying permanent migration
+  baggage.
+- Never commit commented-out implementations, temporary AI review notes, generated test output, or
+  one-off debugging tools.
 
 ---
 
-## ⚠️ Trust-critical code — read before touching any of these 8 files
+## ⚠️ Trust-critical code — read before touching any of these files
 
 ```
-src/finwatch/core/types.py            src/finwatch/signals/matrix.py
-src/finwatch/metrics/envelope.py      src/finwatch/verify/checks.py
-src/finwatch/xbrl/normalize.py        tests/test_signals_matrix.py
-src/finwatch/metrics/formulas.py      tests/test_verifier_mutations.py
+src/finwatch/llm/schemas.py           src/finwatch/verify/checks.py
+src/finwatch/llm/stages.py            src/finwatch/verify/presentation.py
+src/finwatch/xbrl/normalize.py        src/finwatch/presentation/canonical.py
+src/finwatch/metrics/formulas.py      src/finwatch/core/types.py
+src/finwatch/metrics/envelope.py      tests/test_verifier_mutations.py
 ```
 
-These files contain the deterministic trust layer and retained signal research. Edit them freely,
-but with extra care: their worst failure mode is a silent, plausible error presented as verified.
-The norm is test-guarded, not frozen.
+These files are the deterministic trust layer: the extraction contract + server-side quote
+anchoring, XBRL normalization, the six metric formulas, the V1/V4/V5 verifier, and the exact
+canonical presentation. Edit them freely, but with extra care: their worst failure mode is a
+silent, plausible error presented as verified.
 
-1. Keep the executable specs and the full suite green (`uv run pytest -q`). When behavior changes,
-   update the relevant mutation/edge-case test in the same commit and explain why.
+1. Keep the full suite green (`uv run pytest -q`). When behavior changes, update the relevant
+   mutation/edge-case test in the same commit and explain why.
 2. Give every trust-layer change a real adversarial review. Prefer a test that would fail under the
    exact corruption being fixed.
-3. Dormant code is not production code, but a change to it can still become dangerous if it is
-   reactivated later. Keep its tests honest; never reconnect it to launch by accident.
-
-`CORE_CODE.md` is a historical build-time snapshot. Do not mirror live edits into it.
 
 ---
 
@@ -78,28 +94,15 @@ Prefer deterministic over stochastic · fewer/sharper findings over noisy covera
 
 ---
 
-## 2. History and dormant research
+## 2. History
 
-The v0.2 backend originally implemented a broader seven-stage research system. Its full build spec,
-schemas, prompts, tables, metric catalog, and signal rationale are archived verbatim in
-`docs/CLAUDE_v0.2_full_spec.md`; `CORE_CODE.md` is the corresponding historical trust-layer
-snapshot. The codebase later received an adversarial hardening pass and then a launch-scope cut.
-
-The following remain in the tree for research/history but are unreachable from the production web
-and CLI analysis path:
-
-- P2 portfolio-impact analysis, eight transmission channels, cross-holding spillover, and thesis
-  integrity;
-- P3 rationale generation, the signal matrix, trade-action vocabulary, shadow logs, track-record
-  promotion infrastructure, and signal UI/API routes;
-- valuation frameworks and extended metrics (Piotroski, Altman, Beneish, PEG, Graham, percentiles),
-  prices/Stooq, position sizing, cost basis, shares, target weights, and rebalance logic;
-- offline reverify, historical filing analysis replay/backfill controls, partial-stage reruns, and
-  user-facing resume controls;
-- legacy schema columns/tables and FTS infrastructure retained for migration compatibility.
-
-Do not delete or reactivate these incidentally. Any return to launch scope must be justified by
-observed user behavior, get a new threat/correctness review, and have an explicit product decision.
+The v0.2 backend implemented a broader seven-stage research system (P2 portfolio-impact analysis,
+P3 signal rationale + the signal matrix + shadow logs, extended valuation/scoring metrics —
+Piotroski/Altman/Beneish/PEG/Graham/percentiles, Stooq prices, position sizing/holdings accounting).
+**That code has been deleted in the lean cut.** Recover any of it from Git history if a future
+product decision justifies it — do not reintroduce dormant scaffolding into the active tree (see
+"Project vision" above). Any return to a larger scope needs a fresh threat/correctness review and an
+explicit product decision.
 
 ---
 
@@ -367,10 +370,8 @@ historical analysis replay · MCP wrapper · deeper symbolic reasoning.
 |---|---|
 | Launch status and quickstart | `README.md` |
 | Current module/data-flow contracts | `SYSTEM_DESIGN.md` |
-| Historical v0.2 specification | `docs/CLAUDE_v0.2_full_spec.md` |
-| Historical trust-layer snapshot | `CORE_CODE.md` |
-| DB DDL and migrations | `src/finwatch/db/schema.sql`, `src/finwatch/db/migration_*.sql` |
-| P1 and injection rules | `src/finwatch/prompts/foundation.md`, `P1_extractor.md` |
+| DB DDL (single fresh schema, no migrations) | `src/finwatch/db/schema.sql`, `db/database.py` |
+| Extraction prompt and injection rules | `src/finwatch/prompts/foundation.md`, `P1_extractor.md` |
 | Starter metric catalog/service | `src/finwatch/metrics/catalog.py`, `service.py` |
 | Launch pipeline and scheduling | `src/finwatch/pipeline/orchestrator.py`, `run.py`, `progress.py` |
 | Publication checks | `src/finwatch/verify/checks.py`, `verify/presentation.py` |

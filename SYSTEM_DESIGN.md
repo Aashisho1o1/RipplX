@@ -2,13 +2,12 @@
 ## Launch architecture, module map, and integration contracts
 
 This document maps the narrow launch runtime. It sits below the code/tests and the mirrored
-`AGENTS.md`/`CLAUDE.md` context files. `CORE_CODE.md` and
-`docs/CLAUDE_v0.2_full_spec.md` describe the broader historical research system.
+`AGENTS.md`/`CLAUDE.md` context files.
 
-> **Precedence:** shipped code + tests > `AGENTS.md`/`CLAUDE.md` > this map > historical specs.
+> **Precedence:** shipped code + tests > `AGENTS.md`/`CLAUDE.md` > this map.
 
-The repository still contains P2/P3, signals, extended formulas, and legacy tables. Their presence
-does not make them production stages. The runtime wiring in `pipeline/run.py` is authoritative.
+The lean cut deleted the v0.2 research code (P2/P3, signals, extended formulas, prices, holdings);
+the runtime wiring in `pipeline/run.py` is authoritative. Recover removed code from Git history.
 
 ---
 

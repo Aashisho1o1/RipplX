@@ -247,9 +247,8 @@ npm --prefix web run build
 Tests make no live network or LLM calls by default. Optional live checks are marked `live` and
 excluded from the normal suite.
 
-The original v0.2 research specification is archived at
-[`docs/CLAUDE_v0.2_full_spec.md`](docs/CLAUDE_v0.2_full_spec.md). It describes historical scope,
-not the current launch runtime.
+The broader v0.2 research system (P2/P3, signals, extended metrics) was removed in the lean cut;
+recover it from Git history if a future product decision justifies it.
 
 ## License
 
