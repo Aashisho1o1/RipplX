@@ -25,7 +25,7 @@ def test_live_ingest_aapl():
     repo = Repo(conn)
     service = IngestService(repo, EdgarClient(user_agent))
 
-    service.add_holding("AAPL")
+    service.track_company("AAPL")
     summary = service.ingest_all(backfill_quarters=4)
 
     assert summary.results and summary.results[0].error is None, summary.results

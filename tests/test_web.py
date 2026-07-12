@@ -7,9 +7,9 @@ import pytest
 pytest.importorskip("fastapi")
 from fastapi.testclient import TestClient  # noqa: E402
 
-from finwatch.db import Company, Holding, Repo, init_db
+from finwatch.db import Company, Repo, init_db
 from finwatch.demo import build_demo_db
-from finwatch.web.app import HoldingCreate, JobRequest, _compute_synced_metrics, create_app
+from finwatch.web.app import CompanyCreate, JobRequest, _compute_synced_metrics, create_app
 
 LOCAL_BROWSER_HEADERS = {"Origin": "http://testserver"}
 
@@ -29,7 +29,7 @@ def test_web_job_request_accepts_only_an_optional_ticker():
 
 
 def test_holding_create_is_ticker_only_and_legacy_rows_do_not_leak_private_fields(tmp_path):
-    assert HoldingCreate(ticker="BRK-B").ticker == "BRK-B"
+    assert CompanyCreate(ticker="BRK-B").ticker == "BRK-B"
     for legacy in (
         {"ticker": "MSFT", "shares": 10},
         {"ticker": "MSFT", "cost_basis": 100},
@@ -38,7 +38,7 @@ def test_holding_create_is_ticker_only_and_legacy_rows_do_not_leak_private_field
         {"ticker": "MSFT", "owned": False},
     ):
         with pytest.raises(ValueError):
-            HoldingCreate(**legacy)
+            CompanyCreate(**legacy)
 
     db_path = tmp_path / "finwatch.db"
     build_demo_db(str(db_path)).close()
@@ -46,12 +46,12 @@ def test_holding_create_is_ticker_only_and_legacy_rows_do_not_leak_private_field
         create_app(db_path=str(db_path), web_dist=tmp_path / "missing-dist"),
         headers=LOCAL_BROWSER_HEADERS,
     )
-    rows = client.get("/api/holdings").json()["owned"]
+    rows = client.get("/api/companies").json()["companies"]
     assert rows
     assert {"shares", "cost_basis", "target_weight_pct", "horizon", "thesis"}.isdisjoint(
         rows[0]
     )
-    assert client.patch("/api/holdings/MSFT", json={"shares": 1}).status_code == 404
+    assert client.patch("/api/companies/MSFT", json={"shares": 1}).status_code == 404
 
 
 def test_holding_create_fails_before_edgar_when_launch_cap_is_reached(tmp_path):
@@ -67,11 +67,12 @@ def test_holding_create_fails_before_edgar_when_launch_cap_is_reached(tmp_path):
             cik = str(index + 1)
             ticker = f"T{index}"
             repo.upsert_company(Company(cik=cik, ticker=ticker, added_at="t"))
-            repo.upsert_holding(Holding(cik=cik, ticker=ticker, owned=1, added_at="t"))
+            repo.upsert_company(Company(cik=cik, ticker=ticker, added_at="t"))
+            repo.track_company(cik, at="t")
     finally:
         conn.close()
 
-    response = client.post("/api/holdings", json={"ticker": "NEW"})
+    response = client.post("/api/companies", json={"ticker": "NEW"})
 
     assert response.status_code == 409
     assert response.json()["error"]["code"] == "tracked_ticker_limit"
@@ -94,7 +95,7 @@ def test_get_and_delete_path_params_reject_malformed_input(tmp_path):
     client, _ = _client(tmp_path)
     assert client.get("/api/filings/not-an-accession").status_code == 422
     assert client.get("/api/companies/BAD!TICKER/metrics").status_code == 422
-    assert client.delete("/api/holdings/BAD!TICKER").status_code == 422
+    assert client.delete("/api/companies/BAD!TICKER").status_code == 422
     assert client.get("/api/jobs/not-a-valid-job-id").status_code == 422
     # a well-formed but unknown accession passes validation and 404s at lookup
     assert client.get("/api/filings/0000000001-24-000001").status_code == 404
@@ -160,7 +161,7 @@ def test_restart_keeps_portfolio_results_but_drops_session_key(tmp_path, monkeyp
         },
     )
     assert response.json()["api_key_source"] == "session"
-    assert len(first.get("/api/holdings").json()["owned"]) == 2
+    assert len(first.get("/api/companies").json()["companies"]) == 4
 
     restarted = TestClient(
         create_app(db_path=str(db_path), web_dist=tmp_path / "missing-dist"),
@@ -170,7 +171,7 @@ def test_restart_keeps_portfolio_results_but_drops_session_key(tmp_path, monkeyp
     assert bootstrap["sec_user_agent"] == "Test User test@example.com"
     assert bootstrap["model"] == "openai/test"
     assert bootstrap["api_key_configured"] is False
-    assert len(restarted.get("/api/holdings").json()["owned"]) == 2
+    assert len(restarted.get("/api/companies").json()["companies"]) == 4
     filing = restarted.get("/api/filings/0001683168-24-004848")
     assert filing.status_code == 200
     assert filing.json()["verification"] is not None

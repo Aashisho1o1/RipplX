@@ -118,7 +118,7 @@ class ApiProblem(Exception):
         super().__init__(message)
 
 
-class HoldingCreate(BaseModel):
+class CompanyCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     ticker: str = Field(min_length=1, max_length=15, pattern=_TICKER_PATTERN)
@@ -198,7 +198,7 @@ def create_app(
     app.state.db_path = resolved_db
     app.state.secrets = RuntimeSecrets()
     app.state.jobs = JobRegistry()
-    app.state.holding_add_lock = Lock()
+    app.state.company_add_lock = Lock()
     app.state.remote = remote
     expected_token = remote_auth_token(auth_token) if remote else None
     trusted_hosts = remote_allowed_hosts(allowed_hosts) if remote else list(LOCAL_ALLOWED_HOSTS)
@@ -395,21 +395,23 @@ def create_app(
                 raise ApiProblem(404, "filing_not_found", "Filing not found.")
             return result
 
-    @app.get("/api/holdings")
-    def holdings():
+    @app.get("/api/companies")
+    def companies():
         with repo_context() as repo:
-            return PresentationService(repo).holdings()
+            return PresentationService(repo).companies()
 
-    @app.post("/api/holdings", status_code=201)
-    def create_holding(payload: HoldingCreate):
+    @app.post("/api/companies", status_code=201)
+    def create_company(payload: CompanyCreate):
         # Registration includes external EDGAR reads. Serialize it process-wide so
         # concurrent requests cannot multiply request rate or race the launch cap.
-        with app.state.holding_add_lock:
+        with app.state.company_add_lock:
             with repo_context() as repo:
                 settings = resolve_settings(repo, app.state.secrets)
                 known = repo.get_company_by_ticker(payload.ticker)
-                already_tracked = bool(known and repo.get_holding_by_cik(known.cik))
-                if not already_tracked and len(repo.list_holdings()) >= MAX_TRACKED_TICKERS:
+                already_tracked = bool(known and known.tracked_at)
+                if not already_tracked and (
+                    len(repo.list_tracked_companies()) >= MAX_TRACKED_TICKERS
+                ):
                     raise ApiProblem(
                         409,
                         "tracked_ticker_limit",
@@ -428,23 +430,22 @@ def create_app(
             )
             connection, service = build_service(config, conn=operational_connection())
             try:
-                company = service.add_holding(payload.ticker)
+                company = service.track_company(payload.ticker)
             except TickerNotFoundError as exc:
                 raise ApiProblem(404, "ticker_not_found", "Ticker not found on EDGAR.") from exc
             finally:
                 service.edgar.close()
                 connection.close()
         with repo_context() as repo:
-            view = PresentationService(repo).holdings()
-            rows = view.owned + view.watching
-            return next(row for row in rows if row.ticker == company.ticker)
+            view = PresentationService(repo).companies()
+            return next(row for row in view.companies if row.ticker == company.ticker)
 
-    @app.delete("/api/holdings/{ticker}", status_code=204)
-    def delete_holding(ticker: str = PathParam(pattern=_TICKER_PATTERN, max_length=15)):
+    @app.delete("/api/companies/{ticker}", status_code=204)
+    def delete_company(ticker: str = PathParam(pattern=_TICKER_PATTERN, max_length=15)):
         with repo_context() as repo:
             company = repo.get_company_by_ticker(ticker)
-            if company is None or not repo.delete_holding(company.cik):
-                raise ApiProblem(404, "holding_not_found", "Holding not found.")
+            if company is None or not repo.untrack_company(company.cik):
+                raise ApiProblem(404, "company_not_found", "Company not found.")
 
     @app.get("/api/companies/{ticker}/metrics")
     def company_metrics(

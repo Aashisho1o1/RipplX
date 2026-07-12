@@ -1,40 +1,31 @@
-"""SQLite data layer: schema, migrations, and the thin repository."""
+"""SQLite data layer: schema installer + the thin typed repository."""
 
-from finwatch.db.database import MigrationError, apply_migrations, connect, init_db
+from finwatch.db.database import SchemaVersionError, connect, init_db
 from finwatch.db.repositories import (
     Analysis,
-    AnalysisClaim,
     Company,
     Computation,
     Digest,
     Filing,
     FilingSection,
     FilingStageRun,
-    Holding,
-    Price,
     Repo,
-    SignalShadowLog,
     VerificationResult,
     XbrlFact,
 )
 
 __all__ = [
-    "apply_migrations",
     "connect",
     "init_db",
-    "MigrationError",
+    "SchemaVersionError",
     "Repo",
     "Analysis",
-    "AnalysisClaim",
     "Company",
     "Computation",
     "Digest",
     "Filing",
     "FilingStageRun",
     "FilingSection",
-    "Holding",
-    "Price",
-    "SignalShadowLog",
     "VerificationResult",
     "XbrlFact",
 ]

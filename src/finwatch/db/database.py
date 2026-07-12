@@ -1,7 +1,9 @@
-"""SQLite connection factory + migration runner.
+"""SQLite connection factory + fresh-schema installer.
 
-Schema versioning uses SQLite's ``PRAGMA user_version`` (no meta table). Migration
-1 is ``schema.sql`` (CLAUDE.md §6 verbatim); future migrations append to the list.
+This is a lean prototype: there is one current schema and no migration ladder. A blank
+database is initialized from ``schema.sql``; a database created by an older finwatch
+schema is rejected (``SchemaVersionError``) so the new code never runs against a legacy
+layout. Back up the data directory and start fresh to upgrade.
 """
 from __future__ import annotations
 
@@ -10,11 +12,14 @@ import os
 import sqlite3
 from pathlib import Path
 
-SCHEMA_VERSION = 3
+# Bump SCHEMA_VERSION whenever schema.sql changes shape. APPLICATION_ID ("FWL1") marks a
+# finwatch-lean database so a same-version file from another tool is still rejected.
+SCHEMA_VERSION = 4
+APPLICATION_ID = 0x46574C31
 
 
-class MigrationError(RuntimeError):
-    """A migration cannot be applied without an explicit data repair."""
+class SchemaVersionError(RuntimeError):
+    """The database was created by a different/older schema and must not be opened."""
 
 
 def _schema_sql() -> str:
@@ -22,41 +27,6 @@ def _schema_sql() -> str:
         importlib.resources.files("finwatch.db")
         .joinpath("schema.sql")
         .read_text(encoding="utf-8")
-    )
-
-
-def _migration_sql(name: str) -> str:
-    return importlib.resources.files("finwatch.db").joinpath(name).read_text(encoding="utf-8")
-
-
-def _migrations() -> list[tuple[int, str]]:
-    """Ordered (version, sql) migrations. Append new versions; never edit old ones."""
-    return [
-        (1, _schema_sql()),
-        (2, _migration_sql("migration_002_filing_stage_runs.sql")),
-        (3, _migration_sql("migration_003_unique_holding_cik.sql")),
-    ]
-
-
-def _check_migration_preconditions(conn: sqlite3.Connection, version: int) -> None:
-    """Fail closed when a migration would otherwise make an arbitrary data choice."""
-    if version != 3:
-        return
-    duplicates = conn.execute(
-        """SELECT cik, COUNT(*) AS count
-             FROM holdings
-            GROUP BY cik
-           HAVING COUNT(*) > 1
-            ORDER BY cik
-            LIMIT 10"""
-    ).fetchall()
-    if not duplicates:
-        return
-    summary = ", ".join(f"{row[0]} ({row[1]} rows)" for row in duplicates)
-    raise MigrationError(
-        "cannot enforce one holding per CIK: duplicate holdings exist for "
-        f"{summary}. Back up the database, choose the one row to retain for each CIK, "
-        "delete the duplicates, and restart finwatch. No migration changes were applied."
     )
 
 
@@ -100,46 +70,29 @@ def connect(db_path: str | Path) -> sqlite3.Connection:
     return conn
 
 
-def apply_migrations(conn: sqlite3.Connection) -> int:
-    """Apply all pending migrations in order; return the resulting schema version.
-
-    Each migration runs atomically: the DDL and the ``user_version`` bump commit
-    together (SQLite has transactional DDL and a transactional ``user_version``).
-    A crash mid-migration rolls back to a clean, replayable state (no tables,
-    ``user_version`` unchanged) rather than a half-built schema.
-    """
-    current = conn.execute("PRAGMA user_version").fetchone()[0]
-    for version, sql in _migrations():
-        if version > current:
-            _check_migration_preconditions(conn, version)
-            # version is a trusted int (from _migrations), safe to interpolate.
-            try:
-                conn.executescript(
-                    f"BEGIN;\n{sql}\nPRAGMA user_version = {version};\nCOMMIT;"
-                )
-            except sqlite3.IntegrityError as exc:
-                conn.rollback()
-                if version == 3:
-                    # A concurrent pre-v3 writer could create a duplicate after the
-                    # preflight query but before the unique index statement.
-                    raise MigrationError(
-                        "cannot enforce one holding per CIK because duplicate holdings "
-                        "were detected while applying migration 3. Back up the database, "
-                        "retain one row per CIK, delete the duplicates, and restart finwatch. "
-                        "No migration changes were applied."
-                    ) from exc
-                raise
-            except sqlite3.Error:
-                # executescript leaves an explicit BEGIN active if a statement fails.
-                # Roll it back so callers never inherit a half-applied transaction.
-                conn.rollback()
-                raise
-            current = version
-    return current
+def _install_or_verify_schema(conn: sqlite3.Connection) -> None:
+    """Install the current schema on a blank database, accept a current one, and reject
+    anything else. A blank database has application_id == 0 and user_version == 0."""
+    app_id = conn.execute("PRAGMA application_id").fetchone()[0]
+    version = conn.execute("PRAGMA user_version").fetchone()[0]
+    if app_id == 0 and version == 0:
+        conn.executescript(
+            f"BEGIN;\n{_schema_sql()}\n"
+            f"PRAGMA application_id = {APPLICATION_ID};\n"
+            f"PRAGMA user_version = {SCHEMA_VERSION};\nCOMMIT;"
+        )
+        return
+    if app_id != APPLICATION_ID or version != SCHEMA_VERSION:
+        raise SchemaVersionError(
+            "This data directory was created by a different finwatch schema and cannot "
+            "be opened by this build. Back up the directory and start fresh "
+            f"(expected application_id={APPLICATION_ID:#010x} user_version={SCHEMA_VERSION}, "
+            f"found {app_id:#010x}/{version})."
+        )
 
 
 def init_db(db_path: str | Path) -> sqlite3.Connection:
-    """Connect and bring the schema up to date. Returns the open connection."""
+    """Connect and install/verify the schema. Returns the open connection."""
     conn = connect(db_path)
-    apply_migrations(conn)
+    _install_or_verify_schema(conn)
     return conn

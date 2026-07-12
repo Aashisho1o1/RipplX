@@ -12,13 +12,13 @@ def test_demo_projection_preserves_digest_order_and_trust_data():
     finally:
         conn.close()
 
-    assert view.answer == "One holding needs a critical review."
+    assert view.answer == "A tracked company needs a critical review."
     assert view.period.filings_in_window == 5
     assert view.period.analyzed_filings == 5
     assert [item.ticker for item in view.filings] == ["DPLS", "MSFT", "TWKS"]
     assert view.filings[0].findings[0].evidence[0].quote
     assert all(len(item.findings) <= 3 for item in view.filings)
-    assert [row.ticker for row in view.verified_numbers] == ["DPLS", "MSFT"]
+    assert [row.ticker for row in view.verified_numbers] == ["AAPL", "DPLS", "MSFT", "TWKS"]
     assert view.boring_filings == (
         "2 routine filing(s) with no material findings (AAPL 8-K, AAPL 10-Q)."
     )
@@ -41,15 +41,15 @@ def test_metrics_as_of_never_uses_future_computation():
     assert rows["Liquidity"].state == "computed"
 
 
-def test_removing_holding_retains_company_and_filings():
+def test_untracking_retains_company_and_filings():
     conn = build_demo_db()
     try:
         repo = Repo(conn)
         company = repo.get_company_by_ticker("DPLS")
         assert company is not None
         filings_before = repo.list_filings(company.cik)
-        assert repo.delete_holding(company.cik)
-        assert repo.get_holding_by_cik(company.cik) is None
+        assert repo.untrack_company(company.cik)
+        assert repo.get_company(company.cik).tracked_at is None
         assert repo.get_company(company.cik) is not None
         assert repo.list_filings(company.cik) == filings_before
         brief = PresentationService(repo).brief(since=DEMO_SINCE)

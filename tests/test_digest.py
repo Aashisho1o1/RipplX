@@ -13,9 +13,7 @@ from finwatch.db import (
     Analysis,
     Company,
     Filing,
-    Holding,
     Repo,
-    SignalShadowLog,
     VerificationResult,
     init_db,
 )
@@ -24,7 +22,6 @@ from finwatch.digest import render_digest
 from finwatch.digest.render import render_brief_markdown
 from finwatch.presentation.models import (
     BriefPeriodView,
-    BriefPortfolioView,
     BriefView,
     EvidenceView,
     FilingDigestEntry,
@@ -86,13 +83,13 @@ def test_demo_boring_and_disclaimer():
     assert "Not individualized investment advice." in md
 
 
-def test_legacy_p3_and_shadow_rows_are_never_rendered():
+def test_legacy_p3_analysis_is_never_rendered():
+    # A stray non-P1 analysis row must never leak into the digest (only P1 is projected).
     conn = build_demo_db()
     try:
         repo = Repo(conn)
-        accession = "0001683168-24-004848"
         repo.insert_analysis(Analysis(
-            accession_number=accession,
+            accession_number="0001683168-24-004848",
             ticker="DPLS",
             stage="P3",
             model="legacy/model",
@@ -100,22 +97,10 @@ def test_legacy_p3_and_shadow_rows_are_never_rendered():
             output_json=json.dumps({"rationale": "LEGACY_P3_SECRET"}),
             created_at="t",
         ))
-        repo.insert_shadow_log(SignalShadowLog(
-            accession_number=accession,
-            ticker="DPLS",
-            review_posture="critical_review",
-            hypothetical_signal="STRONG_REVIEW_SELL",
-            rules_fired_json="[]",
-            rules_skipped_json="[]",
-            computed_inputs_json="[]",
-            created_at="t",
-        ))
         md = render_digest(repo, since=DEMO_SINCE).markdown
     finally:
         conn.close()
 
-    assert "Shadow signals" not in md
-    assert "STRONG_REVIEW_SELL" not in md
     assert "LEGACY_P3_SECRET" not in md
 
 
@@ -128,7 +113,7 @@ def test_markdown_is_a_pure_serialization_of_the_canonical_brief():
             filings_in_window=2,
             analyzed_filings=2,
         ),
-        portfolio=BriefPortfolioView(owned=["ZZZ"], watching=["YYY"]),
+        tracked_tickers=["ZZZ", "YYY"],
         answer="One evidence-backed change needs attention.",
         answer_posture="risk_review",
         filings=[
@@ -165,7 +150,6 @@ def test_markdown_is_a_pure_serialization_of_the_canonical_brief():
         verified_numbers=[
             IssuerMetricsView(
                 ticker="ZZZ",
-                owned=True,
                 rows=[
                     MetricRowView(
                         metric="Revenue growth",
@@ -237,11 +221,10 @@ def _mark_verified(repo: Repo, analysis_id: int, accession: str) -> None:
     repo.set_filing_status(accession, "verified", processed_at="t")
 
 
-def _seed_min(repo, *, thesis, severity="routine"):
+def _seed_min(repo, *, severity="routine"):
     repo.upsert_company(Company(cik="1", ticker="ZZZ", name="Z", sic_code="7372",
                                 is_financial=0, added_at="t"))
-    repo.upsert_holding(Holding(cik="1", ticker="ZZZ", owned=1, shares=10, cost_basis=5.0,
-                                thesis=thesis, added_at="t"))
+    repo.track_company("1", at="t")
     repo.upsert_filing(Filing(accession_number="a-1", cik="1", form_type="10-Q",
                               filed_at="2024-06-15"))
     p1 = {"accession_number": "a-1", "ticker": "ZZZ", "form_type": "10-Q",
@@ -265,7 +248,7 @@ def _seed_min(repo, *, thesis, severity="routine"):
 
 def test_since_until_window_filters_filings():
     repo = Repo(init_db(":memory:"))
-    _seed_min(repo, thesis="x")  # filed 2024-06-15
+    _seed_min(repo)  # filed 2024-06-15
     assert "a-1" in render_digest(repo, since="2024-01-01").accessions
     assert "a-1" not in render_digest(repo, since="2024-07-01").accessions   # before window
     assert "a-1" not in render_digest(repo, until="2024-01-01").accessions   # after window
@@ -277,7 +260,8 @@ def test_routine_filing_lands_in_boring_not_dropped():
     repo = Repo(init_db(":memory:"))
     repo.upsert_company(Company(cik="9", ticker="QQQ", name="Q", sic_code="7372",
                                 is_financial=0, added_at="t"))
-    repo.upsert_holding(Holding(cik="9", ticker="QQQ", owned=0, added_at="t"))
+    repo.upsert_company(Company(cik="9", ticker="QQQ", added_at="t"))
+    repo.track_company("9", at="t")
     accession = "0000000009-24-000001"
     repo.upsert_filing(Filing(accession_number=accession, cik="9", form_type="8-K",
                               filed_at="2024-06-10"))

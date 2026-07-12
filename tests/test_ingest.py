@@ -12,7 +12,7 @@ CIK = "0000320193"
 
 def test_add_then_ingest_populates_launch_tables(ingest_service):
     svc, repo = ingest_service, ingest_service.repo
-    svc.add_holding("aapl")
+    svc.track_company("aapl")
 
     summary = svc.ingest_all(backfill_quarters=8)
     assert summary.companies == 1
@@ -20,7 +20,7 @@ def test_add_then_ingest_populates_launch_tables(ingest_service):
 
     company = repo.get_company(CIK)
     assert company.ticker == "AAPL" and company.name == "Apple Inc."
-    assert company.sic_code == "3571" and company.sector_class == "general"
+    assert company.sic_code == "3571"
     assert company.is_financial == 0
 
     filings = repo.list_filings(CIK)
@@ -30,12 +30,12 @@ def test_add_then_ingest_populates_launch_tables(ingest_service):
     assert repo.count_xbrl_facts(CIK) == 7
 def test_add_unknown_ticker_raises(ingest_service):
     with pytest.raises(TickerNotFoundError):
-        ingest_service.add_holding("ZZZZ")
+        ingest_service.track_company("ZZZZ")
 
 
 def test_ingest_is_idempotent(ingest_service):
     svc = ingest_service
-    svc.add_holding("AAPL")
+    svc.track_company("AAPL")
     svc.ingest_all()
     again = svc.ingest_all()
     assert again.filings_new == 0
@@ -45,14 +45,14 @@ def test_ingest_is_idempotent(ingest_service):
 def test_backfill_cutoff_excludes_old_filings(ingest_service):
     # as_of 2024-12-01; 4 quarters ≈ 365d -> cutoff ~2023-12-02, excludes 2023-11-03 10-K
     svc = ingest_service
-    svc.add_holding("AAPL")
+    svc.track_company("AAPL")
     summary = svc.ingest_all(backfill_quarters=4)
     assert summary.filings == 2
 
 
 def test_backfill_none_indexes_all(ingest_service):
     svc = ingest_service
-    svc.add_holding("AAPL")
+    svc.track_company("AAPL")
     summary = svc.ingest_all(backfill_quarters=None)
     assert summary.filings == 3
 
@@ -131,8 +131,8 @@ def test_ingest_error_isolation_across_ciks(ingest_service):
     # AAPL has fixtures; MSFT does not -> its submissions fail. The batch must
     # still complete and ingest AAPL fully.
     svc = ingest_service
-    svc.add_holding("AAPL")
-    svc.add_holding("MSFT")
+    svc.track_company("AAPL")
+    svc.track_company("MSFT")
     summary = svc.ingest_all()
     assert summary.companies == 2
     by = {r.ticker: r for r in summary.results}
@@ -143,7 +143,7 @@ def test_ingest_error_isolation_across_ciks(ingest_service):
 
 def test_empty_companyfacts_does_not_wipe_history(ingest_service):
     svc = ingest_service
-    svc.add_holding("AAPL")
+    svc.track_company("AAPL")
     svc.ingest_all()
     assert svc.repo.count_xbrl_facts(CIK) == 7
     # an anomalous but valid (HTTP 200) payload with no facts must NOT erase history
@@ -155,11 +155,12 @@ def test_empty_companyfacts_does_not_wipe_history(ingest_service):
 def test_companyfacts_404_yields_zero_facts_not_error(repo):
     import httpx
 
-    from finwatch.db import Company, Holding
+    from finwatch.db import Company
     from finwatch.ingest import EdgarClient, IngestService
 
     repo.upsert_company(Company(cik="0000000123", ticker="XYZ", added_at="t"))
-    repo.upsert_holding(Holding(cik="0000000123", ticker="XYZ", owned=0, added_at="t"))
+    repo.upsert_company(Company(cik="0000000123", ticker="XYZ", added_at="t"))
+    repo.track_company("0000000123", at="t")
 
     def handler(req):
         u = str(req.url)

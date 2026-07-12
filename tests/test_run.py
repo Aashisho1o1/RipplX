@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from finwatch.db import Company, Filing, Holding, Repo, init_db
+from finwatch.db import Company, Filing, Repo, init_db
 from finwatch.digest import render_digest
 from finwatch.llm.router import FakeLLMClient
 from finwatch.pipeline.run import (
@@ -44,7 +44,8 @@ def _responder(system, _user):
 def _seed(repo, *, owned=1, url="https://www.sec.gov/x.htm"):
     repo.upsert_company(Company(cik=CIK, ticker="MSFT", name="Microsoft", sic_code="7372",
                                is_financial=0, added_at="t"))
-    repo.upsert_holding(Holding(cik=CIK, ticker="MSFT", owned=owned, added_at="t"))
+    repo.upsert_company(Company(cik=CIK, ticker="MSFT", added_at="t"))
+    repo.track_company(CIK, at="t")
     repo.upsert_filing(Filing(accession_number=ACCN, cik=CIK, form_type="10-Q",
                               filed_at="2024-08-01", primary_doc_url=url))
 
@@ -54,7 +55,8 @@ def _seed_other(repo, *, status="fetched", filed_at="2024-08-02"):
     accession = "0000320193-24-000081"
     repo.upsert_company(Company(cik=cik, ticker="AAPL", name="Apple", sic_code="3571",
                                 is_financial=0, added_at="t"))
-    repo.upsert_holding(Holding(cik=cik, ticker="AAPL", owned=0, added_at="t"))
+    repo.upsert_company(Company(cik=cik, ticker="AAPL", added_at="t"))
+    repo.track_company(cik, at="t")
     repo.upsert_filing(Filing(
         accession_number=accession,
         cik=cik,
@@ -88,7 +90,6 @@ def test_process_latest_runs_pipeline_persists_and_digest_renders():
 
     # every stage persisted; filing marked processed; digest now has content
     assert {a.stage for a in repo.list_analyses(ACCN)} == {"P1"}
-    assert repo.count_shadow_log() == 0
     assert repo.get_filing(ACCN).status in ("verified", "analyzed")
     assert repo.get_filing(ACCN).processed_at == "t"
     md = render_digest(repo, since="2024-01-01").markdown
@@ -147,22 +148,6 @@ def test_non_verbatim_evidence_snippet_is_withheld():
 
     assert not (result[0].ok and not result[0].withheld)  # never published
     assert "Fabricated claim" not in render_digest(repo, since="2024-01-01").markdown
-
-
-def test_extraction_prompt_never_includes_legacy_portfolio_accounting_or_thesis():
-    repo = Repo(init_db(":memory:"))
-    _seed(repo)
-    repo.conn.execute(
-        "UPDATE holdings SET shares = 12345, cost_basis = 678.90, thesis = ? WHERE cik = ?",
-        ("private launch thesis", CIK),
-    )
-    repo.conn.commit()
-    orch = _orch(repo)
-    process_latest(repo, orch, fetch_html=lambda _u: TENQ, now_fn=lambda: "t")
-    prompts = "\n".join(user for _system, user in orch.p1.llm.calls)
-    assert "12345" not in prompts
-    assert "678.90" not in prompts
-    assert "private launch thesis" not in prompts
 
 
 def test_process_is_idempotent():

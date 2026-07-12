@@ -9,7 +9,7 @@ import pytest
 pytest.importorskip("fastapi")
 from fastapi.testclient import TestClient  # noqa: E402
 
-from finwatch.db import Analysis, Company, Filing, Holding, Repo, VerificationResult, init_db
+from finwatch.db import Analysis, Company, Filing, Repo, VerificationResult, init_db
 from finwatch.digest import render_digest
 from finwatch.presentation import PresentationService
 from finwatch.web.app import create_app
@@ -28,7 +28,8 @@ def _seed(path: str, *, blocking: bool) -> None:
     conn = init_db(path)
     repo = Repo(conn)
     repo.upsert_company(Company(cik="1", ticker="ZZZ", name="Z", added_at="t"))
-    repo.upsert_holding(Holding(cik="1", ticker="ZZZ", owned=1, added_at="t"))
+    repo.upsert_company(Company(cik="1", ticker="ZZZ", added_at="t"))
+    repo.track_company("1", at="t")
     repo.upsert_filing(Filing(
         accession_number=ACCESSION,
         cik="1",

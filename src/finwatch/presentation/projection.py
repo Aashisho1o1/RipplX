@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from finwatch.db.repositories import Company, Filing, Holding, Repo
+from finwatch.db.repositories import Company, Filing, Repo
 from finwatch.llm.schemas import P1Output
 
 _REQUIRED_PUBLICATION_CHECKS = frozenset({"V1", "V4", "V5"})
@@ -14,7 +14,6 @@ _REQUIRED_PUBLICATION_CHECKS = frozenset({"V1", "V4", "V5"})
 class FilingProjection:
     filing: Filing
     company: Company | None
-    holding: Holding | None
     p1: P1Output | None
     analysis_present: bool
     llm_output_allowed: bool
@@ -86,7 +85,6 @@ def load_filing_projection(repo: Repo, filing: Filing) -> FilingProjection:
     return FilingProjection(
         filing=filing,
         company=repo.get_company(filing.cik),
-        holding=repo.get_holding_by_cik(filing.cik),
         p1=p1,
         analysis_present=analysis_present,
         llm_output_allowed=llm_output_allowed,

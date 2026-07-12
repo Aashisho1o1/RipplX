@@ -123,7 +123,7 @@ def add(
     cfg = _config_or_exit()
     conn, service = build_service(cfg)
     try:
-        company = service.add_holding(ticker)
+        company = service.track_company(ticker)
     except TickerNotFoundError as exc:
         console.print(f"[red]{exc}[/]")
         raise typer.Exit(code=1) from exc

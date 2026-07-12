@@ -96,8 +96,8 @@ def newest_filing_to_analyze(repo: Repo, cik: str | None = None) -> Filing | Non
 
     issuer_candidates = [
         candidate
-        for holding in repo.list_holdings()
-        if (candidate := eligible(newest_for(holding.cik))) is not None
+        for company in repo.list_tracked_companies()
+        if (candidate := eligible(newest_for(company.cik))) is not None
     ]
     return (
         max(

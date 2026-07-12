@@ -56,7 +56,6 @@ class MetricRowView(BaseModel):
 
 class IssuerMetricsView(BaseModel):
     ticker: str
-    owned: bool
     rows: list[MetricRowView] = Field(default_factory=list)
     empty: str | None = None
 
@@ -67,14 +66,9 @@ class BriefPeriodView(BaseModel):
     analyzed_filings: int
 
 
-class BriefPortfolioView(BaseModel):
-    owned: list[str] = Field(default_factory=list)
-    watching: list[str] = Field(default_factory=list)
-
-
 class BriefView(BaseModel):
     period: BriefPeriodView
-    portfolio: BriefPortfolioView
+    tracked_tickers: list[str] = Field(default_factory=list)
     answer: str
     answer_posture: Posture | None = None
     filings: list[FilingDigestEntry] = Field(default_factory=list)
@@ -117,22 +111,19 @@ class FilingDetailView(BaseModel):
     disclaimer: str = DISCLAIMER
 
 
-class HoldingView(BaseModel):
+class CompanyRowView(BaseModel):
     ticker: str
     cik: str
-    owned: bool
     last_filing: str | None = None
     compressed_verified_read: str | None = None
 
 
-class HoldingsView(BaseModel):
-    owned: list[HoldingView] = Field(default_factory=list)
-    watching: list[HoldingView] = Field(default_factory=list)
+class CompaniesView(BaseModel):
+    companies: list[CompanyRowView] = Field(default_factory=list)
 
 
 class MetricsView(BaseModel):
     ticker: str
-    owned: bool
     as_of: str
     rows: list[MetricRowView] = Field(default_factory=list)
     empty: str | None = None

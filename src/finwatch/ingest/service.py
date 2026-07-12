@@ -15,7 +15,7 @@ from pydantic import BaseModel
 
 from finwatch.config import Config
 from finwatch.core.types import sector_from_sic
-from finwatch.db.repositories import Company, Filing, Holding, Repo, XbrlFact
+from finwatch.db.repositories import Company, Filing, Repo, XbrlFact
 from finwatch.ingest.edgar import EdgarClient, EdgarHTTPError, normalize_cik
 from finwatch.ingest.tickers import resolve_ticker
 from finwatch.xbrl.companyfacts import CompanyFactsEntry, iter_companyfacts
@@ -118,11 +118,11 @@ class IngestService:
         self._now_fn = now_fn or _now_iso
 
     # ---- registration ----------------------------------------------------
-    def add_holding(
+    def track_company(
         self,
         ticker: str,
     ) -> Company:
-        """Resolve CIK and register one ticker without portfolio accounting data."""
+        """Resolve a ticker to its CIK and mark the company tracked (ticker only)."""
         ticker = ticker.strip().upper()
         rec = resolve_ticker(self.edgar.company_tickers(), ticker)
         if rec is None:
@@ -133,12 +133,7 @@ class IngestService:
             raise TickerNotFoundError(ticker)
         now = self._now_fn()
         self.repo.upsert_company(Company(cik=rec.cik, ticker=ticker, name=rec.title, added_at=now))
-        self.repo.upsert_holding(Holding(
-            cik=rec.cik,
-            ticker=ticker,
-            owned=1,
-            added_at=now,
-        ))
+        self.repo.track_company(rec.cik, at=now)
         company = self.repo.get_company(rec.cik)
         assert company is not None  # just upserted
         return company
@@ -171,8 +166,7 @@ class IngestService:
 
     def _ingest_cik(self, cik: str, backfill_quarters: int | None) -> CikIngestResult:
         company = self.repo.get_company(cik)
-        holding = self.repo.get_holding_by_cik(cik)
-        ticker = (holding.ticker if holding else None) or (company.ticker if company else cik)
+        ticker = company.ticker if company else cik
         result = CikIngestResult(cik=cik, ticker=ticker)
         errors: list[str] = []
 
@@ -200,8 +194,7 @@ class IngestService:
         info = sector_from_sic(sic)
         self.repo.upsert_company(Company(
             cik=cik, ticker=ticker, name=subs.get("name"), sic_code=sic,
-            sector_class=info.sector_class.value, is_financial=int(info.is_financial),
-            added_at=self._now_fn(),
+            is_financial=int(info.is_financial), added_at=self._now_fn(),
         ))
 
     def _index_filings(

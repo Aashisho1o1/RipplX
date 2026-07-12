@@ -2,16 +2,16 @@
 
 from finwatch.presentation.models import (
     BriefView,
+    CompaniesView,
     FilingDetailView,
-    HoldingsView,
     MetricsView,
 )
 from finwatch.presentation.service import PresentationService
 
 __all__ = [
     "BriefView",
+    "CompaniesView",
     "FilingDetailView",
-    "HoldingsView",
     "MetricsView",
     "PresentationService",
 ]

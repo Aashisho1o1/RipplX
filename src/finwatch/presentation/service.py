@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from finwatch.db.repositories import Computation, Holding, Repo
+from finwatch.db.repositories import Company, Computation, Repo
 from finwatch.metrics.catalog import STARTER_METRIC_LABELS, STARTER_METRICS
 from finwatch.metrics.envelope import MetricResult
 from finwatch.pipeline.progress import PIPELINE_STAGES, STAGE_LABELS
@@ -11,11 +11,10 @@ from finwatch.presentation.canonical import build_filing_entry
 from finwatch.presentation.formatting import format_metric_value
 from finwatch.presentation.models import (
     BriefPeriodView,
-    BriefPortfolioView,
     BriefView,
+    CompaniesView,
+    CompanyRowView,
     FilingDetailView,
-    HoldingsView,
-    HoldingView,
     IssuerMetricsView,
     MetricRowView,
     MetricsView,
@@ -107,11 +106,11 @@ class PresentationService:
             )
         return result
 
-    def _issuer_metrics(self, holding: Holding, *, as_of: str | None = None) -> IssuerMetricsView:
+    def _issuer_metrics(self, company: Company, *, as_of: str | None = None) -> IssuerMetricsView:
         computations = (
-            self.repo.computations_as_of(holding.ticker, as_of)
+            self.repo.computations_as_of(company.ticker, as_of)
             if as_of
-            else self.repo.latest_computations(holding.ticker)
+            else self.repo.latest_computations(company.ticker)
         )
         rows = self._metric_rows(computations)
         empty = (
@@ -119,12 +118,7 @@ class PresentationService:
             if any(row.state == "computed" for row in rows)
             else "no verified financials yet (XBRL facts insufficient or not yet ingested)."
         )
-        return IssuerMetricsView(
-            ticker=holding.ticker,
-            owned=bool(holding.owned),
-            rows=rows,
-            empty=empty,
-        )
+        return IssuerMetricsView(ticker=company.ticker, rows=rows, empty=empty)
 
     def brief(
         self,
@@ -133,7 +127,7 @@ class PresentationService:
         until: str | None = None,
         sample_data: bool = False,
     ) -> BriefView:
-        holdings = self.repo.list_holdings()
+        tracked = self.repo.list_tracked_companies()
         views = self._views(since, until)
         analyzed = [view for view in views if view.analysis_present]
         entries = [build_filing_entry(self.repo, view) for view in views]
@@ -145,17 +139,9 @@ class PresentationService:
             if view.analysis_present and not entry.withheld and not entry.findings
         ]
 
-        owned = sorted(holding.ticker for holding in holdings if holding.owned)
-        watching = sorted(holding.ticker for holding in holdings if not holding.owned)
-        owned_set = set(owned)
-        severe_owned = any(
-            entry.ticker in owned_set
-            and any(finding.severity in {"CRITICAL", "HIGH"} for finding in entry.findings)
-            for entry in published
-        )
-        severe_watched = any(
-            entry.ticker not in owned_set
-            and any(finding.severity in {"CRITICAL", "HIGH"} for finding in entry.findings)
+        tracked_tickers = sorted(company.ticker for company in tracked)
+        severe = any(
+            any(finding.severity in {"CRITICAL", "HIGH"} for finding in entry.findings)
             for entry in published
         )
 
@@ -164,19 +150,16 @@ class PresentationService:
             count = len(withheld)
             answer = f"{count} filing{'s' if count != 1 else ''} withheld — could not be verified."
             answer_posture = "risk_review"
-        elif severe_owned:
-            answer = "One holding needs a critical review."
+        elif severe:
+            answer = "A tracked company needs a critical review."
             answer_posture = "critical_review"
-        elif severe_watched:
-            answer = "One watched company needs attention."
-            answer_posture = "risk_review"
         elif published:
             answer = f"Important changes found in {len(published)} filing(s)."
             answer_posture = "risk_review"
         elif analyzed:
             answer = f"Nothing important changed. {len(boring)} routine filings reviewed."
             answer_posture = "monitor"
-        elif holdings:
+        elif tracked:
             answer = "No material findings yet — sync filings or run analysis."
         else:
             answer = "Add a ticker to start your brief."
@@ -201,15 +184,15 @@ class PresentationService:
                 filings_in_window=len(views),
                 analyzed_filings=len(analyzed),
             ),
-            portfolio=BriefPortfolioView(owned=owned, watching=watching),
+            tracked_tickers=tracked_tickers,
             answer=answer,
             answer_posture=answer_posture,
             filings=published,
-            verified_numbers=[self._issuer_metrics(h) for h in holdings if h.owned],
+            verified_numbers=[self._issuer_metrics(c) for c in tracked],
             open_questions=questions,
             boring_filings=boring_line,
             withheld_filings=withheld,
-            tracked_but_unanalyzed=bool(holdings and not analyzed),
+            tracked_but_unanalyzed=bool(tracked and not analyzed),
             sample_data=sample_data,
         )
 
@@ -219,7 +202,7 @@ class PresentationService:
             return None
         view = load_filing_projection(self.repo, filing)
         entry = build_filing_entry(self.repo, view)
-        holding = view.holding
+        company = view.company
         verification = None
         p1_analysis = self.repo.latest_analysis(accession, "P1")
         if p1_analysis and p1_analysis.id is not None:
@@ -270,19 +253,19 @@ class PresentationService:
         return FilingDetailView(
             filing=entry,
             verified_numbers=(
-                self._issuer_metrics(holding, as_of=_date(filing.filed_at)) if holding else None
+                self._issuer_metrics(company, as_of=_date(filing.filed_at)) if company else None
             ),
             verification=verification,
             withheld_reason=entry.withheld_reason,
             pipeline=pipeline,
         )
 
-    def holdings(self) -> HoldingsView:
+    def companies(self) -> CompaniesView:
         result = []
-        for holding in self.repo.list_holdings():
-            filings = self.repo.list_filings(holding.cik)
+        for company in self.repo.list_tracked_companies():
+            filings = self.repo.list_filings(company.cik)
             latest = filings[0] if filings else None
-            metrics = self._issuer_metrics(holding)
+            metrics = self._issuer_metrics(company)
             computed = [row for row in metrics.rows if row.state == "computed"]
             compressed = None
             if computed:
@@ -312,23 +295,19 @@ class PresentationService:
                 parts.append(f"✓{len(computed)}/{len(metrics.rows)}")
                 compressed = " · ".join(parts)
             result.append(
-                HoldingView(
-                    ticker=holding.ticker,
-                    cik=holding.cik,
-                    owned=bool(holding.owned),
+                CompanyRowView(
+                    ticker=company.ticker,
+                    cik=company.cik,
                     last_filing=_date(latest.filed_at) if latest else None,
                     compressed_verified_read=compressed,
                 )
             )
-        owned = sorted((row for row in result if row.owned), key=lambda row: row.ticker)
-        watching = sorted((row for row in result if not row.owned), key=lambda row: row.ticker)
-        return HoldingsView(owned=owned, watching=watching)
+        return CompaniesView(companies=sorted(result, key=lambda row: row.ticker))
 
     def metrics(self, ticker: str, *, as_of: str) -> MetricsView | None:
         company = self.repo.get_company_by_ticker(ticker)
         if not company:
             return None
-        holding = self.repo.get_holding_by_cik(company.cik)
         rows = self._metric_rows(self.repo.computations_as_of(ticker.upper(), as_of))
         filings = self.repo.list_filings(company.cik)
         before_first = bool(filings and as_of < min(_date(f.filed_at) for f in filings))
@@ -343,7 +322,6 @@ class PresentationService:
         )
         return MetricsView(
             ticker=ticker.upper(),
-            owned=bool(holding and holding.owned),
             as_of=as_of,
             rows=rows,
             empty=empty,

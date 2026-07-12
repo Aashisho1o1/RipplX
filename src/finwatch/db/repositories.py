@@ -20,22 +20,9 @@ class Company(BaseModel):
     ticker: str
     name: str | None = None
     sic_code: str | None = None
-    sector_class: str | None = None
     is_financial: int = 0
     added_at: str
-
-
-class Holding(BaseModel):
-    id: int | None = None
-    cik: str
-    ticker: str
-    owned: int
-    shares: float | None = None
-    cost_basis: float | None = None
-    target_weight_pct: float | None = None
-    horizon: str | None = None
-    thesis: str | None = None
-    added_at: str
+    tracked_at: str | None = None   # non-null == currently tracked by the user
 
 
 class Filing(BaseModel):
@@ -80,12 +67,6 @@ class XbrlFact(BaseModel):
     form: str | None = None
     accession_number: str | None = None
     dimensions_json: str = "{}"
-
-
-class Price(BaseModel):
-    ticker: str
-    date: str
-    close: float
 
 
 class FilingSection(BaseModel):
@@ -137,32 +118,6 @@ class Analysis(BaseModel):
     created_at: str
 
 
-class AnalysisClaim(BaseModel):
-    claim_id: str  # globally unique (namespaced by analysis id on persist)
-    analysis_id: int
-    claim_type: str  # 'evidence' | 'judgment'
-    text: str
-    provenance_json: str | None = None
-    basis_claim_ids_json: str | None = None
-    confidence: str | None = None
-
-
-class SignalShadowLog(BaseModel):
-    id: int | None = None
-    accession_number: str
-    ticker: str
-    review_posture: str
-    hypothetical_signal: str
-    rules_fired_json: str
-    rules_skipped_json: str
-    computed_inputs_json: str
-    price_at_eval: float | None = None
-    created_at: str
-    outcome_30d: float | None = None
-    outcome_90d: float | None = None
-    outcome_reviewed_at: str | None = None
-
-
 class Digest(BaseModel):
     id: int | None = None
     run_at: str
@@ -181,24 +136,20 @@ class Repo:
 
     # ---- companies -------------------------------------------------------
     def upsert_company(self, c: Company) -> None:
-        """Insert-or-update identity. Never clobbers sector fields with NULLs, and
-        only updates ``is_financial`` when a fresh ``sic_code`` is supplied (so an
-        ``add`` with no SIC does not reset an ingest-derived classification)."""
+        """Insert-or-update issuer identity. Never clobbers name/sic with NULLs, updates
+        ``is_financial`` only when a fresh ``sic_code`` is supplied, and NEVER changes
+        ``tracked_at`` — a profile refresh must not start or stop tracking (use
+        track_company / untrack_company for that)."""
         self.conn.execute(
             """
             INSERT INTO companies
-                (cik, ticker, name, sic_code, sector_class, is_financial, added_at)
+                (cik, ticker, name, sic_code, is_financial, added_at, tracked_at)
             VALUES
-                (:cik, :ticker, :name, :sic_code, :sector_class, :is_financial, :added_at)
+                (:cik, :ticker, :name, :sic_code, :is_financial, :added_at, :tracked_at)
             ON CONFLICT(cik) DO UPDATE SET
                 ticker = excluded.ticker,
                 name = COALESCE(excluded.name, companies.name),
                 sic_code = COALESCE(excluded.sic_code, companies.sic_code),
-                -- sector_class and is_financial are BOTH derived from the SIC, so they
-                -- update or preserve together, gated on a fresh sic_code. Guarding only
-                -- one would leave a contradictory (sector_class, is_financial) pair.
-                sector_class = CASE WHEN excluded.sic_code IS NOT NULL
-                                    THEN excluded.sector_class ELSE companies.sector_class END,
                 is_financial = CASE WHEN excluded.sic_code IS NOT NULL
                                     THEN excluded.is_financial ELSE companies.is_financial END
             """,
@@ -220,62 +171,33 @@ class Repo:
         rows = self.conn.execute("SELECT * FROM companies ORDER BY ticker").fetchall()
         return [Company(**dict(r)) for r in rows]
 
+    def list_tracked_companies(self) -> list[Company]:
+        rows = self.conn.execute(
+            "SELECT * FROM companies WHERE tracked_at IS NOT NULL ORDER BY ticker"
+        ).fetchall()
+        return [Company(**dict(r)) for r in rows]
+
     def list_tracked_ciks(self) -> list[str]:
-        rows = self.conn.execute("SELECT DISTINCT cik FROM holdings ORDER BY cik").fetchall()
+        rows = self.conn.execute(
+            "SELECT cik FROM companies WHERE tracked_at IS NOT NULL ORDER BY cik"
+        ).fetchall()
         return [r["cik"] for r in rows]
 
-    # ---- holdings --------------------------------------------------------
-    def upsert_holding(self, h: Holding) -> int:
-        """Atomically insert or update the database-enforced one row per CIK."""
-        with self.conn:
-            self.conn.execute(
-                """INSERT INTO holdings
-                       (cik, ticker, owned, shares, cost_basis, target_weight_pct,
-                        horizon, thesis, added_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                   ON CONFLICT(cik) DO UPDATE SET
-                       ticker = excluded.ticker,
-                       owned = excluded.owned,
-                       shares = excluded.shares,
-                       cost_basis = excluded.cost_basis,
-                       target_weight_pct = excluded.target_weight_pct,
-                       horizon = excluded.horizon,
-                       thesis = excluded.thesis""",
-                (
-                    h.cik,
-                    h.ticker,
-                    h.owned,
-                    h.shares,
-                    h.cost_basis,
-                    h.target_weight_pct,
-                    h.horizon,
-                    h.thesis,
-                    h.added_at,
-                ),
-            )
-            row = self.conn.execute(
-                "SELECT id FROM holdings WHERE cik = ?", (h.cik,)
-            ).fetchone()
-        if row is None:  # defensive: the upsert and lookup share one transaction
-            raise sqlite3.DatabaseError("holding upsert completed without an id")
-        return int(row["id"])
+    def track_company(self, cik: str, *, at: str) -> None:
+        """Mark a company tracked. Idempotent — keeps the original tracked_at timestamp
+        so re-adding an already-tracked ticker does not reset it."""
+        self.conn.execute(
+            "UPDATE companies SET tracked_at = COALESCE(tracked_at, ?) WHERE cik = ?",
+            (at, cik),
+        )
+        self.conn.commit()
 
-    def get_holding_by_cik(self, cik: str) -> Holding | None:
-        row = self.conn.execute("SELECT * FROM holdings WHERE cik = ?", (cik,)).fetchone()
-        return None if row is None else Holding(**dict(row))
-
-    def list_holdings(self, owned: bool | None = None) -> list[Holding]:
-        if owned is None:
-            rows = self.conn.execute("SELECT * FROM holdings ORDER BY ticker").fetchall()
-        else:
-            rows = self.conn.execute(
-                "SELECT * FROM holdings WHERE owned = ? ORDER BY ticker", (int(owned),)
-            ).fetchall()
-        return [Holding(**dict(r)) for r in rows]
-
-    def delete_holding(self, cik: str) -> bool:
-        """Stop tracking a company while retaining its historical audit data."""
-        cur = self.conn.execute("DELETE FROM holdings WHERE cik = ?", (cik,))
+    def untrack_company(self, cik: str) -> bool:
+        """Stop tracking a company while retaining its issuer/filing/audit history."""
+        cur = self.conn.execute(
+            "UPDATE companies SET tracked_at = NULL WHERE cik = ? AND tracked_at IS NOT NULL",
+            (cik,),
+        )
         self.conn.commit()
         return cur.rowcount > 0
 
@@ -365,31 +287,6 @@ class Repo:
     def list_xbrl_facts(self, cik: str) -> list[XbrlFact]:
         rows = self.conn.execute("SELECT * FROM xbrl_facts WHERE cik = ?", (cik,)).fetchall()
         return [XbrlFact(**dict(r)) for r in rows]
-
-    # ---- prices ----------------------------------------------------------
-    def upsert_prices(self, prices: Iterable[Price]) -> int:
-        rows = [(p.ticker.upper(), p.date, p.close) for p in prices]
-        self.conn.executemany(
-            "INSERT OR REPLACE INTO prices (ticker, date, close) VALUES (?, ?, ?)", rows
-        )
-        self.conn.commit()
-        return len(rows)
-
-    def close_on_or_before(self, ticker: str, date_iso: str) -> float | None:
-        row = self.conn.execute(
-            "SELECT close FROM prices WHERE ticker = ? AND date <= ? ORDER BY date DESC LIMIT 1",
-            (ticker.upper(), date_iso),
-        ).fetchone()
-        return None if row is None else float(row["close"])
-
-    def count_prices(self, ticker: str | None = None) -> int:
-        if ticker is None:
-            row = self.conn.execute("SELECT COUNT(*) AS n FROM prices").fetchone()
-        else:
-            row = self.conn.execute(
-                "SELECT COUNT(*) AS n FROM prices WHERE ticker = ?", (ticker.upper(),)
-            ).fetchone()
-        return int(row["n"])
 
     # ---- settings --------------------------------------------------------
     def set_setting(self, key: str, value: str) -> None:
@@ -601,13 +498,7 @@ class Repo:
             self.conn.execute(
                 f"DELETE FROM verification_results WHERE analysis_id IN ({placeholders})", ids
             )
-            self.conn.execute(
-                f"DELETE FROM analysis_claims WHERE analysis_id IN ({placeholders})", ids
-            )
             self.conn.execute(f"DELETE FROM analyses WHERE id IN ({placeholders})", ids)
-        self.conn.execute(
-            "DELETE FROM signal_shadow_log WHERE accession_number = ?", (accession_number,)
-        )
         self.conn.commit()
 
     # ---- computations (metric results) -----------------------------------
@@ -796,74 +687,6 @@ class Repo:
                 (accession_number,),
             ).fetchall()
         return [Analysis(**dict(r)) for r in rows]
-
-    def insert_analysis_claims(self, claims: Iterable[AnalysisClaim]) -> int:
-        rows = [
-            (
-                c.claim_id,
-                c.analysis_id,
-                c.claim_type,
-                c.text,
-                c.provenance_json,
-                c.basis_claim_ids_json,
-                c.confidence,
-            )
-            for c in claims
-        ]
-        self.conn.executemany(
-            """INSERT INTO analysis_claims
-                   (claim_id, analysis_id, claim_type, text, provenance_json,
-                    basis_claim_ids_json, confidence)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
-            rows,
-        )
-        self.conn.commit()
-        return len(rows)
-
-    def list_analysis_claims(self, analysis_id: int) -> list[AnalysisClaim]:
-        rows = self.conn.execute(
-            "SELECT * FROM analysis_claims WHERE analysis_id = ? ORDER BY claim_id",
-            (analysis_id,),
-        ).fetchall()
-        return [AnalysisClaim(**dict(r)) for r in rows]
-
-    # ---- signal shadow log -----------------------------------------------
-    def insert_shadow_log(self, row: SignalShadowLog) -> int:
-        cur = self.conn.execute(
-            """INSERT INTO signal_shadow_log
-                   (accession_number, ticker, review_posture, hypothetical_signal,
-                    rules_fired_json, rules_skipped_json, computed_inputs_json,
-                    price_at_eval, created_at, outcome_30d, outcome_90d, outcome_reviewed_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (
-                row.accession_number,
-                row.ticker,
-                row.review_posture,
-                row.hypothetical_signal,
-                row.rules_fired_json,
-                row.rules_skipped_json,
-                row.computed_inputs_json,
-                row.price_at_eval,
-                row.created_at,
-                row.outcome_30d,
-                row.outcome_90d,
-                row.outcome_reviewed_at,
-            ),
-        )
-        self.conn.commit()
-        return int(cur.lastrowid)
-
-    def list_shadow_log(self, ticker: str | None = None) -> list[SignalShadowLog]:
-        if ticker is None:
-            rows = self.conn.execute("SELECT * FROM signal_shadow_log ORDER BY id").fetchall()
-        else:
-            rows = self.conn.execute(
-                "SELECT * FROM signal_shadow_log WHERE ticker = ? ORDER BY id", (ticker,)
-            ).fetchall()
-        return [SignalShadowLog(**dict(r)) for r in rows]
-
-    def count_shadow_log(self) -> int:
-        return int(self.conn.execute("SELECT COUNT(*) AS n FROM signal_shadow_log").fetchone()["n"])
 
     # ---- digests ---------------------------------------------------------
     def insert_digest(self, d: Digest) -> int:

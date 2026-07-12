@@ -61,7 +61,6 @@ def test_pipeline_end_to_end_passes_and_persists():
     stages = {a.stage for a in repo.list_analyses(ACCN)}
     assert stages == {"P1"}
     assert repo.count_verification_results(fa.p1_analysis_id) == len(fa.verification.results)
-    assert repo.list_analysis_claims(fa.p1_analysis_id) == []
     progress = {stage.stage: stage for stage in repo.list_filing_stages(ACCN)}
     assert progress["parse"].status == "completed"
     assert '"mdna"' in progress["parse"].diagnostics_json
@@ -83,12 +82,9 @@ def test_pipeline_runs_v1_v4_v5_and_v2_data_quality_without_v3():
     assert "V3" not in ids
     assert fa.verification.verdict in ("PASS", "PASS_WITH_WARNINGS")
 
-def test_launch_pipeline_never_calls_p2_or_p3_or_writes_shadow_rows():
-    from finwatch.db import Holding
-
+def test_launch_pipeline_only_runs_p1():
     repo = Repo(init_db(":memory:"))
     _seed(repo)
-    repo.upsert_holding(Holding(cik=CIK, ticker="MSFT", owned=1, added_at="t"))
 
     def responder(s, _u):
         if "chair the investment committee" in s:
@@ -107,7 +103,6 @@ def test_launch_pipeline_never_calls_p2_or_p3_or_writes_shadow_rows():
     fa = orch.process_html(filing=repo.get_filing(ACCN), html=TENQ, as_of="2025-05-01")
 
     assert {a.stage for a in repo.list_analyses(ACCN)} == {"P1"}
-    assert repo.count_shadow_log() == 0
     assert all("chair the investment committee" not in system for system, _ in llm.calls)
     assert all("portfolio manager and risk officer" not in system for system, _ in llm.calls)
     assert "V3" not in {c.check_id for c in fa.verification.results}

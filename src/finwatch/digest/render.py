@@ -51,9 +51,7 @@ def _code_cell(value: str) -> str:
 
 
 def _header(brief: BriefView) -> list[str]:
-    owned = ", ".join(brief.portfolio.owned) or "none"
-    watching = ", ".join(brief.portfolio.watching)
-    tracked = owned if not watching else f"{owned}  ·  watching: {watching}"
+    tracked = ", ".join(brief.tracked_tickers) or "none"
     return [
         "# finwatch digest",
         "",

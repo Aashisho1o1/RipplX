@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from finwatch.db import Company, Holding, Repo, init_db
+from finwatch.db import Company, Repo, init_db
 from finwatch.metrics.catalog import STARTER_METRICS
 from finwatch.metrics.service import MetricsService
 
@@ -62,15 +62,3 @@ def test_service_bank_persists_not_applicable_rows():
     assert set(comps) == set(STARTER_METRICS)
 
 
-def test_service_ignores_portfolio_accounting_fields():
-    repo = Repo(init_db(":memory:"))
-    repo.upsert_company(Company(cik="0000789019", ticker="MSFT", sic_code="7372",
-                                sector_class="general", is_financial=0, added_at="t"))
-    repo.upsert_holding(Holding(cik="0000789019", ticker="MSFT", owned=1, shares=100,
-                                cost_basis=300.0, target_weight_pct=10.0, added_at="t"))
-    svc = MetricsService(repo, lambda cik: _cf("MSFT"), now_fn=lambda: "t")
-    bundle = svc.compute("0000789019", as_of="2025-05-01")
-
-    assert set(bundle.results) == set(STARTER_METRICS)
-    assert bundle.get("position_metrics") is None
-    assert bundle.get("rebalance_check") is None

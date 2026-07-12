@@ -19,7 +19,7 @@ import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 
-from finwatch.db import Company, Filing, Holding, Repo, init_db
+from finwatch.db import Company, Filing, Repo, init_db
 from finwatch.llm.router import LAUNCH_MAX_OUTPUT_TOKENS, LLMResponse
 from finwatch.llm.stages import P1Extractor
 from finwatch.metrics.service import MetricsService
@@ -112,14 +112,6 @@ _COMPANIES = [
             is_financial=0, added_at=_NOW),
 ]
 
-_HOLDINGS = [
-    Holding(cik=_MSFT_CIK, ticker="MSFT", owned=1, added_at=_NOW),
-    Holding(cik="0000866439", ticker="DPLS", owned=1, added_at=_NOW),
-    Holding(cik="0001866550", ticker="TWKS", owned=0, added_at=_NOW),
-    Holding(cik="0000320193", ticker="AAPL", owned=0, added_at=_NOW),
-]
-
-
 def _companyfacts(cik: str) -> dict:
     """Bundled MSFT facts (full metric set); an empty-but-valid store otherwise."""
     if cik == _MSFT_CIK:
@@ -133,8 +125,7 @@ def build_demo_db(db_path: str = ":memory:") -> sqlite3.Connection:
     repo = Repo(conn)
     for c in _COMPANIES:
         repo.upsert_company(c)
-    for h in _HOLDINGS:
-        repo.upsert_holding(h)
+        repo.track_company(c.cik, at=_NOW)
 
     def now_fn() -> str:
         return _NOW

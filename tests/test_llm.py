@@ -279,7 +279,6 @@ def test_p1_extractor_persists_embedded_findings_without_claim_rows():
     assert out.findings[0].evidence[0].snippet == "hello"
     # offsets are server-anchored from the section text, not the model's echoed values
     assert (out.findings[0].evidence[0].char_start, out.findings[0].evidence[0].char_end) == (0, 5)
-    assert repo.list_analysis_claims(aid) == []
 
 
 def test_stage_error_on_unparseable_output():
