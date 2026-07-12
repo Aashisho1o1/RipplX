@@ -326,17 +326,17 @@ def test_transient_verify_failure_retries_one_fresh_complete_attempt(monkeypatch
     orch = build_orchestrator(repo, llm=llm,
                               companyfacts_provider=lambda _cik: MSFT_CF,
                               model="fake/model", now_fn=lambda: "t")
-    real_verify = orchestrator_module.run_with_regeneration
+    real_run_all = orchestrator_module.run_all
     verification_calls = 0
 
-    def fail_verify_once(bundle, regenerate):
+    def fail_run_all_once(bundle, *args, **kwargs):
         nonlocal verification_calls
         verification_calls += 1
         if verification_calls == 1:
             raise RuntimeError("temporary verifier failure")
-        return real_verify(bundle, regenerate)
+        return real_run_all(bundle, *args, **kwargs)
 
-    monkeypatch.setattr(orchestrator_module, "run_with_regeneration", fail_verify_once)
+    monkeypatch.setattr(orchestrator_module, "run_all", fail_run_all_once)
     r = process_latest(repo, orch, fetch_html=lambda _u: TENQ, now_fn=lambda: "t")
     assert not r[0].ok and r[0].error == "analysis pipeline failed"
     assert repo.get_filing(ACCN).status == "failed"

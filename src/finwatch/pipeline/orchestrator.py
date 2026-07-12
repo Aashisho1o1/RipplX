@@ -19,12 +19,8 @@ from finwatch.metrics.service import MetricsService
 from finwatch.pipeline.progress import ProgressCallback, StageReporter
 from finwatch.preprocess.diff import RiskFactorDiff
 from finwatch.preprocess.preprocessor import Preprocessor
-from finwatch.verify.checks import EvidenceClaim, VerificationReport, VerifyBundle
-from finwatch.verify.orchestrator import (
-    persist_report,
-    run_with_regeneration,
-    section_texts_from_repo,
-)
+from finwatch.verify.checks import EvidenceClaim, VerificationReport, VerifyBundle, run_all
+from finwatch.verify.orchestrator import persist_report, section_texts_from_repo
 
 
 @dataclass
@@ -245,25 +241,24 @@ class Orchestrator:
             },
         )
 
-        # --- verify: launch-output gate (V1/V4/V5; V3 is not applicable) ------
-        # This gate covers the failure modes regenerating an LLM stage can fix.
+        # --- verify: launch-output gate (V1/V4/V5) ---------------------------
+        # A blocking failure withholds all LLM-derived output. There is no in-place
+        # regeneration; a production retry is a fresh full attempt (pipeline/run.py).
         reporter.running("verify")
         bundle = assemble_verify_bundle(
             p1_out, metrics,
             section_texts_from_repo(self.repo, filing.accession_number),
             disclaimer=self.disclaimer,
         )
-        # A recorded/deterministic response cannot self-repair, so give up immediately
-        # and route to manual review; a live pipeline supplies a real stage re-run here.
-        outcome = run_with_regeneration(bundle, lambda _r, _n: None)
+        core = run_all(bundle)
 
-        # --- data-quality audit: V2 accounting identities (F10) ---------------
-        # V2 validates the XBRL DATA, which re-running an LLM stage can never repair, so it
-        # runs OUTSIDE the regeneration loop. V2a (A=L+E) and V2c (Rev≥GP≥OpInc) run on every
-        # filing; V2b (cash tie-out) only on annual filings (it compares a fiscal-year change).
+        # --- data-quality audit: V2 accounting identities --------------------
+        # V2 validates the XBRL DATA (never repairable by re-running the LLM). V2a (A=L+E)
+        # and V2c (Rev≥GP≥OpInc) run on every filing; V2b (cash tie-out) only on annual
+        # filings (it compares a fiscal-year change).
         v2 = self.metrics_service.data_quality(
             filing.cik, as_of=as_of, form_type=filing.form_type)
-        combined = list(outcome.report.results) + list(v2)
+        combined = list(core.results) + list(v2)
         blocking = any(c.verdict == "fail" and c.severity == "blocking" for c in combined)
         warns = any(c.verdict == "warn" for c in combined)
         report = VerificationReport(

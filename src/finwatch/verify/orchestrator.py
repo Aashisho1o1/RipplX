@@ -1,28 +1,16 @@
-"""Verifier orchestration — the §14 regeneration policy + persistence.
+"""Verifier persistence + the V2 XBRL data-quality audit.
 
 The verifier itself (checks.run_all, V1–V5) is Tier 1 and NEVER edits content. This
-module is the policy the pipeline applies to its report: on a blocking FAIL,
-regenerate the failing stage (≤ 2 retries); if it still fails, flag the item for
-manual review. It also persists every CheckResult to ``verification_results`` and
-provides small helpers for assembling the parts of a VerifyBundle that live in the DB.
+module persists every CheckResult to ``verification_results`` and provides the V2
+accounting-identity data-quality audit (non-blocking) plus small DB-sourced helpers.
+A production retry is a fresh full attempt, not an in-place stage regeneration.
 """
 from __future__ import annotations
 
-from collections.abc import Callable
-from dataclasses import dataclass
-
 from finwatch.core.types import SectorInfo
 from finwatch.db.repositories import Repo, VerificationResult
-from finwatch.verify.checks import (
-    CheckResult,
-    VerificationReport,
-    VerifyBundle,
-    check_v2_identities,
-    run_all,
-)
+from finwatch.verify.checks import CheckResult, VerificationReport, check_v2_identities
 from finwatch.xbrl.normalize import FactStore
-
-MANUAL_REVIEW_NOTICE = "⚠ withheld — automated verification did not pass"
 
 # Forms whose latest balance-sheet instant is a fiscal-year-end, so the V2b cash tie-out
 # (which compares a fiscal-YEAR change) is period-aligned. On a 10-Q the latest instant is a
@@ -89,49 +77,6 @@ def _balance_sheet_aligned(store: FactStore) -> bool:
         keys.add(r.fact.end)          # instant date is the balance-sheet period-end
     return len(keys) == 1
 
-# (report, attempt_number) -> a regenerated bundle, or None to give up.
-RegenerateFn = Callable[[VerificationReport, int], VerifyBundle | None]
-
-
-@dataclass
-class VerificationOutcome:
-    report: VerificationReport
-    regenerations: int          # regeneration attempts performed (0..max_retries)
-    manual_review: bool         # still blocking-failing after retries
-
-    def failures(self) -> list[CheckResult]:
-        return self.report.failed()
-
-
-def run_with_regeneration(
-    bundle: VerifyBundle,
-    regenerate: RegenerateFn,
-    *,
-    store: FactStore | None = None,
-    sector: SectorInfo | None = None,
-    max_retries: int = 2,
-) -> VerificationOutcome:
-    """Run the verifier; on blocking FAIL, regenerate + re-run up to ``max_retries``.
-
-    Store/sector (the XBRL data) are held constant across retries — regeneration
-    re-runs an LLM stage, not the numbers. Returns the final report and whether the
-    item must be flagged for manual review.
-    """
-    report = run_all(bundle, store, sector)
-    regenerations = 0
-    while report.verdict == "FAIL" and regenerations < max_retries:
-        new_bundle = regenerate(report, regenerations + 1)
-        if new_bundle is None:
-            break
-        report = run_all(new_bundle, store, sector)
-        regenerations += 1
-    return VerificationOutcome(
-        report=report,
-        regenerations=regenerations,
-        manual_review=report.verdict == "FAIL",
-    )
-
-
 def persist_report(
     repo: Repo, analysis_id: int, report: VerificationReport, *, created_at: str
 ) -> int:
@@ -155,11 +100,6 @@ def persist_report(
 
 
 # -- VerifyBundle assembly helpers (parts sourced from the DB) ---------------
-def fact_values_from_repo(repo: Repo, cik: str) -> list[float]:
-    """Numeric XBRL leaves for V1's candidate pool (from the xbrl_facts table)."""
-    return [f.value for f in repo.list_xbrl_facts(cik) if f.value is not None]
-
-
 def section_texts_from_repo(repo: Repo, accession_number: str) -> dict[str, str]:
     """``{accession}:{section_key}`` → section text, for V4 citation checks."""
     return {

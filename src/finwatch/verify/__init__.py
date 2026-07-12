@@ -1,4 +1,4 @@
-"""Deterministic verifier (V1–V5, Tier 1) + the regeneration/persistence policy."""
+"""Deterministic verifier (V1–V5, Tier 1) + persistence / V2 data-quality helpers."""
 
 from finwatch.verify.checks import (
     CheckResult,
@@ -8,11 +8,8 @@ from finwatch.verify.checks import (
     run_all,
 )
 from finwatch.verify.orchestrator import (
-    MANUAL_REVIEW_NOTICE,
-    VerificationOutcome,
-    fact_values_from_repo,
+    data_quality_report,
     persist_report,
-    run_with_regeneration,
     section_texts_from_repo,
 )
 
@@ -22,10 +19,7 @@ __all__ = [
     "VerifyBundle",
     "CheckResult",
     "EvidenceClaim",
-    "run_with_regeneration",
-    "VerificationOutcome",
     "persist_report",
-    "fact_values_from_repo",
     "section_texts_from_repo",
-    "MANUAL_REVIEW_NOTICE",
+    "data_quality_report",
 ]
