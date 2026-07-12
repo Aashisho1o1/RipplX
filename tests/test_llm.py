@@ -15,7 +15,7 @@ from finwatch.llm.router import (
     LiteLLMClient,
     extract_json,
 )
-from finwatch.llm.schemas import P1Output, P2Output
+from finwatch.llm.schemas import P1Output
 from finwatch.llm.stages import P1_MAX_INPUT_CHARS, P1Extractor, StageError
 
 VALID_P1 = {
@@ -66,9 +66,8 @@ def test_stage_prompt_without_foundation_placeholder_hard_fails(monkeypatch):
     from finwatch.llm import prompts as prompts_mod
 
     monkeypatch.setattr(prompts_mod, "_read", lambda _name: "stage body with no placeholder")
-    for stage in (prompts_mod.STAGE_P1, prompts_mod.STAGE_P2, prompts_mod.STAGE_P3):
-        with pytest.raises(ValueError, match="FOUNDATION BLOCK"):
-            prompts_mod.load_prompt(stage)
+    with pytest.raises(ValueError, match="FOUNDATION BLOCK"):
+        prompts_mod.load_prompt(prompts_mod.STAGE_P1)
 
     body, version = prompts_mod.load_prompt("foundation")
     assert body == "stage body with no placeholder"
@@ -127,20 +126,6 @@ def test_p1_schema_accepts_valid_and_rejects_missing_required():
     bad = {k: v for k, v in VALID_P1.items() if k != "findings"}
     with pytest.raises(ValidationError):
         P1Output.model_validate(bad)
-
-
-def test_p2_schema_roundtrips():
-    p2 = P2Output.model_validate({
-        "accession_number": "a-1",
-        "records_affected": [{
-            "ticker": "T", "owned": True, "impact_class": "direct", "channels": {},
-            "guidance_direction": "maintained", "liquidity_read": "stable",
-            "net_direction": "neutral",
-            "thesis_check": {"verdict": "intact"}, "net_read": {"text": "noise"},
-            "confidence": "medium"}],
-        "claims": [], "portfolio_level_notes": None,
-    })
-    assert p2.records_affected[0].thesis_check.verdict == "intact"
 
 
 # ---- strict evidence-backed finding contract -------------------------------
@@ -260,21 +245,6 @@ def test_finding_headline_rejects_gerund_trade_advice_and_number_words():
             })
 
 
-def test_p2_dangling_thesis_judgment_claim_ref_is_rejected():
-    from pydantic import ValidationError
-
-    with pytest.raises(ValidationError):
-        P2Output.model_validate({
-            "accession_number": "a-1",
-            "records_affected": [{
-                "ticker": "T", "owned": True, "impact_class": "direct", "channels": {},
-                "guidance_direction": "maintained", "liquidity_read": "stable",
-                "net_direction": "neutral",
-                "thesis_check": {"verdict": "broken", "judgment_claim_id": "c_missing"},
-                "net_read": {"text": "noise"}, "confidence": "medium"}],
-            "claims": [], "portfolio_level_notes": None})
-
-
 def _p2_record(thesis_jid, net_jid):
     return {"ticker": "T", "owned": True, "impact_class": "direct", "channels": {},
             "guidance_direction": "maintained", "liquidity_read": "stable",
@@ -282,36 +252,6 @@ def _p2_record(thesis_jid, net_jid):
             "thesis_check": {"verdict": "weakened", "judgment_claim_id": thesis_jid},
             "net_read": {"text": "Mild pressure on the thesis.", "judgment_claim_id": net_jid},
             "confidence": "medium"}
-
-
-def test_p2_synthesis_judgment_without_inline_basis_is_accepted():
-    # Real models emit thesis/net judgment claims whose basis is P1's (separate)
-    # evidence, so basis_claim_ids come back empty. That must validate: P2's basis
-    # references the separate, already-verified P1 analysis. (This is the exact shape
-    # that previously failed every material-filing analysis.)
-    out = P2Output.model_validate({
-        "accession_number": "a-1",
-        "records_affected": [_p2_record("jud_005", "jud_006")],
-        "claims": [
-            {"claim_id": "jud_005", "claim_type": "judgment", "text": "thesis weakened",
-             "basis_claim_ids": []},
-            {"claim_id": "jud_006", "claim_type": "judgment", "text": "net neutral",
-             "basis_claim_ids": []}],
-        "portfolio_level_notes": None})
-    assert {c.claim_id for c in out.claims} == {"jud_005", "jud_006"}
-    assert out.records_affected[0].thesis_check.judgment_claim_id == "jud_005"
-
-
-def test_p2_judgment_may_reference_p1_evidence_ids_in_basis():
-    # A P2 judgment may cite P1 evidence ids; those live in the separate P1 analysis
-    # and must NOT be rejected here as "unknown claim_id".
-    out = P2Output.model_validate({
-        "accession_number": "a-1",
-        "records_affected": [_p2_record("jud_1", None)],
-        "claims": [{"claim_id": "jud_1", "claim_type": "judgment", "text": "still intact",
-                    "basis_claim_ids": ["p1_ev_001"]}],
-        "portfolio_level_notes": None})
-    assert out.claims[0].basis_claim_ids == ["p1_ev_001"]
 
 
 def test_unknown_fields_are_forbidden():

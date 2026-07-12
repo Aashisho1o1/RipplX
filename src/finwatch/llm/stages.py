@@ -13,14 +13,14 @@ from datetime import UTC, datetime
 from typing import Any
 
 from finwatch.db.repositories import Analysis, Repo
-from finwatch.llm.prompts import STAGE_P1, STAGE_P2, load_prompt
+from finwatch.llm.prompts import STAGE_P1, load_prompt
 from finwatch.llm.router import (
     LAUNCH_MAX_OUTPUT_TOKENS,
     LLMClient,
     LLMResponse,
     extract_json,
 )
-from finwatch.llm.schemas import P1Output, P2Output
+from finwatch.llm.schemas import P1Output
 
 P1_MAX_INPUT_CHARS = 240_000
 _CRITICAL_8K_SECTION_FLAGS = {
@@ -202,30 +202,4 @@ class P1Extractor:
             schema_cls=P1Output, inputs=inputs,
             accession_number=filing_meta["accession_number"], ticker=filing_meta["ticker"],
             temperature=0.1, model_label=self.model_label, now_fn=self._now_fn,
-        )
-
-
-class P2Explainer:
-    """Portfolio Impact Explainer (prompts/P2_impact.md). Temperature 0.2."""
-
-    def __init__(self, llm: LLMClient, repo: Repo, *, model_label: str | None = None,
-                 now_fn: Callable[[], str] = _now_iso) -> None:
-        self.llm = llm
-        self.repo = repo
-        self.model_label = model_label
-        self._now_fn = now_fn
-
-    def run(
-        self, *, extraction: dict, records: list, accession_number: str, ticker: str,
-        cross_holding_map: dict | None = None,
-    ) -> tuple[P2Output, int, LLMResponse]:
-        inputs = {
-            "extraction": extraction, "records": records,
-            "cross_holding_map": cross_holding_map,
-        }
-        return _run_stage(
-            llm=self.llm, repo=self.repo, stage="P2", prompt_stage=STAGE_P2,
-            schema_cls=P2Output, inputs=inputs,
-            accession_number=accession_number, ticker=ticker,
-            temperature=0.2, model_label=self.model_label, now_fn=self._now_fn,
         )
