@@ -21,9 +21,9 @@ loop is intentionally narrow:
    collected during onboarding.
 2. Sync filings and SEC companyfacts from EDGAR.
 3. Analyze at most one filing per request: the newest supported filing for a selected ticker,
-   or the newest supported filing across tracked tickers when no ticker is selected. An already
-   terminal newest filing is a no-op; the system never falls through to older filings for an
-   implicit historical replay.
+   or the newest supported filing across tracked tickers when no ticker is selected. You can narrow
+   the run to the newest 10-K, 10-Q, or 8-K. An already terminal newest filing is a no-op; the
+   system never falls through to older filings within the selected scope.
 4. Produce zero to three qualitative findings. Every finding must carry an exact quotation with
    accession, section, character offsets, section hash, and an HTTPS SEC link.
 5. Show only the starter metrics: revenue growth, net-income trend, operating cash flow,
@@ -115,7 +115,8 @@ Do not commit `.env`; it is ignored by Git. The demo needs none of these values.
 
 1. Add one or more tickers under **Tracked tickers**.
 2. Run **Sync filings** to index SEC filings and ingest companyfacts.
-3. Run **Analyze latest filing**. Each request processes at most one newest filing.
+3. Run **Analyze a filing**, choose Latest, 10-K, 10-Q, or 8-K, and start the run. Each request
+   processes at most one newest filing in that scope.
 4. Read the findings and click the SEC evidence links. A routine filing may correctly produce no
    findings.
 

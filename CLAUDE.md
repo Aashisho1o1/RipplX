@@ -133,8 +133,8 @@ or called. There is one stochastic stage: P1.
 
 ### Launch scheduling and retries
 
-- Automatic analysis considers only the newest supported 10-K/10-Q/8-K in scope. Unsupported forms
-  are filtered before newest selection.
+- Automatic analysis considers the newest supported 10-K/10-Q/8-K in scope. A user may narrow a
+  run to one of those three form families; amendments remain in their base-form family.
 - If that newest filing is already `verified` or terminally `analyzed`/withheld, the run is a no-op.
   It never falls through to an older filing.
 - Every production retry is a fresh full attempt: download, parse, extract, metrics, verify. No
@@ -182,8 +182,9 @@ Current CLI commands are `init`, `serve`, `add`, `analyze`, `ingest`, `process`,
 `eval` is internal model-evaluation tooling. `demo` must remain zero-key and fast.
 
 Analysis and process commands use the same newest-only production runner. There is no `verify`,
-`reverify`, `shadow report`, signal flag, replay mode, accession selector, form selector, or analysis
-limit control in the launch surface.
+`reverify`, `shadow report`, signal flag, replay mode, accession selector, or analysis limit control
+in the launch surface. The browser may narrow the newest-only run to 10-K, 10-Q, or 8-K; it never
+selects an accession or falls through to older history within that form.
 
 ---
 

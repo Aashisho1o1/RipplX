@@ -63,7 +63,12 @@ _ANALYZABLE_FORMS = frozenset({"10-K", "10-Q", "8-K"})
 _MAX_EXTRACT_ATTEMPTS = 2
 
 
-def newest_filing_to_analyze(repo: Repo, cik: str | None = None) -> Filing | None:
+def newest_filing_to_analyze(
+    repo: Repo,
+    cik: str | None = None,
+    *,
+    form_type: str | None = None,
+) -> Filing | None:
     """Return the newest eligible per-issuer filing in scope.
 
     Unsupported SEC forms are excluded before per-CIK newest selection. A terminal or
@@ -71,11 +76,16 @@ def newest_filing_to_analyze(repo: Repo, cik: str | None = None) -> Filing | Non
     history, but it also cannot starve another tracked issuer's eligible newest filing. A
     failed filing receives at most one full retry (two persisted extraction attempts total).
     """
+    selected_form = base_form(form_type) if form_type else None
+    if selected_form is not None and selected_form not in _ANALYZABLE_FORMS:
+        raise ValueError(f"unsupported filing form: {form_type}")
+
     def newest_for(issuer_cik: str) -> Filing | None:
         supported = [
             filing
             for filing in repo.list_filings(issuer_cik)
             if base_form(filing.form_type) in _ANALYZABLE_FORMS
+            and (selected_form is None or base_form(filing.form_type) == selected_form)
         ]
         return (
             max(supported, key=lambda row: (row.filed_at or "", row.accession_number))
@@ -194,10 +204,11 @@ def process_latest(
     fetch_html: HtmlFetcher,
     *,
     cik: str | None = None,
+    form_type: str | None = None,
     now_fn: Callable[[], str] = _now_iso,
 ) -> list[ProcessResult]:
     """Run exactly one newest filing in scope, or return an empty no-op result."""
-    filing = newest_filing_to_analyze(repo, cik)
+    filing = newest_filing_to_analyze(repo, cik, form_type=form_type)
     if filing is None:
         return []
     return [

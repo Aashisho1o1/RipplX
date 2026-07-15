@@ -1,12 +1,22 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { FilingItemCard } from "./FilingItemCard";
+import { FilingTypePicker } from "./FilingTypePicker";
 import { FindingList } from "./FindingList";
 import { MetricTable } from "./MetricTable";
 import { PosturePill } from "./PosturePill";
 
 describe("trust vocabulary", () => {
+  it("lets the user choose a supported filing family", () => {
+    const onChange = vi.fn();
+    render(<FilingTypePicker value="latest" onChange={onChange} />);
+
+    fireEvent.click(screen.getByText("Quarterly report"));
+
+    expect(onChange).toHaveBeenCalledWith("10-Q");
+    expect(screen.getByRole("radio", { name: /Latest filing/ })).toBeChecked();
+  });
   it("renders posture values without synonyms", () => {
     render(<PosturePill posture="critical_review" />);
     expect(screen.getByText("critical_review")).toBeInTheDocument();

@@ -20,10 +20,17 @@ def _client(tmp_path: Path) -> tuple[TestClient, Path]:
     return TestClient(app, headers=LOCAL_BROWSER_HEADERS), db_path
 
 
-def test_web_job_request_accepts_only_an_optional_ticker():
+def test_web_job_request_accepts_optional_ticker_and_supported_filing_type():
     assert JobRequest().ticker is None
     assert JobRequest(ticker="MSFT").ticker == "MSFT"
-    for legacy in ({"limit": 2}, {"form": "10-Q"}, {"accession": "a-1"}, {"mode": "parse"}):
+    assert JobRequest(form_type="10-Q").form_type == "10-Q"
+    for legacy in (
+        {"limit": 2},
+        {"form": "10-Q"},
+        {"form_type": "20-F"},
+        {"accession": "a-1"},
+        {"mode": "parse"},
+    ):
         with pytest.raises(ValueError):
             JobRequest(**legacy)
 
@@ -80,7 +87,13 @@ def test_holding_create_fails_before_edgar_when_launch_cap_is_reached(tmp_path):
 
 def test_analyze_endpoint_rejects_historical_replay_controls(tmp_path):
     client, _ = _client(tmp_path)
-    for payload in ({"limit": 10}, {"form": "10-Q"}, {"accession": "a-1"}, {"mode": "parse"}):
+    for payload in (
+        {"limit": 10},
+        {"form": "10-Q"},
+        {"form_type": "20-F"},
+        {"accession": "a-1"},
+        {"mode": "parse"},
+    ):
         assert client.post("/api/jobs/analyze", json=payload).status_code == 422
 
 

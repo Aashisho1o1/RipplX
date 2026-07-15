@@ -92,7 +92,7 @@ tests/                        executable specs, mutation tests, fixture-backed i
 ```
 Ticker
   │
-  ├─► EDGAR submissions ─► filings table ─► newest supported filing only
+  ├─► EDGAR submissions ─► filings table ─► newest supported filing (optionally by form)
   │                                           │
   │                                           ▼
   │                                download primary SEC document
@@ -148,10 +148,10 @@ projection, not two independent trust paths.
 download → parse → extract → metrics → verify
 ```
 
-`pipeline/run.newest_filing_to_analyze()` filters to 10-K/10-Q/8-K, selects one newest filing, and
-returns no work when that filing is already `verified` or terminally `analyzed`. It never falls
-through to older history. A failed filing is eligible for at most two persisted extraction-stage
-attempts.
+`pipeline/run.newest_filing_to_analyze()` filters to 10-K/10-Q/8-K, optionally narrows to one form
+family, selects one newest filing, and returns no work when that filing is already `verified` or
+terminally `analyzed`. It never falls through to older history within the selected scope. A failed
+filing is eligible for at most two persisted extraction-stage attempts.
 
 `process_filing()` always passes `resume=False`: every retry downloads and rebuilds the whole attempt.
 There is no production API/CLI for accession selection, historical replay, partial-stage rerun, or

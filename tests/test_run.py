@@ -8,6 +8,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from finwatch.db import Company, Filing, Repo, init_db
 from finwatch.digest import render_digest
 from finwatch.llm.router import FakeLLMClient
@@ -171,6 +173,48 @@ def test_latest_selector_excludes_newer_unsupported_sec_forms():
         filed_at="2024-08-03", primary_doc_url="https://www.sec.gov/20f.htm",
     ))
     assert newest_filing_to_analyze(repo).accession_number == ACCN
+
+
+def test_latest_selector_can_scope_to_a_supported_filing_type():
+    repo = Repo(init_db(":memory:"))
+    _seed(repo)  # 10-Q on 2024-08-01
+    repo.upsert_filing(Filing(
+        accession_number="0000789019-24-000071", cik=CIK, form_type="8-K",
+        filed_at="2024-08-02", primary_doc_url="https://www.sec.gov/8k.htm",
+    ))
+    repo.upsert_filing(Filing(
+        accession_number="0000789019-24-000072", cik=CIK, form_type="10-K/A",
+        filed_at="2024-08-03", primary_doc_url="https://www.sec.gov/10ka.htm",
+    ))
+
+    assert newest_filing_to_analyze(repo).form_type == "10-K/A"
+    assert newest_filing_to_analyze(repo, form_type="10-Q").accession_number == ACCN
+    assert newest_filing_to_analyze(repo, form_type="8-K").form_type == "8-K"
+    assert newest_filing_to_analyze(repo, form_type="10-K").form_type == "10-K/A"
+
+
+def test_form_scoped_selector_never_falls_through_within_that_form():
+    repo = Repo(init_db(":memory:"))
+    _seed(repo)
+    repo.upsert_filing(Filing(
+        accession_number="0000789019-24-000071", cik=CIK, form_type="8-K",
+        filed_at="2024-08-02", primary_doc_url="https://www.sec.gov/old-8k.htm",
+    ))
+    repo.upsert_filing(Filing(
+        accession_number="0000789019-24-000073", cik=CIK, form_type="8-K/A",
+        filed_at="2024-08-03", primary_doc_url="https://www.sec.gov/new-8ka.htm",
+        status="verified",
+    ))
+
+    assert newest_filing_to_analyze(repo, form_type="8-K") is None
+    assert newest_filing_to_analyze(repo, form_type="10-Q").accession_number == ACCN
+
+
+def test_latest_selector_rejects_an_unsupported_form_scope():
+    repo = Repo(init_db(":memory:"))
+    _seed(repo)
+    with pytest.raises(ValueError, match="unsupported filing form"):
+        newest_filing_to_analyze(repo, form_type="20-F")
 
 
 def test_portfolio_selector_chooses_newest_eligible_per_cik_candidate():

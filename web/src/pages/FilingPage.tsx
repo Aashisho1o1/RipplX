@@ -31,27 +31,27 @@ export function FilingPage() {
   const parsedSections = Array.isArray(sectionValue) ? sectionValue.map(String) : [];
 
   return <main className="page">
-    <button className="button ghost" onClick={() => navigate(-1)}>← Back to brief</button>
-    <header className="section">
-      <h1 className="page-title">{filing.ticker} — {filing.form} filed {filing.filed}</h1>
-      {filingUrl && <a className="citation" href={filingUrl} target="_blank" rel="noopener noreferrer">Open SEC filing ▸</a>}
+    <button className="button ghost back-button" onClick={() => navigate(-1)}>← Back to brief</button>
+    <header className="filing-detail-hero section">
+      <div className="filing-detail-title"><span className="ticker-avatar large">{filing.ticker.slice(0, 2)}</span><div><p className="page-eyebrow">Filing evidence</p><h1 className="page-title">{filing.ticker} <span>· {filing.form}</span></h1><p className="page-subtitle">Filed {filing.filed} · Accession {filing.accession}</p></div></div>
+      {filingUrl && <a className="button" href={filingUrl} target="_blank" rel="noopener noreferrer">Open SEC filing <span aria-hidden="true">↗</span></a>}
     </header>
     {filing.withheld && <div className="notice">⚠ Withheld — could not be verified</div>}
     {withheldReason && <div className="notice">{withheldReason}</div>}
 
-    {!demo && <section className="section">
-      <h2 className="section-kicker">Pipeline</h2>
-      <div className="channels">{detail.pipeline.map(stage =>
-        <span className={`channel ${stage.status}`} title={stage.error ?? undefined} key={stage.stage}>
-          {stage.label}: {stage.status}{stage.error ? ` — ${stage.error}` : ""}
-        </span>
+    {!demo && <section className="surface section pipeline-surface">
+      <div className="surface-header"><div><span className="section-kicker">Trust pipeline</span><h2>Publication checks</h2></div><span className="surface-meta">Five-stage audit trail</span></div>
+      <div className="pipeline-list">{detail.pipeline.map((stage, index) =>
+        <div className={`pipeline-stage ${stage.status}`} title={stage.error ?? undefined} key={stage.stage}>
+          <span className="pipeline-index">0{index + 1}</span><span className="pipeline-state" aria-hidden="true">{stage.status === "completed" ? "✓" : stage.status === "failed" ? "!" : "·"}</span><span><strong>{stage.label}</strong><small>{stage.error ?? stage.status}</small></span>
+        </div>
       )}</div>
       {parsedSections.length > 0 && <p className="mono faint">Sections: {parsedSections.join(", ")}</p>}
     </section>}
 
-    <section className="section"><h2 className="section-kicker">AI-selected changes (evidence verified)</h2><p className="metric-caption">The model selects and summarizes importance. Deterministic checks prove each displayed quotation is exact; they do not prove the model's interpretation.</p>{withheldReason ? <p className="empty-line">Findings are withheld until deterministic verification passes.</p> : filing.findings.length ? <FindingList findings={filing.findings} /> : <p className="empty-line">No evidence-backed changes were selected.</p>}</section>
-    <section className="section"><div className="page-header"><h2 className="section-kicker">Verified numbers</h2><Link className="button" to={`/companies/${filing.ticker}${demo ? "?demo=1" : ""}`}>Full company view</Link></div>{detail.verified_numbers?.empty ? <p className="empty-line">{detail.verified_numbers.empty}</p> : detail.verified_numbers ? <MetricTable rows={detail.verified_numbers.rows} /> : <p className="empty-line">no verified financials yet (XBRL facts insufficient or not yet ingested).</p>}</section>
-    {!demo && <section className="section audit"><h2 className="section-kicker">Verification audit</h2>{audit ? <><PosturePill posture={audit.verdict === "FAIL" ? "critical_review" : audit.verdict === "PASS_WITH_WARNINGS" ? "risk_review" : "monitor"} /><div className="channels">{audit.checks.map(check => <span className="channel" key={check.check_id}>{check.check_id}: {check.verdict}</span>)}</div></> : <p className="empty-line">No verification result yet.</p>}</section>}
+    <section className="surface section"><div className="surface-header"><div><span className="section-kicker">Qualitative layer</span><h2>What changed</h2></div><span className="verified-label"><i /> Evidence verified</span></div><p className="metric-caption">The model selects significance; deterministic checks prove each displayed quotation is exact. The checks do not determine whether the interpretation is important to you.</p>{withheldReason ? <p className="empty-line">Findings are withheld until deterministic verification passes.</p> : filing.findings.length ? <FindingList findings={filing.findings} /> : <p className="empty-line">No evidence-backed changes were selected.</p>}</section>
+    <section className="surface section"><div className="surface-header"><div><span className="section-kicker">Deterministic layer</span><h2>Verified numbers</h2></div><Link className="button" to={`/companies/${filing.ticker}${demo ? "?demo=1" : ""}`}>Full company view <span aria-hidden="true">→</span></Link></div>{detail.verified_numbers?.empty ? <p className="empty-line">{detail.verified_numbers.empty}</p> : detail.verified_numbers ? <MetricTable rows={detail.verified_numbers.rows} /> : <p className="empty-line">No verified financials yet (XBRL facts insufficient or not yet ingested).</p>}</section>
+    {!demo && <section className="section audit"><div className="surface-header"><div><span className="section-kicker">Verification audit</span><h2>Gate verdict</h2></div>{audit && <PosturePill posture={audit.verdict === "FAIL" ? "critical_review" : audit.verdict === "PASS_WITH_WARNINGS" ? "risk_review" : "monitor"} />}</div>{audit ? <div className="channels">{audit.checks.map(check => <span className="channel" key={check.check_id}>{check.check_id}: {check.verdict}</span>)}</div> : <p className="empty-line">No verification result yet.</p>}</section>}
     <DisclaimerFooter text={detail.disclaimer} />
   </main>;
 }

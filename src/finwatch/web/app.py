@@ -141,6 +141,7 @@ class JobRequest(BaseModel):
         max_length=15,
         pattern=_TICKER_PATTERN,
     )
+    form_type: Literal["10-K", "10-Q", "8-K"] | None = None
 
 
 def _since_for_period(period: str) -> str:
@@ -528,7 +529,7 @@ def create_app(
 
         return work
 
-    def analysis_work(ticker: str | None):
+    def analysis_work(ticker: str | None, form_type: str | None):
         def work(job_id: str, registry: JobRegistry) -> bool:
             from pathlib import Path as FilePath
 
@@ -576,14 +577,18 @@ def create_app(
             )
             partial = False
             try:
-                filing = newest_filing_to_analyze(repo, cik)
+                filing = newest_filing_to_analyze(repo, cik, form_type=form_type)
                 if filing is None:
+                    filing_scope = form_type or "supported"
                     registry.add_item(
                         job_id,
                         JobItem(
                             key=ticker.upper() if ticker else "portfolio",
                             state="completed",
-                            message="The newest supported filing is already terminal.",
+                            message=(
+                                f"The newest {filing_scope} filing is already complete, "
+                                "or no matching filing is available."
+                            ),
                         ),
                     )
                 else:
@@ -650,7 +655,7 @@ def create_app(
         try:
             return app.state.jobs.start(
                 "analysis",
-                analysis_work(_trimmed(payload.ticker)),
+                analysis_work(_trimmed(payload.ticker), payload.form_type),
             )
         except JobConflictError as exc:
             raise ApiProblem(409, "job_conflict", str(exc)) from exc

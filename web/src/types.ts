@@ -1,6 +1,7 @@
 export type Posture = "critical_review" | "risk_review" | "monitor" | "positive_support" | "insufficient_data";
 export type Severity = "CRITICAL" | "HIGH" | "MEDIUM" | "LOW";
 export type MetricState = "computed" | "unavailable" | "not_applicable";
+export type FilingType = "latest" | "10-K" | "10-Q" | "8-K";
 
 export interface Evidence { claim_id: string; accession: string; section_key: string; char_start: number; char_end: number; quote: string; section_sha256: string; edgar_url: string }
 export interface Finding { finding_id: string; headline: string; severity: Severity; evidence: Evidence[] }
