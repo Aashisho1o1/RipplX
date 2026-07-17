@@ -4,13 +4,15 @@ from __future__ import annotations
 
 import os
 import threading
+import time
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from finwatch.config import PRODUCTION_MODEL_PREFIXES
-from finwatch.db.repositories import Repo
+from finwatch.db.repositories import LOCAL_USER_ID, Repo
 
 SETTING_USER_AGENT = "web.sec_user_agent"
-SETTING_PERIOD = "web.period"
+LOCAL_SESSION_ID = "local"
 
 
 @dataclass(frozen=True)
@@ -23,19 +25,43 @@ class ResolvedSettings:
 
 
 class RuntimeSecrets:
-    """Session credentials; values are intentionally never serializable."""
+    """Provider credentials keyed by opaque browser session ID."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, clock: Callable[[], float] = time.time) -> None:
         self._lock = threading.Lock()
-        self._api_key: str | None = None
+        self._clock = clock
+        self._api_keys: dict[str, tuple[str, int | None]] = {}
 
-    def set_api_key(self, value: str | None) -> None:
-        with self._lock:
-            self._api_key = value.strip() if value and value.strip() else None
+    def _prune_locked(self) -> None:
+        now = self._clock()
+        for session_id, (_key, expires_at) in list(self._api_keys.items()):
+            if expires_at is not None and expires_at <= now:
+                del self._api_keys[session_id]
 
-    def api_key(self) -> str | None:
+    def set_api_key(
+        self,
+        session_id: str,
+        value: str | None,
+        *,
+        expires_at: int | None = None,
+    ) -> None:
         with self._lock:
-            return self._api_key
+            self._prune_locked()
+            key = value.strip() if value and value.strip() else None
+            if key:
+                self._api_keys[session_id] = (key, expires_at)
+            else:
+                self._api_keys.pop(session_id, None)
+
+    def api_key(self, session_id: str) -> str | None:
+        with self._lock:
+            self._prune_locked()
+            stored = self._api_keys.get(session_id)
+            return stored[0] if stored else None
+
+    def clear_session(self, session_id: str) -> None:
+        with self._lock:
+            self._api_keys.pop(session_id, None)
 
 
 def _environment_key_for(model: str | None) -> bool:
@@ -60,13 +86,34 @@ def production_model() -> str | None:
     return model or None
 
 
-def resolve_settings(repo: Repo, secrets: RuntimeSecrets) -> ResolvedSettings:
+def provider_for_model(model: str | None) -> str | None:
+    if model and model.startswith("openai/"):
+        return "OpenAI"
+    if model and model.startswith("openrouter/"):
+        return "OpenRouter"
+    return None
+
+
+def resolve_settings(
+    repo: Repo,
+    secrets: RuntimeSecrets,
+    *,
+    user_id: str = LOCAL_USER_ID,
+    session_id: str = LOCAL_SESSION_ID,
+    remote: bool = False,
+) -> ResolvedSettings:
     model = production_model()
-    session_key = secrets.api_key()
-    environment_key = _environment_key_for(model)
+    session_key = secrets.api_key(session_id)
+    # Hosted participants must bring their own key. Environment credentials remain
+    # available only to the local browser and CLI operator.
+    environment_key = not remote and _environment_key_for(model)
     return ResolvedSettings(
-        sec_user_agent=repo.get_setting(SETTING_USER_AGENT) or os.environ.get("SEC_USER_AGENT"),
-        period=repo.get_setting(SETTING_PERIOD) or "90d",
+        sec_user_agent=(
+            os.environ.get("SEC_USER_AGENT")
+            if remote
+            else repo.get_setting(SETTING_USER_AGENT) or os.environ.get("SEC_USER_AGENT")
+        ),
+        period=repo.get_user_period(user_id) or "90d",
         model=model,
         api_key_configured=bool(session_key or environment_key),
         api_key_source="session" if session_key else "environment" if environment_key else None,

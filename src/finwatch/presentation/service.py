@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from finwatch.db.repositories import Company, Computation, Repo
+from finwatch.db.repositories import LOCAL_USER_ID, Company, Computation, Repo
 from finwatch.metrics.catalog import STARTER_METRIC_LABELS, STARTER_METRICS
 from finwatch.metrics.envelope import MetricResult
 from finwatch.pipeline.progress import PIPELINE_STAGES, STAGE_LABELS
@@ -30,11 +30,12 @@ def _date(value: str | None) -> str:
 
 
 class PresentationService:
-    def __init__(self, repo: Repo) -> None:
+    def __init__(self, repo: Repo, *, user_id: str = LOCAL_USER_ID) -> None:
         self.repo = repo
+        self.user_id = user_id
 
     def _views(self, since: str | None = None, until: str | None = None) -> list[FilingProjection]:
-        tracked_ciks = set(self.repo.list_tracked_ciks())
+        tracked_ciks = set(self.repo.list_tracked_ciks(self.user_id))
         filings = [
             filing
             for filing in self.repo.list_filings()
@@ -127,7 +128,7 @@ class PresentationService:
         until: str | None = None,
         sample_data: bool = False,
     ) -> BriefView:
-        tracked = self.repo.list_tracked_companies()
+        tracked = self.repo.list_tracked_companies(self.user_id)
         views = self._views(since, until)
         analyzed = [view for view in views if view.analysis_present]
         entries = [build_filing_entry(self.repo, view) for view in views]
@@ -198,7 +199,7 @@ class PresentationService:
 
     def filing(self, accession: str) -> FilingDetailView | None:
         filing = self.repo.get_filing(accession)
-        if not filing:
+        if not filing or self.repo.get_user_company(self.user_id, filing.cik) is None:
             return None
         view = load_filing_projection(self.repo, filing)
         entry = build_filing_entry(self.repo, view)
@@ -262,7 +263,7 @@ class PresentationService:
 
     def companies(self) -> CompaniesView:
         result = []
-        for company in self.repo.list_tracked_companies():
+        for company in self.repo.list_tracked_companies(self.user_id):
             filings = self.repo.list_filings(company.cik)
             latest = filings[0] if filings else None
             metrics = self._issuer_metrics(company)
@@ -306,7 +307,7 @@ class PresentationService:
 
     def metrics(self, ticker: str, *, as_of: str) -> MetricsView | None:
         company = self.repo.get_company_by_ticker(ticker)
-        if not company:
+        if not company or self.repo.get_user_company(self.user_id, company.cik) is None:
             return None
         rows = self._metric_rows(self.repo.computations_as_of(ticker.upper(), as_of))
         filings = self.repo.list_filings(company.cik)

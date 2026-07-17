@@ -25,6 +25,7 @@ dependencies = [
 [project.optional-dependencies]
 web = [
     "fastapi>=0.115",
+    "itsdangerous>=2.2",
     "uvicorn>=0.30",
 ]
 

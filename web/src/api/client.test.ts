@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { api, clearAuthToken, storeAuthToken } from "./client";
+import { api } from "./client";
 
 describe("api", () => {
-  afterEach(() => { clearAuthToken(); vi.unstubAllGlobals(); });
+  afterEach(() => { vi.unstubAllGlobals(); });
 
   it("reports an unconnected API instead of leaking a JSON parse error", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("<!doctype html>", {
@@ -16,8 +16,7 @@ describe("api", () => {
     });
   });
 
-  it("sends the hosted access token only through the authorization header", async () => {
-    storeAuthToken("alpha-secret");
+  it("uses same-origin cookies and never adds an authorization header", async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ ok: true }), {
       headers: { "Content-Type": "application/json" },
       status: 200,
@@ -28,8 +27,20 @@ describe("api", () => {
 
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toContain("/api/bootstrap");
-    expect(url).not.toContain("alpha-secret");
-    expect(new Headers(init.headers).get("Authorization")).toBe("Bearer alpha-secret");
+    expect(new Headers(init.headers).get("Authorization")).toBeNull();
+    expect(init.credentials).toBe("same-origin");
+  });
+
+  it("copies the signed CSRF cookie into mutation headers", async () => {
+    document.cookie = "__Host-finwatch_csrf=test-csrf-token; Secure; Path=/";
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api("/api/settings", { method: "PUT", body: "{}" });
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(new Headers(init.headers).get("X-CSRF-Token")).toBe("test-csrf-token");
+    document.cookie = "__Host-finwatch_csrf=; Secure; Path=/; Max-Age=0";
   });
 
   it("preserves the structured authentication-required error", async () => {

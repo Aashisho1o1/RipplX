@@ -2,18 +2,12 @@ export class ApiError extends Error {
   constructor(public code: string, message: string, public status: number) { super(message); }
 }
 
-let authToken: string | null = null;
+const CSRF_COOKIE = "__Host-finwatch_csrf";
 
-export function readAuthToken(): string | null {
-  return authToken;
-}
-
-export function storeAuthToken(token: string): void {
-  authToken = token.trim() || null;
-}
-
-export function clearAuthToken(): void {
-  authToken = null;
+function csrfToken(): string | null {
+  const prefix = `${CSRF_COOKIE}=`;
+  const match = document.cookie.split("; ").find(value => value.startsWith(prefix));
+  return match ? decodeURIComponent(match.slice(prefix.length)) : null;
 }
 
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
@@ -22,14 +16,18 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
     const headers = new Headers(init?.headers);
     if (!headers.has("Content-Type")) headers.set("Content-Type", "application/json");
     headers.delete("Authorization");
-    const authToken = readAuthToken();
-    if (authToken) headers.set("Authorization", `Bearer ${authToken}`);
+    const method = (init?.method ?? "GET").toUpperCase();
+    const csrf = csrfToken();
+    if (csrf && !["GET", "HEAD", "OPTIONS"].includes(method)) {
+      headers.set("X-CSRF-Token", csrf);
+    }
     // The only supported browser deployment serves UI and API from one origin.
-    // Keeping this relative also prevents a build-time base URL from receiving the
-    // hosted bearer token or process-memory provider key requests.
+    // Keeping this relative prevents a build-time base URL from receiving provider
+    // key requests; the authenticated session is an HttpOnly same-origin cookie.
     response = await fetch(path, {
       ...init,
       headers,
+      credentials: "same-origin",
     });
   } catch (error) {
     if (error instanceof DOMException && error.name === "AbortError") throw error;

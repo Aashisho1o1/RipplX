@@ -1,4 +1,4 @@
-from finwatch.db import Computation, Filing, Repo
+from finwatch.db import LOCAL_USER_ID, Computation, Filing, Repo
 from finwatch.demo import DEMO_SINCE, build_demo_db
 from finwatch.metrics.envelope import MetricResult
 from finwatch.presentation import PresentationService
@@ -49,7 +49,7 @@ def test_untracking_retains_company_and_filings():
         assert company is not None
         filings_before = repo.list_filings(company.cik)
         assert repo.untrack_company(company.cik)
-        assert repo.get_company(company.cik).tracked_at is None
+        assert repo.get_user_company(LOCAL_USER_ID, company.cik) is None
         assert repo.get_company(company.cik) is not None
         assert repo.list_filings(company.cik) == filings_before
         brief = PresentationService(repo).brief(since=DEMO_SINCE)

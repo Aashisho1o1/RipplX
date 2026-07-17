@@ -1,12 +1,15 @@
-"""EDGAR HTTP client — SEC-etiquette-compliant.
+"""
+EDGAR HTTP client — SEC-etiquette-compliant.
 
 Hard requirements baked in (CLAUDE.md §4): identify via a non-empty User-Agent
 (refuse to construct without one), throttle to ≤ 8 requests/second, exponential
 backoff on 429/403/5xx, and cache aggressively (filings are immutable — fetch once,
 store forever). The httpx client, clock, and sleep are all injectable so tests run
 with zero network and zero real waiting.
-
 """
+
+#AS: Last comments talk about hard requirement: make sure it'ss ensible and logicala nd ibndustry dstandard ahrd req. We are in prorotuype, so good to stay elana nd fleixble.
+
 from __future__ import annotations
 
 import hashlib

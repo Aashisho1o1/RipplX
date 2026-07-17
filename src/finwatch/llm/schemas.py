@@ -7,6 +7,8 @@ most three qualitative findings, each inseparable from one to three exact filing
 spans. All models reject unknown fields (``extra='forbid'``); controlled enum
 values are normalized before use.
 """
+
+
 from __future__ import annotations
 
 from typing import Annotated
@@ -22,7 +24,7 @@ _STRICT = ConfigDict(extra="forbid")
 _SEVERITY = frozenset({"critical", "high", "medium", "low"})
 _OVERALL = _SEVERITY | {"routine"}
 _CONFIDENCE = frozenset({"high", "medium", "low"})
-
+#AS: Is this vocab thing really good enough to continute? just like in another comment
 
 def _one_of(allowed: frozenset[str]):
     def _validate(value: str) -> str:

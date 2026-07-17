@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 JobKind = Literal["sync", "analysis"]
 JobState = Literal["queued", "running", "completed", "partial", "failed"]
 DEFAULT_MAX_JOB_HISTORY = 100
+LOCAL_JOB_OWNER = "local"
 
 _SAFE_ITEM_STATES = frozenset({"queued", "running", "completed", "skipped", "failed"})
 _SAFE_VERDICTS = frozenset({"PASS", "PASS_WITH_WARNINGS", "FAIL", "PARSED"})
@@ -78,6 +79,7 @@ class JobRegistry:
             raise ValueError("max_jobs must be positive")
         self._lock = threading.Lock()
         self._jobs: dict[str, JobView] = {}
+        self._owners: dict[str, str] = {}
         self._max_jobs = max_jobs
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ripplx-job")
 
@@ -94,8 +96,15 @@ class JobRegistry:
             if terminal_id is None:
                 raise JobConflictError("The active job registry is at capacity.")
             del self._jobs[terminal_id]
+            del self._owners[terminal_id]
 
-    def start(self, kind: JobKind, work: Callable[[str, JobRegistry], bool]) -> JobView:
+    def start(
+        self,
+        kind: JobKind,
+        work: Callable[[str, JobRegistry], bool],
+        *,
+        owner_id: str = LOCAL_JOB_OWNER,
+    ) -> JobView:
         with self._lock:
             if any(job.state in {"queued", "running"} for job in self._jobs.values()):
                 raise JobConflictError("Another sync or analysis job is already running.")
@@ -107,6 +116,7 @@ class JobRegistry:
                 created_at=datetime.now(UTC).isoformat(),
             )
             self._jobs[job.id] = job
+            self._owners[job.id] = owner_id
         self._executor.submit(self._run, job.id, work)
         return job.model_copy(deep=True)
 
@@ -164,7 +174,11 @@ class JobRegistry:
                 else "Analysis could not be completed."
             )
 
-    def get(self, job_id: str) -> JobView | None:
+    def get(self, job_id: str, *, owner_id: str = LOCAL_JOB_OWNER) -> JobView | None:
         with self._lock:
             job = self._jobs.get(job_id)
-            return job.model_copy(deep=True) if job else None
+            return (
+                job.model_copy(deep=True)
+                if job and self._owners.get(job_id) == owner_id
+                else None
+            )

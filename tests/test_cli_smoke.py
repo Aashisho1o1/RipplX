@@ -53,9 +53,11 @@ def test_init_creates_database_file(monkeypatch, tmp_path):
     assert db.exists()
 
 
-def test_remote_serve_refuses_to_start_without_alpha_auth(monkeypatch):
-    monkeypatch.delenv("FINWATCH_AUTH_TOKEN", raising=False)
-    monkeypatch.delenv("FINWATCH_ALLOWED_HOSTS", raising=False)
+def test_remote_serve_refuses_to_start_without_email_auth_secret(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("SEC_USER_AGENT", "RipplX Operator operator@example.com")
+    monkeypatch.setenv("FINWATCH_ALLOWED_HOSTS", "alpha.example")
+    monkeypatch.delenv("FINWATCH_AUTH_SECRET", raising=False)
     result = runner.invoke(app, ["serve", "--host", "0.0.0.0", "--allow-remote"])
     assert result.exit_code == 1
-    assert "FINWATCH_AUTH_TOKEN" in result.output
+    assert "FINWATCH_AUTH_SECRET" in result.output

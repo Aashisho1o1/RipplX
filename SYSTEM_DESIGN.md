@@ -73,10 +73,11 @@ src/finwatch/
 ├── digest/render.py          pure Markdown serialization of BriefView
 ├── web/
 │   ├── app.py                FastAPI, auth/origin/body limits, service wiring
-│   ├── jobs.py               one-worker safe public job registry
-│   ├── runtime.py            non-secret settings + memory-only key
-│   └── security.py           remote bearer/host policy
-├── db/                       SQLite schema, ordered migrations, repositories
+│   ├── auth.py               public email OTP + signed session/CSRF primitives
+│   ├── jobs.py               one-worker owner-scoped safe job registry
+│   ├── runtime.py            per-user settings + session-keyed memory secrets
+│   └── security.py           remote signing/email/host configuration policy
+├── db/                       one fresh SQLite schema + repositories
 ├── evals/                    12-case accession-pinned golden set/harness
 ├── signals/                  dormant deterministic research matrix
 └── cli.py                    operator/developer CLI
@@ -242,44 +243,54 @@ three most economically important facts; evaluation and user feedback measure th
 
 The deployment model is one process/container, one SQLite file, and one in-process job worker.
 
-- `create_app()` synchronously initializes/migrates the file-backed production DB once. Requests and
-  jobs call `connect()`, never the migration runner. Demo databases are separate.
+- `create_app()` synchronously installs or verifies the exact file-backed schema once. Requests and
+  jobs call `connect()`, never schema installation. Demo databases are separate.
 - Operational connections enable foreign keys, WAL, and a 5-second busy timeout.
-- Migrations are ordered via `PRAGMA user_version`; duplicate holdings fail migration closed before
-  the unique CIK index is applied.
+- Schema v5 has `users`, private `user_companies`, and private `user_preferences`. A reserved local
+  user preserves auth-free CLI/local behavior. Issuer identity, filings, facts, analyses, metrics,
+  and verification remain shared public-data artifacts.
 - XBRL replacement, filing-section/FTS replacement, computation batches, and verification-report
   replacement are atomic and roll back on failure.
 - POSIX DB files are `0600`; newly created data directories are `0700`.
-- Jobs are process-memory state and disappear on restart. There is no durable queue, leasing,
-  distributed worker, or multi-instance consistency claim.
+- Jobs are owner-tagged process-memory state and disappear on restart. There is no durable queue,
+  leasing, distributed worker, or multi-instance consistency claim.
 
-The DB retains dormant v0.2 tables/columns for compatibility. A legacy table's existence is not
-authorization for new production writes.
+There is no migration ladder. Schema v5 rejects an older database with a backup-and-reset message;
+Git history is the compatibility archive.
 
 ---
 
 ## 8. Web trust boundary
 
 Loopback is the default. Non-loopback serving requires explicit `--allow-remote`; remote app
-construction additionally requires a ≥32-character bearer token and explicit host allowlist.
-Wildcard hosts are invalid. The bearer is an operator/admin credential, kept only in JavaScript
-module memory and lost on refresh; it is not a participant login or tenant boundary. Participants
-must not share an instance: use operator-mediated sessions or one isolated DB/container/token per
-participant.
+construction additionally requires a ≥32-character signing secret, Resend sender configuration,
+an operator `SEC_USER_AGENT`, and an explicit host allowlist. Wildcard hosts are invalid. Public
+signup accepts any valid email, issues a six-digit code with a ten-minute lifetime and five-attempt
+limit, and creates a private workspace after successful verification. Challenges and rate limits are
+process memory only.
 
-Local mutations require an allowed Origin. Remote API access requires the bearer token. CORS is
-limited to local development origins. API responses are no-store and carry CSP/frame/nosniff/referrer
-headers; remote mode adds HSTS. The ASGI body limiter rejects declared and streamed bodies over
-1 MiB. Decoded EDGAR responses stop at 64 MiB before cache writes. Job responses discard
-exception/provider strings and diagnostics and expose only fixed safe messages; unhandled request
-errors use a generic JSON contract.
+The login is a signed 30-day `HttpOnly`, `Secure`, `SameSite=Lax` cookie containing only opaque IDs
+and expiry. A separately signed double-submit token protects cookie-authenticated mutations; exact
+Origin checks remain mandatory. Local mode is auth-free and CORS is limited to local development
+origins. API responses are no-store and carry CSP/frame/nosniff/referrer headers; remote mode adds
+HSTS. The ASGI body limiter rejects declared and streamed bodies over 1 MiB. Decoded EDGAR responses
+stop at 64 MiB before cache writes. Job responses discard exception/provider strings and diagnostics
+and expose only fixed safe messages; unhandled request errors use a generic JSON contract.
 
-Hosted ticker registration is serialized and capped at 25 tracked tickers per workspace. This is an
-alpha resource/wallet bound, not multi-tenant isolation or participant authorization.
+Sessions are stateless: logout deletes the browser cookie and its in-memory provider key, while a
+copied cookie remains valid until expiry or signing-secret rotation. This is the explicit consequence
+of keeping a persistent session registry out of the prototype.
 
-API keys exist only in the environment or `RuntimeSecrets` process memory. Settings responses expose
-configuration state, never key material. SQLite stores the SEC User-Agent and tracked ticker data in
-plaintext; filesystem/container access is the data-at-rest boundary.
+Server-side ownership checks scope watchlists, briefs, filing/metric access, preferences, actions,
+and job polling. Cross-user resource requests return 404. Hosted ticker registration is serialized
+and capped at 25 tracked tickers per workspace; the instance retains one global worker.
+
+Hosted participant API keys exist only in `RuntimeSecrets`, keyed by opaque session ID and captured
+before a job is enqueued. They are never placed in SQLite, cookies, browser storage, job DTOs, logs,
+or API responses; expired-session entries are pruned from memory. Hosted requests ignore provider
+keys from the environment; environment discovery remains for CLI/local mode. SQLite stores account
+emails, private ticker membership/preferences, an optional local operator SEC User-Agent, and public
+filing artifacts in plaintext; filesystem/container access is the data-at-rest boundary.
 
 ---
 

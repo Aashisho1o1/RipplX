@@ -1,3 +1,4 @@
+import inspect
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -74,7 +75,6 @@ def test_holding_create_fails_before_edgar_when_launch_cap_is_reached(tmp_path):
             cik = str(index + 1)
             ticker = f"T{index}"
             repo.upsert_company(Company(cik=cik, ticker=ticker, added_at="t"))
-            repo.upsert_company(Company(cik=cik, ticker=ticker, added_at="t"))
             repo.track_company(cik, at="t")
     finally:
         conn.close()
@@ -122,16 +122,15 @@ def test_bootstrap_setup_and_session_key_are_safe(tmp_path, monkeypatch):
 
     response = client.put(
         "/api/settings",
-        json={
-            "sec_user_agent": "Test User test@example.com",
-            "api_key": "secret-value",
-        },
+        json={"sec_user_agent": "Test User test@example.com"},
     )
     assert response.status_code == 200
-    body = response.json()
+    assert client.put(
+        "/api/settings/provider-key", json={"api_key": "secret-value"}
+    ).status_code == 204
+    body = client.get("/api/bootstrap").json()
     assert body["setup_required"] is False
     assert body["api_key_configured"] is True
-    assert body["api_key_source"] == "session"
     assert body["model"] == "openai/test"
     assert "secret-value" not in response.text
 
@@ -166,14 +165,14 @@ def test_restart_keeps_portfolio_results_but_drops_session_key(tmp_path, monkeyp
         create_app(db_path=str(db_path), web_dist=tmp_path / "missing-dist"),
         headers=LOCAL_BROWSER_HEADERS,
     )
-    response = first.put(
+    assert first.put(
         "/api/settings",
-        json={
-            "sec_user_agent": "Test User test@example.com",
-            "api_key": "disposable-secret",
-        },
-    )
-    assert response.json()["api_key_source"] == "session"
+        json={"sec_user_agent": "Test User test@example.com"},
+    ).status_code == 200
+    assert first.put(
+        "/api/settings/provider-key", json={"api_key": "disposable-secret"}
+    ).status_code == 204
+    assert first.get("/api/bootstrap").json()["api_key_configured"] is True
     assert len(first.get("/api/companies").json()["companies"]) == 4
 
     restarted = TestClient(
@@ -191,6 +190,56 @@ def test_restart_keeps_portfolio_results_but_drops_session_key(tmp_path, monkeyp
     pipeline = {stage["stage"]: stage["status"] for stage in filing.json()["pipeline"]}
     assert pipeline["parse"] == "completed"
     assert pipeline["verify"] == "completed"
+
+
+def test_analysis_captures_session_key_before_enqueue(tmp_path, monkeypatch):
+    monkeypatch.setenv("SEC_USER_AGENT", "Test User test@example.com")
+    monkeypatch.setenv("FINWATCH_MODEL", "openai/test")
+    app = create_app(
+        db_path=str(tmp_path / "finwatch.db"), web_dist=tmp_path / "missing-dist"
+    )
+    client = TestClient(app, headers=LOCAL_BROWSER_HEADERS)
+    assert client.put(
+        "/api/settings/provider-key", json={"api_key": "first-session-key"}
+    ).status_code == 204
+    key_reads = iter(["first-session-key", None])
+    app.state.secrets.api_key = lambda _session_id: next(key_reads)
+    captured = {}
+
+    def fake_start(kind, work, *, owner_id):
+        captured.update(inspect.getclosurevars(work).nonlocals)
+        captured["owner_id"] = owner_id
+        return {
+            "id": "0" * 32,
+            "kind": kind,
+            "state": "queued",
+            "created_at": "now",
+            "items": [],
+            "error": None,
+        }
+
+    app.state.jobs.start = fake_start
+    assert client.post("/api/jobs/analyze", json={}).status_code == 202
+    assert client.put(
+        "/api/settings/provider-key", json={"api_key": "replacement-key"}
+    ).status_code == 204
+
+    assert captured["api_key"] == "first-session-key"
+    assert captured["owner_id"] == "local"
+
+
+def test_jobs_reject_untracked_ticker_before_occupying_worker(tmp_path, monkeypatch):
+    monkeypatch.setenv("SEC_USER_AGENT", "Test User test@example.com")
+    monkeypatch.setenv("FINWATCH_MODEL", "openai/test")
+    client, _ = _client(tmp_path)
+    assert client.put(
+        "/api/settings/provider-key", json={"api_key": "session-key"}
+    ).status_code == 204
+
+    for endpoint in ("sync", "analyze"):
+        response = client.post(f"/api/jobs/{endpoint}", json={"ticker": "MSFT"})
+        assert response.status_code == 404
+        assert response.json()["error"]["code"] == "company_not_found"
 
 
 def test_demo_contract_has_no_shadow_surface(tmp_path):

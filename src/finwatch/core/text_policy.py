@@ -29,6 +29,9 @@ _AUTHORED_QUANTITY = re.compile(
 # from authored headlines. Inflected forms (buying/bought/selling/sold, ...) and
 # positive-recommendation phrasing ("recommend buying", "consider adding") close
 # the gaps the original verb-stem-only list left open.
+
+#AS: COmment over above comment and codes below and other parts: Will hardcoding these avoiding words wiork: LLM communication can give tehse words in repsonse, and just bvcuase we avoid them here, may just jeopoardiize the LLm response... think about the better approach.
+
 _TRADE_ACTION_WORD = re.compile(
     r"\b(?:buy|buys|buying|bought|sell|sells|selling|sold|hold|"
     r"trim|trims|trimming|accumulate|accumulates|accumulating|"

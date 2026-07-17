@@ -13,8 +13,17 @@ from collections.abc import Iterable
 
 from pydantic import BaseModel, FiniteFloat
 
+LOCAL_USER_ID = "local"
+
 
 # --------------------------------------------------------------- row models --
+class User(BaseModel):
+    id: str
+    email: str
+    created_at: str
+    last_login_at: str
+
+
 class Company(BaseModel):
     cik: str
     ticker: str
@@ -22,7 +31,17 @@ class Company(BaseModel):
     sic_code: str | None = None
     is_financial: int = 0
     added_at: str
-    tracked_at: str | None = None   # non-null == currently tracked by the user
+
+
+class UserCompany(BaseModel):
+    user_id: str
+    cik: str
+    tracked_at: str
+
+
+class UserPreference(BaseModel):
+    user_id: str
+    period: str
 
 
 class Filing(BaseModel):
@@ -134,18 +153,46 @@ class Repo:
     def __init__(self, conn: sqlite3.Connection) -> None:
         self.conn = conn
 
+    # ---- users -----------------------------------------------------------
+    def create_user(self, user: User) -> bool:
+        """Create a user; return False when that normalized email already exists."""
+        cur = self.conn.execute(
+            """INSERT INTO users (id, email, created_at, last_login_at)
+               VALUES (:id, :email, :created_at, :last_login_at)
+               ON CONFLICT(email) DO NOTHING""",
+            user.model_dump(),
+        )
+        self.conn.commit()
+        return cur.rowcount > 0
+
+    def get_user(self, user_id: str) -> User | None:
+        row = self.conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+        return None if row is None else User(**dict(row))
+
+    def get_user_by_email(self, email: str) -> User | None:
+        row = self.conn.execute(
+            "SELECT * FROM users WHERE email = ? COLLATE NOCASE", (email,)
+        ).fetchone()
+        return None if row is None else User(**dict(row))
+
+    def update_user_last_login(self, user_id: str, *, at: str) -> bool:
+        cur = self.conn.execute(
+            "UPDATE users SET last_login_at = ? WHERE id = ?", (at, user_id)
+        )
+        self.conn.commit()
+        return cur.rowcount > 0
+
     # ---- companies -------------------------------------------------------
     def upsert_company(self, c: Company) -> None:
         """Insert-or-update issuer identity. Never clobbers name/sic with NULLs, updates
-        ``is_financial`` only when a fresh ``sic_code`` is supplied, and NEVER changes
-        ``tracked_at`` — a profile refresh must not start or stop tracking (use
-        track_company / untrack_company for that)."""
+        ``is_financial`` only when a fresh ``sic_code`` is supplied. Tracking is stored
+        separately per user, so a profile refresh cannot change it."""
         self.conn.execute(
             """
             INSERT INTO companies
-                (cik, ticker, name, sic_code, is_financial, added_at, tracked_at)
+                (cik, ticker, name, sic_code, is_financial, added_at)
             VALUES
-                (:cik, :ticker, :name, :sic_code, :is_financial, :added_at, :tracked_at)
+                (:cik, :ticker, :name, :sic_code, :is_financial, :added_at)
             ON CONFLICT(cik) DO UPDATE SET
                 ticker = excluded.ticker,
                 name = COALESCE(excluded.name, companies.name),
@@ -171,35 +218,69 @@ class Repo:
         rows = self.conn.execute("SELECT * FROM companies ORDER BY ticker").fetchall()
         return [Company(**dict(r)) for r in rows]
 
-    def list_tracked_companies(self) -> list[Company]:
+    def list_tracked_companies(self, user_id: str = LOCAL_USER_ID) -> list[Company]:
         rows = self.conn.execute(
-            "SELECT * FROM companies WHERE tracked_at IS NOT NULL ORDER BY ticker"
+            """SELECT c.* FROM companies c
+                 JOIN user_companies uc ON uc.cik = c.cik
+                WHERE uc.user_id = ? ORDER BY c.ticker""",
+            (user_id,),
         ).fetchall()
         return [Company(**dict(r)) for r in rows]
 
-    def list_tracked_ciks(self) -> list[str]:
+    def list_tracked_ciks(self, user_id: str = LOCAL_USER_ID) -> list[str]:
         rows = self.conn.execute(
-            "SELECT cik FROM companies WHERE tracked_at IS NOT NULL ORDER BY cik"
+            "SELECT cik FROM user_companies WHERE user_id = ? ORDER BY cik",
+            (user_id,),
         ).fetchall()
         return [r["cik"] for r in rows]
 
-    def track_company(self, cik: str, *, at: str) -> None:
-        """Mark a company tracked. Idempotent — keeps the original tracked_at timestamp
-        so re-adding an already-tracked ticker does not reset it."""
-        self.conn.execute(
-            "UPDATE companies SET tracked_at = COALESCE(tracked_at, ?) WHERE cik = ?",
-            (at, cik),
-        )
-        self.conn.commit()
+    def count_tracked_companies(self, user_id: str = LOCAL_USER_ID) -> int:
+        row = self.conn.execute(
+            "SELECT COUNT(*) AS n FROM user_companies WHERE user_id = ?", (user_id,)
+        ).fetchone()
+        return int(row["n"])
 
-    def untrack_company(self, cik: str) -> bool:
-        """Stop tracking a company while retaining its issuer/filing/audit history."""
+    def get_user_company(self, user_id: str, cik: str) -> UserCompany | None:
+        row = self.conn.execute(
+            "SELECT * FROM user_companies WHERE user_id = ? AND cik = ?", (user_id, cik)
+        ).fetchone()
+        return None if row is None else UserCompany(**dict(row))
+
+    def track_company(
+        self, cik: str, *, at: str, user_id: str = LOCAL_USER_ID
+    ) -> bool:
+        """Track an issuer for one user, preserving the first tracking timestamp."""
         cur = self.conn.execute(
-            "UPDATE companies SET tracked_at = NULL WHERE cik = ? AND tracked_at IS NOT NULL",
-            (cik,),
+            """INSERT INTO user_companies (user_id, cik, tracked_at) VALUES (?, ?, ?)
+               ON CONFLICT(user_id, cik) DO NOTHING""",
+            (user_id, cik, at),
         )
         self.conn.commit()
         return cur.rowcount > 0
+
+    def untrack_company(self, cik: str, *, user_id: str = LOCAL_USER_ID) -> bool:
+        """Stop one user tracking an issuer while retaining shared public history."""
+        cur = self.conn.execute(
+            "DELETE FROM user_companies WHERE user_id = ? AND cik = ?",
+            (user_id, cik),
+        )
+        self.conn.commit()
+        return cur.rowcount > 0
+
+    # ---- user preferences -----------------------------------------------
+    def set_user_period(self, user_id: str, period: str) -> None:
+        self.conn.execute(
+            """INSERT INTO user_preferences (user_id, period) VALUES (?, ?)
+               ON CONFLICT(user_id) DO UPDATE SET period = excluded.period""",
+            (user_id, period),
+        )
+        self.conn.commit()
+
+    def get_user_period(self, user_id: str) -> str | None:
+        row = self.conn.execute(
+            "SELECT period FROM user_preferences WHERE user_id = ?", (user_id,)
+        ).fetchone()
+        return None if row is None else str(row["period"])
 
     # ---- filings ---------------------------------------------------------
     def upsert_filing(self, f: Filing) -> bool:

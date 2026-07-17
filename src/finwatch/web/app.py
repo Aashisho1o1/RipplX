@@ -3,29 +3,55 @@
 from __future__ import annotations
 
 import os
-import secrets
+import uuid
 from contextlib import contextmanager
-from datetime import date, timedelta
+from dataclasses import dataclass
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from threading import Lock
 from typing import Any, Literal
 from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field
+from starlette.requests import Request
 
 from finwatch.config import Config
-from finwatch.db import Repo, connect, init_db
+from finwatch.db import LOCAL_USER_ID, Repo, User, connect, init_db
 from finwatch.demo import DEMO_SINCE, build_demo_db
 from finwatch.ingest import TickerNotFoundError, build_service
 from finwatch.presentation import PresentationService
+from finwatch.web.auth import (
+    CSRF_COOKIE_NAME,
+    CSRF_HEADER_NAME,
+    SESSION_COOKIE_NAME,
+    SESSION_TTL_SECONDS,
+    CsrfCodec,
+    EmailDeliveryError,
+    EmailOtpManager,
+    EmailSender,
+    InvalidCsrfError,
+    InvalidSessionError,
+    OtpRateLimitError,
+    OtpVerificationError,
+    RequestCodeBody,
+    ResendEmailSender,
+    SessionCodec,
+    VerifyCodeBody,
+)
 from finwatch.web.jobs import JobConflictError, JobItem, JobRegistry
 from finwatch.web.runtime import (
-    SETTING_PERIOD,
+    LOCAL_SESSION_ID,
     SETTING_USER_AGENT,
     RuntimeSecrets,
+    provider_for_model,
     resolve_settings,
 )
-from finwatch.web.security import LOCAL_ALLOWED_HOSTS, remote_allowed_hosts, remote_auth_token
+from finwatch.web.security import (
+    LOCAL_ALLOWED_HOSTS,
+    remote_allowed_hosts,
+    remote_auth_secret,
+    remote_email_config,
+)
 
 REQUEST_BODY_LIMIT_BYTES = 1024 * 1024
 MAX_TRACKED_TICKERS = 25
@@ -38,6 +64,13 @@ _REQUEST_TOO_LARGE_BODY = (
     b'{"error":{"code":"request_too_large",'
     b'"message":"Request body exceeds the 1 MiB limit."}}'
 )
+
+
+@dataclass(frozen=True)
+class RequestPrincipal:
+    user_id: str
+    session_id: str
+    expires_at: int | None
 
 
 class RequestBodyLimitMiddleware:
@@ -129,7 +162,12 @@ class SettingsUpdate(BaseModel):
 
     sec_user_agent: str | None = Field(default=None, max_length=256)
     period: Literal["30d", "60d", "90d", "180d", "1y"] | None = None
-    api_key: str | None = Field(default=None, max_length=512)
+
+
+class ProviderKeyUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    api_key: str = Field(min_length=1, max_length=512)
 
 
 class JobRequest(BaseModel):
@@ -169,8 +207,9 @@ def create_app(
     db_path: str | None = None,
     web_dist: str | Path | None = None,
     remote: bool | None = None,
-    auth_token: str | None = None,
+    auth_secret: str | None = None,
     allowed_hosts: list[str] | None = None,
+    email_sender: EmailSender | None = None,
 ):
     try:
         from fastapi import FastAPI
@@ -178,7 +217,7 @@ def create_app(
         from fastapi.exceptions import RequestValidationError
         from fastapi.middleware.cors import CORSMiddleware
         from fastapi.middleware.trustedhost import TrustedHostMiddleware
-        from fastapi.responses import FileResponse, JSONResponse
+        from fastapi.responses import FileResponse, JSONResponse, Response
         from fastapi.staticfiles import StaticFiles
     except ImportError as exc:  # pragma: no cover - only hit without the web extra
         raise RuntimeError("Install RipplX web dependencies with `uv sync --extra web`.") from exc
@@ -201,8 +240,30 @@ def create_app(
     app.state.jobs = JobRegistry()
     app.state.company_add_lock = Lock()
     app.state.remote = remote
-    expected_token = remote_auth_token(auth_token) if remote else None
     trusted_hosts = remote_allowed_hosts(allowed_hosts) if remote else list(LOCAL_ALLOWED_HOSTS)
+    if remote:
+        signing_secret = remote_auth_secret(auth_secret)
+        sec_user_agent = _trimmed(os.environ.get("SEC_USER_AGENT"))
+        if not sec_user_agent or "@" not in sec_user_agent:
+            raise RuntimeError(
+                "Remote serving requires SEC_USER_AGENT with an operator contact email."
+            )
+        if email_sender is None:
+            resend_key, from_address = remote_email_config()
+            email_sender = ResendEmailSender(
+                api_key=resend_key,
+                from_address=from_address,
+            )
+        app.state.otp = EmailOtpManager(
+            auth_secret=signing_secret,
+            email_sender=email_sender,
+        )
+        app.state.session_codec = SessionCodec(signing_secret)
+        app.state.csrf_codec = CsrfCodec(signing_secret)
+    else:
+        app.state.otp = None
+        app.state.session_codec = None
+        app.state.csrf_codec = None
 
     # Schema work belongs to process startup, never concurrent request/job paths.
     # ``:memory:`` remains a test-only exception because each SQLite connection is
@@ -226,32 +287,79 @@ def create_app(
         ),
         allow_credentials=False,
         allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
-        allow_headers=["Authorization", "Content-Type"],
+        allow_headers=["Content-Type", CSRF_HEADER_NAME],
     )
     # Authentication and origin checks are registered below and therefore wrap
     # this limiter; unauthenticated/cross-origin callers are rejected before we
     # spend memory buffering any request body.
     app.add_middleware(RequestBodyLimitMiddleware, max_bytes=REQUEST_BODY_LIMIT_BYTES)
 
+    public_auth_paths = frozenset(
+        {"/api/auth/request-code", "/api/auth/verify-code"}
+    )
+
     @app.middleware("http")
     async def authenticate_remote_api(request, call_next):
-        if remote and request.url.path.startswith("/api/"):
-            authorization = request.headers.get("authorization", "")
-            scheme, _, candidate = authorization.partition(" ")
-            authenticated = (
-                scheme.lower() == "bearer"
-                and bool(candidate)
-                and expected_token is not None
-                and secrets.compare_digest(candidate, expected_token)
+        if not request.url.path.startswith("/api/"):
+            return await call_next(request)
+        if not remote:
+            request.state.principal = RequestPrincipal(
+                user_id=LOCAL_USER_ID,
+                session_id=LOCAL_SESSION_ID,
+                expires_at=None,
             )
-            if not authenticated:
+            return await call_next(request)
+        if request.url.path in public_auth_paths or request.method == "OPTIONS":
+            return await call_next(request)
+
+        try:
+            session = app.state.session_codec.load(
+                request.cookies.get(SESSION_COOKIE_NAME, "")
+            )
+        except InvalidSessionError:
+            return JSONResponse(
+                status_code=401,
+                content={
+                    "error": {
+                        "code": "authentication_required",
+                        "message": "Sign in with your email to continue.",
+                    }
+                },
+            )
+        connection = operational_connection()
+        try:
+            user_exists = Repo(connection).get_user(session.user_id) is not None
+        finally:
+            connection.close()
+        if not user_exists:
+            return JSONResponse(
+                status_code=401,
+                content={
+                    "error": {
+                        "code": "authentication_required",
+                        "message": "Sign in with your email to continue.",
+                    }
+                },
+            )
+        request.state.principal = RequestPrincipal(
+            user_id=session.user_id,
+            session_id=session.session_id,
+            expires_at=session.expires_at,
+        )
+        if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
+            try:
+                app.state.csrf_codec.validate(
+                    cookie_token=request.cookies.get(CSRF_COOKIE_NAME),
+                    header_token=request.headers.get(CSRF_HEADER_NAME),
+                    session=session,
+                )
+            except InvalidCsrfError:
                 return JSONResponse(
-                    status_code=401,
-                    headers={"WWW-Authenticate": "Bearer"},
+                    status_code=403,
                     content={
                         "error": {
-                            "code": "authentication_required",
-                            "message": "A valid hosted-alpha access token is required.",
+                            "code": "csrf_rejected",
+                            "message": "Refresh the page and try again.",
                         }
                     },
                 )
@@ -261,13 +369,13 @@ def create_app(
     async def same_origin_mutations(request, call_next):
         if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
             origin = request.headers.get("origin")
-            if not origin and not remote:
+            if not origin:
                 return JSONResponse(
                     status_code=403,
                     content={
                         "error": {
                             "code": "origin_required",
-                            "message": "Local browser mutations require an Origin header.",
+                            "message": "Browser mutations require an Origin header.",
                         }
                     },
                 )
@@ -276,7 +384,11 @@ def create_app(
                 origin_host = parsed.netloc.lower()
                 request_host = request.headers.get("host", "").lower()
                 dev_hosts = set() if remote else {"127.0.0.1:5173", "localhost:5173"}
-                if origin_host != request_host and origin_host not in dev_hosts:
+                if (
+                    parsed.scheme not in {"http", "https"}
+                    or parsed.username is not None
+                    or (origin_host != request_host and origin_host not in dev_hosts)
+                ):
                     return JSONResponse(
                         status_code=403,
                         content={
@@ -354,123 +466,301 @@ def create_app(
         finally:
             connection.close()
 
-    def settings_payload(repo: Repo) -> dict[str, Any]:
-        settings = resolve_settings(repo, app.state.secrets)
+    def principal_for(request: Request) -> RequestPrincipal:
+        return request.state.principal
+
+    def settings_payload(
+        repo: Repo,
+        principal: RequestPrincipal,
+    ) -> dict[str, Any]:
+        settings = resolve_settings(
+            repo,
+            app.state.secrets,
+            user_id=principal.user_id,
+            session_id=principal.session_id,
+            remote=remote,
+        )
+        user = repo.get_user(principal.user_id) if remote else None
         return {
-            "setup_required": not bool(settings.sec_user_agent),
-            "sec_user_agent": settings.sec_user_agent or "",
+            "setup_required": False if remote else not bool(settings.sec_user_agent),
+            # The operator's SEC contact is not participant account data.
+            "sec_user_agent": "" if remote else settings.sec_user_agent or "",
+            "account_email": user.email if user else None,
             "period": settings.period,
             "model": settings.model or "",
+            "provider": provider_for_model(settings.model),
             "api_key_configured": settings.api_key_configured,
-            "api_key_source": settings.api_key_source,
             "analysis_configured": bool(settings.model and settings.api_key_configured),
         }
 
-    @app.get("/api/bootstrap")
-    def bootstrap():
+    def tracked_job_ticker(repo: Repo, user_id: str, ticker: str | None) -> str | None:
+        selected = _trimmed(ticker)
+        if selected is None:
+            return None
+        company = repo.get_company_by_ticker(selected)
+        if company is None or repo.get_user_company(user_id, company.cik) is None:
+            raise ApiProblem(404, "company_not_found", "Company not found.")
+        return company.ticker
+
+    @app.post("/api/auth/request-code", status_code=202)
+    def request_code(payload: RequestCodeBody):
+        if not remote or app.state.otp is None:
+            raise ApiProblem(404, "api_route_not_found", "API route was not found.")
+        try:
+            challenge = app.state.otp.request_code(payload.email)
+        except OtpRateLimitError as exc:
+            raise ApiProblem(429, "code_rate_limited", str(exc)) from exc
+        except EmailDeliveryError as exc:
+            raise ApiProblem(503, "email_delivery_failed", str(exc)) from exc
+        return {
+            "challenge_id": challenge.challenge_id,
+            "expires_in": max(0, challenge.expires_at - int(datetime.now(UTC).timestamp())),
+        }
+
+    @app.post("/api/auth/verify-code", status_code=204)
+    def verify_code(request: Request, payload: VerifyCodeBody):
+        if not remote or app.state.otp is None:
+            raise ApiProblem(404, "api_route_not_found", "API route was not found.")
+        try:
+            email = app.state.otp.verify_code(payload.challenge_id, payload.code)
+        except OtpVerificationError as exc:
+            raise ApiProblem(401, "invalid_code", str(exc)) from exc
+        now = datetime.now(UTC).isoformat()
         with repo_context() as repo:
-            return settings_payload(repo)
+            user = repo.get_user_by_email(email)
+            if user is None:
+                repo.create_user(
+                    User(
+                        id=uuid.uuid4().hex,
+                        email=email,
+                        created_at=now,
+                        last_login_at=now,
+                    )
+                )
+                user = repo.get_user_by_email(email)
+            if user is None:  # pragma: no cover - guarded by unique insert/query
+                raise RuntimeError("User creation failed.")
+            repo.update_user_last_login(user.id, at=now)
+        issued = app.state.session_codec.issue(user.id)
+        csrf_token = app.state.csrf_codec.issue(issued.identity)
+        try:
+            previous = app.state.session_codec.load(
+                request.cookies.get(SESSION_COOKIE_NAME, "")
+            )
+        except InvalidSessionError:
+            pass
+        else:
+            app.state.secrets.clear_session(previous.session_id)
+        response = Response(status_code=204)
+        response.set_cookie(
+            SESSION_COOKIE_NAME,
+            issued.token,
+            max_age=SESSION_TTL_SECONDS,
+            path="/",
+            secure=True,
+            httponly=True,
+            samesite="lax",
+        )
+        response.set_cookie(
+            CSRF_COOKIE_NAME,
+            csrf_token,
+            max_age=SESSION_TTL_SECONDS,
+            path="/",
+            secure=True,
+            httponly=False,
+            samesite="lax",
+        )
+        return response
+
+    @app.post("/api/auth/logout", status_code=204)
+    def logout(request: Request):
+        principal = principal_for(request)
+        app.state.secrets.clear_session(principal.session_id)
+        response = Response(status_code=204)
+        response.delete_cookie(
+            SESSION_COOKIE_NAME, path="/", secure=True, httponly=True, samesite="lax"
+        )
+        response.delete_cookie(
+            CSRF_COOKIE_NAME, path="/", secure=True, httponly=False, samesite="lax"
+        )
+        return response
+
+    @app.get("/api/bootstrap")
+    def bootstrap(request: Request):
+        principal = principal_for(request)
+        with repo_context() as repo:
+            payload = settings_payload(repo, principal)
+        if not remote or principal.expires_at is None:
+            return payload
+        identity = app.state.session_codec.load(
+            request.cookies.get(SESSION_COOKIE_NAME, "")
+        )
+        response = JSONResponse(content=payload)
+        response.set_cookie(
+            CSRF_COOKIE_NAME,
+            app.state.csrf_codec.issue(identity),
+            max_age=max(
+                1,
+                principal.expires_at - int(datetime.now(UTC).timestamp()),
+            ),
+            path="/",
+            secure=True,
+            httponly=False,
+            samesite="lax",
+        )
+        return response
 
     @app.get("/api/brief")
-    def brief(demo: bool = False):
+    def brief(request: Request, demo: bool = False):
+        principal = principal_for(request)
         demo = demo and not remote  # demo dataset is a local-only convenience (LOW-6)
         with repo_context(demo) as repo:
             if demo:
                 since_value = DEMO_SINCE
             else:
-                settings = resolve_settings(repo, app.state.secrets)
+                settings = resolve_settings(
+                    repo,
+                    app.state.secrets,
+                    user_id=principal.user_id,
+                    session_id=principal.session_id,
+                    remote=remote,
+                )
                 since_value = _since_for_period(settings.period)
-            return PresentationService(repo).brief(
+            return PresentationService(repo, user_id=principal.user_id).brief(
                 since=since_value,
                 sample_data=demo,
             )
 
     @app.get("/api/filings/{accession}")
     def filing_detail(
-        accession: str = PathParam(pattern=_ACCESSION_PATTERN), demo: bool = False
+        request: Request,
+        accession: str = PathParam(pattern=_ACCESSION_PATTERN),
+        demo: bool = False,
     ):
+        principal = principal_for(request)
         demo = demo and not remote
         with repo_context(demo) as repo:
-            result = PresentationService(repo).filing(accession)
+            result = PresentationService(repo, user_id=principal.user_id).filing(accession)
             if result is None:
                 raise ApiProblem(404, "filing_not_found", "Filing not found.")
             return result
 
     @app.get("/api/companies")
-    def companies():
+    def companies(request: Request):
+        principal = principal_for(request)
         with repo_context() as repo:
-            return PresentationService(repo).companies()
+            return PresentationService(repo, user_id=principal.user_id).companies()
 
     @app.post("/api/companies", status_code=201)
-    def create_company(payload: CompanyCreate):
+    def create_company(request: Request, payload: CompanyCreate):
+        principal = principal_for(request)
         # Registration includes external EDGAR reads. Serialize it process-wide so
         # concurrent requests cannot multiply request rate or race the launch cap.
         with app.state.company_add_lock:
             with repo_context() as repo:
-                settings = resolve_settings(repo, app.state.secrets)
+                settings = resolve_settings(
+                    repo,
+                    app.state.secrets,
+                    user_id=principal.user_id,
+                    session_id=principal.session_id,
+                    remote=remote,
+                )
+                if not settings.sec_user_agent:
+                    raise ApiProblem(
+                        409,
+                        "missing_user_agent",
+                        "Configure the SEC User-Agent before adding a company.",
+                    )
                 known = repo.get_company_by_ticker(payload.ticker)
-                already_tracked = bool(known and known.tracked_at)
-                if not already_tracked and (
-                    len(repo.list_tracked_companies()) >= MAX_TRACKED_TICKERS
-                ):
+                already_tracked = bool(
+                    known and repo.get_user_company(principal.user_id, known.cik)
+                )
+                if not already_tracked and repo.count_tracked_companies(
+                    principal.user_id
+                ) >= MAX_TRACKED_TICKERS:
                     raise ApiProblem(
                         409,
                         "tracked_ticker_limit",
-                        f"The hosted alpha is limited to {MAX_TRACKED_TICKERS} tracked tickers.",
+                        f"Each workspace is limited to {MAX_TRACKED_TICKERS} tracked tickers.",
                     )
-            if not settings.sec_user_agent:
-                raise ApiProblem(
-                    409,
-                    "missing_user_agent",
-                    "Configure the SEC User-Agent before adding a company.",
+                company = known
+                if company and not already_tracked:
+                    repo.track_company(
+                        company.cik,
+                        at=datetime.now(UTC).isoformat(),
+                        user_id=principal.user_id,
+                    )
+            if company is None:
+                config = Config(
+                    sec_user_agent=settings.sec_user_agent,
+                    db_path=app.state.db_path,
+                    model=settings.model,
                 )
-            config = Config(
-                sec_user_agent=settings.sec_user_agent,
-                db_path=app.state.db_path,
-                model=settings.model,
-            )
-            connection, service = build_service(config, conn=operational_connection())
-            try:
-                company = service.track_company(payload.ticker)
-            except TickerNotFoundError as exc:
-                raise ApiProblem(404, "ticker_not_found", "Ticker not found on EDGAR.") from exc
-            finally:
-                service.edgar.close()
-                connection.close()
+                connection, service = build_service(config, conn=operational_connection())
+                try:
+                    company = service.track_company(
+                        payload.ticker,
+                        user_id=principal.user_id,
+                    )
+                except TickerNotFoundError as exc:
+                    raise ApiProblem(
+                        404, "ticker_not_found", "Ticker not found on EDGAR."
+                    ) from exc
+                finally:
+                    service.edgar.close()
+                    connection.close()
         with repo_context() as repo:
-            view = PresentationService(repo).companies()
+            view = PresentationService(repo, user_id=principal.user_id).companies()
             return next(row for row in view.companies if row.ticker == company.ticker)
 
     @app.delete("/api/companies/{ticker}", status_code=204)
-    def delete_company(ticker: str = PathParam(pattern=_TICKER_PATTERN, max_length=15)):
+    def delete_company(
+        request: Request,
+        ticker: str = PathParam(pattern=_TICKER_PATTERN, max_length=15),
+    ):
+        principal = principal_for(request)
         with repo_context() as repo:
             company = repo.get_company_by_ticker(ticker)
-            if company is None or not repo.untrack_company(company.cik):
+            if company is None or not repo.untrack_company(
+                company.cik, user_id=principal.user_id
+            ):
                 raise ApiProblem(404, "company_not_found", "Company not found.")
 
     @app.get("/api/companies/{ticker}/metrics")
     def company_metrics(
+        request: Request,
         ticker: str = PathParam(pattern=_TICKER_PATTERN, max_length=15),
         as_of: date | None = None,
         demo: bool = False,
     ):
+        principal = principal_for(request)
         demo = demo and not remote
         selected_date = as_of.isoformat() if as_of else date.today().isoformat()
         with repo_context(demo) as repo:
-            result = PresentationService(repo).metrics(ticker, as_of=selected_date)
+            result = PresentationService(repo, user_id=principal.user_id).metrics(
+                ticker, as_of=selected_date
+            )
             if result is None:
                 raise ApiProblem(404, "company_not_found", "Company not found.")
             return result
 
     @app.get("/api/settings")
-    def get_settings():
+    def get_settings(request: Request):
+        principal = principal_for(request)
         with repo_context() as repo:
-            return settings_payload(repo)
+            return settings_payload(repo, principal)
 
     @app.put("/api/settings")
-    def update_settings(payload: SettingsUpdate):
+    def update_settings(request: Request, payload: SettingsUpdate):
+        principal = principal_for(request)
         with repo_context() as repo:
             if "sec_user_agent" in payload.model_fields_set:
+                if remote:
+                    raise ApiProblem(
+                        422,
+                        "operator_setting",
+                        "The SEC identity is configured by the server operator.",
+                    )
                 user_agent = _trimmed(payload.sec_user_agent)
                 if user_agent is None or "@" not in user_agent:
                     raise ApiProblem(
@@ -480,22 +770,41 @@ def create_app(
                     )
                 repo.set_setting(SETTING_USER_AGENT, user_agent)
             if payload.period is not None:
-                repo.set_setting(SETTING_PERIOD, payload.period)
-            if "api_key" in payload.model_fields_set:
-                app.state.secrets.set_api_key(payload.api_key)
-            return settings_payload(repo)
+                repo.set_user_period(principal.user_id, payload.period)
+            return settings_payload(repo, principal)
 
-    def sync_work(ticker: str | None):
+    @app.put("/api/settings/provider-key", status_code=204)
+    def set_provider_key(request: Request, payload: ProviderKeyUpdate):
+        principal = principal_for(request)
+        app.state.secrets.set_api_key(
+            principal.session_id,
+            payload.api_key,
+            expires_at=principal.expires_at,
+        )
+        return Response(status_code=204)
+
+    @app.delete("/api/settings/provider-key", status_code=204)
+    def clear_provider_key(request: Request):
+        principal = principal_for(request)
+        app.state.secrets.clear_session(principal.session_id)
+        return Response(status_code=204)
+
+    def sync_work(user_id: str, ticker: str | None):
         def work(job_id: str, registry: JobRegistry) -> bool:
             with repo_context() as repo:
-                settings = resolve_settings(repo, app.state.secrets)
+                settings = resolve_settings(
+                    repo,
+                    app.state.secrets,
+                    user_id=user_id,
+                    remote=remote,
+                )
             if not settings.sec_user_agent:
                 raise RuntimeError("SEC User-Agent is not configured.")
             config = Config(sec_user_agent=settings.sec_user_agent, db_path=app.state.db_path)
             connection, service = build_service(config, conn=operational_connection())
             partial = False
             try:
-                ciks = service.repo.list_tracked_ciks()
+                ciks = service.repo.list_tracked_ciks(user_id)
                 if ticker:
                     company = service.repo.get_company_by_ticker(ticker)
                     if not company or company.cik not in ciks:
@@ -529,7 +838,14 @@ def create_app(
 
         return work
 
-    def analysis_work(ticker: str | None, form_type: str | None):
+    def analysis_work(
+        user_id: str,
+        sec_user_agent: str,
+        model: str,
+        api_key: str | None,
+        ticker: str | None,
+        form_type: str | None,
+    ):
         def work(job_id: str, registry: JobRegistry) -> bool:
             from pathlib import Path as FilePath
 
@@ -544,20 +860,11 @@ def create_app(
 
             connection = operational_connection()
             repo = DatabaseRepo(connection)
-            settings = resolve_settings(repo, app.state.secrets)
-            if not settings.sec_user_agent:
-                connection.close()
-                raise RuntimeError("SEC User-Agent is not configured.")
-            if not settings.model:
-                connection.close()
-                raise RuntimeError("Analysis model is not configured.")
-            if not settings.api_key_configured:
-                connection.close()
-                raise RuntimeError("A provider API key is not configured.")
+            tracked_ciks = set(repo.list_tracked_ciks(user_id))
             cik = None
             if ticker:
                 company = repo.get_company_by_ticker(ticker)
-                if not company:
+                if not company or company.cik not in tracked_ciks:
                     connection.close()
                     raise RuntimeError(f"{ticker.upper()} is not tracked.")
                 cik = company.cik
@@ -566,18 +873,37 @@ def create_app(
                 if app.state.db_path != ":memory:"
                 else None
             )
-            edgar = EdgarClient(settings.sec_user_agent, cache_dir=cache)
-            key = app.state.secrets.api_key()
-            llm = LiteLLMClient(settings.model, api_key=key)
+            edgar = EdgarClient(sec_user_agent, cache_dir=cache)
+            llm = LiteLLMClient(model, api_key=api_key)
             orchestrator = build_orchestrator(
                 repo,
                 llm=llm,
                 companyfacts_provider=lambda selected_cik: edgar.companyfacts(selected_cik),
-                model=settings.model,
+                model=model,
             )
             partial = False
             try:
-                filing = newest_filing_to_analyze(repo, cik, form_type=form_type)
+                if cik is not None:
+                    filing = newest_filing_to_analyze(repo, cik, form_type=form_type)
+                else:
+                    candidates = [
+                        candidate
+                        for selected_cik in tracked_ciks
+                        if (
+                            candidate := newest_filing_to_analyze(
+                                repo, selected_cik, form_type=form_type
+                            )
+                        )
+                        is not None
+                    ]
+                    filing = (
+                        max(
+                            candidates,
+                            key=lambda row: (row.filed_at or "", row.accession_number),
+                        )
+                        if candidates
+                        else None
+                    )
                 if filing is None:
                     filing_scope = form_type or "supported"
                     registry.add_item(
@@ -638,31 +964,66 @@ def create_app(
         return work
 
     @app.post("/api/jobs/sync", status_code=202)
-    def start_sync(payload: JobRequest):
+    def start_sync(request: Request, payload: JobRequest):
+        principal = principal_for(request)
+        with repo_context() as repo:
+            ticker = tracked_job_ticker(repo, principal.user_id, payload.ticker)
         try:
-            return app.state.jobs.start("sync", sync_work(_trimmed(payload.ticker)))
+            return app.state.jobs.start(
+                "sync",
+                sync_work(principal.user_id, ticker),
+                owner_id=principal.user_id,
+            )
         except JobConflictError as exc:
             raise ApiProblem(409, "job_conflict", str(exc)) from exc
 
     @app.post("/api/jobs/analyze", status_code=202)
-    def start_analysis(payload: JobRequest):
+    def start_analysis(request: Request, payload: JobRequest):
+        principal = principal_for(request)
+        session_api_key = app.state.secrets.api_key(principal.session_id)
         with repo_context() as repo:
-            settings = resolve_settings(repo, app.state.secrets)
-        if not settings.model or not settings.api_key_configured:
+            ticker = tracked_job_ticker(repo, principal.user_id, payload.ticker)
+            settings = resolve_settings(
+                repo,
+                app.state.secrets,
+                user_id=principal.user_id,
+                session_id=principal.session_id,
+                remote=remote,
+            )
+        if not settings.sec_user_agent:
+            raise ApiProblem(
+                409, "missing_user_agent", "Configure the SEC User-Agent first."
+            )
+        api_key_configured = bool(
+            session_api_key or (not remote and settings.api_key_source == "environment")
+        )
+        if not settings.model or not api_key_configured:
             raise ApiProblem(
                 409, "model_not_configured", "Configure the analysis model and API key first."
             )
         try:
             return app.state.jobs.start(
                 "analysis",
-                analysis_work(_trimmed(payload.ticker), payload.form_type),
+                analysis_work(
+                    principal.user_id,
+                    settings.sec_user_agent or "",
+                    settings.model,
+                    session_api_key,
+                    ticker,
+                    payload.form_type,
+                ),
+                owner_id=principal.user_id,
             )
         except JobConflictError as exc:
             raise ApiProblem(409, "job_conflict", str(exc)) from exc
 
     @app.get("/api/jobs/{job_id}")
-    def get_job(job_id: str = PathParam(pattern=_JOB_ID_PATTERN)):
-        job = app.state.jobs.get(job_id)
+    def get_job(
+        request: Request,
+        job_id: str = PathParam(pattern=_JOB_ID_PATTERN),
+    ):
+        principal = principal_for(request)
+        job = app.state.jobs.get(job_id, owner_id=principal.user_id)
         if job is None:
             raise ApiProblem(404, "job_not_found", "Job not found.")
         return job

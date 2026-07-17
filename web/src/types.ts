@@ -15,5 +15,6 @@ export interface FilingDetail { filing: FilingDigestEntry; verified_numbers: Iss
 export interface TrackedCompany { ticker: string; cik: string; last_filing: string | null; compressed_verified_read: string | null }
 export interface Companies { companies: TrackedCompany[] }
 export interface Metrics { ticker: string; as_of: string; rows: MetricRow[]; empty: string | null; before_first_filing: boolean }
-export interface Bootstrap { setup_required: boolean; sec_user_agent: string; period: string; model: string; api_key_configured: boolean; api_key_source: string | null; analysis_configured: boolean }
+export interface Bootstrap { setup_required: boolean; sec_user_agent: string; account_email: string | null; period: string; model: string; provider: string | null; api_key_configured: boolean; analysis_configured: boolean }
+export interface AuthChallenge { challenge_id: string; expires_in: number }
 export interface Job { id: string; kind: "sync" | "analysis"; state: "queued" | "running" | "completed" | "partial" | "failed"; created_at: string; items: { key: string; state: string; message: string; verdict: string | null; stage: string | null; diagnostics: Record<string, unknown> }[]; error: string | null }

@@ -7,8 +7,9 @@ Validate one narrow promise before expanding the product:
 > Add your tickers. When a filing arrives, get up to three important changes, exact evidence,
 > and a handful of verified financial deltas.
 
-This is a supervised research alpha, not an automated growth campaign and not investment
-advice. The operator manually reviews every generated digest before a participant sees it.
+This is an early public prototype, not an automated growth campaign and not investment advice.
+Users may sign in directly; deterministic publication checks remain the release gate. The operator
+samples results and reviews reported failures rather than manually approving every page view.
 
 ## Cohort
 
@@ -19,32 +20,28 @@ advice. The operator manually reviews every generated digest before a participan
 - Collect ticker symbols only. Do not request shares, cost basis, target weights, portfolio
   value, investment thesis, brokerage credentials, or account exports.
 
-Recruitment is a human, explicitly authorized activity. finwatch must not scrape contact data,
-send automated email or direct messages, post automatically, enroll users, or contact anyone on
-the operator's behalf. Use existing personal relationships or a channel in which the operator has
-clear permission to invite participants. Obtain consent before storing a participant's tickers or
-feedback.
+Recruitment and feedback outreach remain human, explicitly authorized activities. finwatch must not
+scrape contact data, send marketing messages, post automatically, or contact anyone on the
+operator's behalf. Public signup sends only a code requested by the person entering that email.
+Obtain consent before separately recording participant feedback.
 
 ## Before the first participant
 
-1. Choose one privacy-safe operating mode. Either the operator alone runs finwatch and shares only
-   a manually reviewed digest (participants never access the instance), or each participant gets
-   an isolated container, SQLite database/volume, hostname, and bearer token. Never give multiple
-   participants access to one instance.
-2. For a hosted alpha, verify TLS, the operator/admin access token, the exact host allowlist, the
-   participant-isolated persistent `/data` volume, and a restorable backup. The bearer is an admin
-   credential, not a participant account or tenant boundary.
-3. Confirm the workspace has no more than 25 tracked tickers. Registration is serialized and capped
-   for resource/wallet control; this is not tenant isolation and does not make a shared participant
-   instance safe.
+1. Back up and recreate any pre-v5 database; the prototype intentionally has no compatibility
+   migration ladder.
+2. For a hosted alpha, verify TLS, the signing secret, Resend sender/domain, exact host allowlist,
+   operator SEC User-Agent, persistent `/data` volume, and a restorable backup.
+3. Confirm two test accounts cannot read or mutate each other's watchlists, preferences, filings,
+   metrics, jobs, or session API keys. Each account is capped at 25 tickers.
 4. Use one evaluated `openai/` model through `FINWATCH_MODEL`.
 5. Run the recorded test suite and representative-filing evaluation set.
-6. Prepare a private feedback log using participant aliases. Do not put API keys, access tokens,
+6. Prepare a private feedback log using participant aliases. Do not put API keys, login codes,
+   session cookies,
    full portfolio data, or unnecessary personal information in it.
 
-## Manual review for every digest
+## Review checklist for sampled or reported digests
 
-Complete this checklist before sharing any result:
+Use this checklist while sampling output and whenever a participant reports a problem:
 
 1. Confirm the ticker, form, accession, filing date, and SEC URL identify the intended newest
    supported filing.
@@ -65,20 +62,19 @@ Complete this checklist before sharing any result:
 8. Read the final browser view or Markdown artifact the participant will actually receive—not a
    raw model response, database row, or internal diagnostic.
 
-If a wrong citation, unsupported finding, untraceable number, advice-like instruction, secret,
-or unwithheld verifier failure appears, stop sharing that run. Preserve only the minimum safe
-diagnostic information, record the accession and failure class, and fix or quarantine the path
-before continuing the alpha.
+If a wrong citation, unsupported finding, untraceable number, advice-like instruction, secret, or
+unwithheld verifier failure appears, withhold or remove that run. Preserve only the minimum safe
+diagnostic information, record the accession and failure class, and fix or quarantine the path.
 
 ## Participant session
 
-1. Ask the participant for 3–10 ticker symbols and explain that public SEC filings and generated
-   analysis will be stored in the prototype database.
-2. Sync and analyze the newest filing. It is acceptable to operate the product for the
-   participant during this phase. Do not give the participant the operator/admin token. If direct
-   access is necessary, use that participant's isolated DB/container/token deployment.
-3. Complete the manual-review checklist.
-4. Show the canonical digest. Let the participant decide where to click and what to read; do not
+1. Ask the participant to sign in with their email code and add 3–10 ticker symbols. Explain that
+   their email, private watchlist/preferences, public SEC filings, and generated analysis are stored
+   in the prototype database.
+2. Let the participant add their matching provider API key in Settings, then sync and analyze the
+   newest filing. Explain that the key is server-memory-only and is lost on restart.
+3. Sample the resulting digest with the review checklist when observing the session.
+4. Let the participant explore the canonical digest and decide what to click; do not
    coach them toward a positive answer.
 5. Ask only the seven questions below, in this order, and capture the response as faithfully as
    practical.

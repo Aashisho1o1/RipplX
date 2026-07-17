@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 
-MIN_AUTH_TOKEN_LENGTH = 32
+MIN_AUTH_SECRET_LENGTH = 32
 LOCAL_ALLOWED_HOSTS = ("127.0.0.1", "localhost", "testserver", "[::1]")
 
 
@@ -33,12 +33,31 @@ def remote_allowed_hosts(explicit: list[str] | None = None) -> list[str]:
     return hosts
 
 
-def remote_auth_token(explicit: str | None = None) -> str:
-    token = explicit if explicit is not None else os.environ.get("FINWATCH_AUTH_TOKEN", "")
-    token = token.strip()
-    if len(token) < MIN_AUTH_TOKEN_LENGTH:
+def remote_auth_secret(explicit: str | None = None) -> str:
+    secret = explicit if explicit is not None else os.environ.get("FINWATCH_AUTH_SECRET", "")
+    secret = secret.strip()
+    if len(secret) < MIN_AUTH_SECRET_LENGTH:
         raise RuntimeError(
-            f"Remote serving requires FINWATCH_AUTH_TOKEN with at least "
-            f"{MIN_AUTH_TOKEN_LENGTH} characters."
+            f"Remote serving requires FINWATCH_AUTH_SECRET with at least "
+            f"{MIN_AUTH_SECRET_LENGTH} characters."
         )
-    return token
+    return secret
+
+
+def remote_email_config(
+    api_key: str | None = None,
+    from_address: str | None = None,
+) -> tuple[str, str]:
+    key = (api_key if api_key is not None else os.environ.get("RESEND_API_KEY", "")).strip()
+    sender = (
+        from_address
+        if from_address is not None
+        else os.environ.get("FINWATCH_EMAIL_FROM", "")
+    ).strip()
+    if not key:
+        raise RuntimeError("Remote serving requires RESEND_API_KEY for login-code email.")
+    if not sender or "@" not in sender:
+        raise RuntimeError(
+            "Remote serving requires FINWATCH_EMAIL_FROM with a valid sender address."
+        )
+    return key, sender

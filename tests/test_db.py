@@ -8,11 +8,13 @@ import stat
 import pytest
 
 from finwatch.db import (
+    LOCAL_USER_ID,
     Company,
     Computation,
     Filing,
     FilingSection,
     SchemaVersionError,
+    User,
     VerificationResult,
     XbrlFact,
     connect,
@@ -27,9 +29,16 @@ def test_schema_installs_with_application_id_and_version():
     assert conn.execute("PRAGMA application_id").fetchone()[0] == APPLICATION_ID
     tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     assert {
-        "companies", "filings", "filing_sections", "filing_stage_runs", "xbrl_facts",
-        "analyses", "computations", "verification_results", "digests", "settings",
+        "users", "companies", "user_companies", "user_preferences", "filings",
+        "filing_sections", "filing_stage_runs", "xbrl_facts", "analyses",
+        "computations", "verification_results", "digests", "settings",
     } <= tables
+    local_email = conn.execute(
+        "SELECT email FROM users WHERE id = ?", (LOCAL_USER_ID,)
+    ).fetchone()[0]
+    assert local_email == "local@finwatch.invalid"
+    company_columns = {row[1] for row in conn.execute("PRAGMA table_info(companies)")}
+    assert "tracked_at" not in company_columns
     # dormant tables from the v0.2 schema are gone
     assert not ({"holdings", "prices", "analysis_claims", "signal_shadow_log"} & tables)
 
@@ -51,6 +60,32 @@ def test_legacy_or_foreign_database_is_rejected(tmp_path):
     conn.close()
     with pytest.raises(SchemaVersionError, match="different finwatch schema"):
         init_db(path)
+
+
+def test_schema_v4_upgrade_fails_with_clear_backup_and_reset_instruction(tmp_path):
+    path = tmp_path / "schema-v4.db"
+    conn = connect(path)
+    conn.execute(f"PRAGMA application_id = {APPLICATION_ID}")
+    conn.execute("PRAGMA user_version = 4")
+    conn.commit()
+    conn.close()
+
+    with pytest.raises(SchemaVersionError, match="Back up the directory and start fresh"):
+        init_db(path)
+
+
+def test_unmarked_nonempty_database_is_rejected_and_connection_is_released(tmp_path):
+    path = tmp_path / "unmarked.db"
+    conn = sqlite3.connect(path)
+    conn.execute("CREATE TABLE unrelated_data (value TEXT)")
+    conn.commit()
+    conn.close()
+
+    with pytest.raises(SchemaVersionError, match="non-empty database"):
+        init_db(path)
+
+    # The failed initializer must not retain a handle that prevents a clean backup/reset.
+    path.rename(tmp_path / "unmarked.backup.db")
 
 
 def test_connections_use_wal_and_bounded_busy_wait(tmp_path):
@@ -91,7 +126,43 @@ def test_connect_hardens_existing_db_without_chmodding_existing_parent(tmp_path)
     assert stat.S_IMODE(db_path.stat().st_mode) == 0o600
 
 
-# ---- companies (identity + tracking) ---------------------------------------
+# ---- users + private workspace ---------------------------------------------
+def test_user_create_lookup_and_last_login_update(repo):
+    user = User(
+        id="user-a",
+        email="person@example.com",
+        created_at="created",
+        last_login_at="first-login",
+    )
+    assert repo.create_user(user) is True
+    duplicate = user.model_copy(update={"id": "user-b", "email": "PERSON@example.com"})
+    assert repo.create_user(duplicate) is False
+    assert repo.get_user("user-a") == user
+    assert repo.get_user_by_email("PERSON@example.com") == user
+    assert repo.update_user_last_login("user-a", at="second-login") is True
+    assert repo.get_user("user-a").last_login_at == "second-login"
+    assert repo.update_user_last_login("missing", at="never") is False
+
+
+def test_user_period_is_private_and_upserts(repo):
+    for user_id in ("user-a", "user-b"):
+        assert repo.create_user(
+            User(
+                id=user_id,
+                email=f"{user_id}@example.com",
+                created_at="created",
+                last_login_at="login",
+            )
+        )
+    assert repo.get_user_period("user-a") is None
+    repo.set_user_period("user-a", "30d")
+    repo.set_user_period("user-b", "1y")
+    repo.set_user_period("user-a", "90d")
+    assert repo.get_user_period("user-a") == "90d"
+    assert repo.get_user_period("user-b") == "1y"
+
+
+# ---- companies (shared identity + private tracking) ------------------------
 def test_company_upsert_preserves_identity_and_conditional_is_financial(repo):
     repo.upsert_company(Company(cik="1", ticker="AAA", name="Alpha", added_at="t"))
     # ingest supplies SIC -> classification updates, name preserved
@@ -117,7 +188,7 @@ def test_track_and_untrack_company_preserves_the_issuer_row(repo):
     repo.track_company("2", at="t1")
     assert [c.ticker for c in repo.list_tracked_companies()] == ["AAA", "BBB"]
     assert repo.list_tracked_ciks() == ["1", "2"]
-    # untracking clears the marker but keeps the company row (audit/history retained)
+    # untracking deletes private membership but keeps shared issuer/history rows
     assert repo.untrack_company("1") is True
     assert repo.list_tracked_ciks() == ["2"]
     assert repo.get_company("1") is not None
@@ -128,16 +199,36 @@ def test_track_is_idempotent_and_keeps_the_original_timestamp(repo):
     repo.upsert_company(Company(cik="1", ticker="AAA", added_at="t"))
     repo.track_company("1", at="first")
     repo.track_company("1", at="second")
-    assert repo.get_company("1").tracked_at == "first"
+    assert repo.get_user_company(LOCAL_USER_ID, "1").tracked_at == "first"
 
 
-def test_upsert_company_never_changes_tracking_state(repo):
+def test_user_tracking_is_isolated_and_company_refresh_does_not_change_it(repo):
+    for user_id in ("user-a", "user-b"):
+        assert repo.create_user(
+            User(
+                id=user_id,
+                email=f"{user_id}@example.com",
+                created_at="created",
+                last_login_at="login",
+            )
+        )
     repo.upsert_company(Company(cik="1", ticker="AAA", added_at="t"))
-    repo.track_company("1", at="t1")
-    # a profile refresh (new name/sic, no tracked_at) must not untrack the company
+    repo.upsert_company(Company(cik="2", ticker="BBB", added_at="t"))
+    repo.track_company("1", at="t1", user_id="user-a")
+    repo.track_company("2", at="t2", user_id="user-b")
+    # A shared profile refresh must not change either user's private tracking rows.
     repo.upsert_company(
         Company(cik="1", ticker="AAA", name="Alpha", sic_code="6021", added_at="t2"))
-    assert repo.get_company("1").tracked_at == "t1"
+    assert repo.list_tracked_ciks("user-a") == ["1"]
+    assert repo.list_tracked_ciks("user-b") == ["2"]
+    assert [c.ticker for c in repo.list_tracked_companies("user-a")] == ["AAA"]
+    assert repo.count_tracked_companies("user-a") == 1
+    assert repo.count_tracked_companies("user-b") == 1
+    assert repo.get_user_company("user-a", "1").tracked_at == "t1"
+    assert repo.get_user_company("user-b", "1") is None
+    assert repo.untrack_company("1", user_id="user-b") is False
+    assert repo.untrack_company("1", user_id="user-a") is True
+    assert repo.count_tracked_companies("user-a") == 0
 
 
 def test_filing_index_idempotent(repo):

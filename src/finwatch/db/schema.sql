@@ -1,22 +1,43 @@
--- finwatch lean schema (v4). One product path: track tickers → analyze the newest
+-- finwatch lean schema (v5). One product path: track tickers → analyze the newest
 -- filing → six deterministic metrics → verified, canonical presentation. Installed
 -- once on a fresh database by db/database.py::init_db, which stamps application_id +
 -- user_version and refuses to open a database created by an older schema.
 
--- A company row exists once its ticker is resolved on EDGAR. tracked_at IS NOT NULL is
--- the sole tracking marker; untracking sets it NULL and preserves issuer/filing history.
+CREATE TABLE users (
+  id TEXT PRIMARY KEY,
+  email TEXT NOT NULL COLLATE NOCASE UNIQUE,
+  created_at TEXT NOT NULL,
+  last_login_at TEXT NOT NULL
+);
+-- CLI/local mode keeps its existing single-workspace behavior without public login.
+INSERT INTO users (id, email, created_at, last_login_at) VALUES
+  ('local', 'local@finwatch.invalid', '1970-01-01T00:00:00+00:00', '1970-01-01T00:00:00+00:00');
+
+-- A company row exists once its ticker is resolved on EDGAR. User tracking is private
+-- state in user_companies; issuer identity and public filing history remain shared.
 CREATE TABLE companies (
   cik TEXT PRIMARY KEY,
   ticker TEXT NOT NULL,
   name TEXT,
   sic_code TEXT,
   is_financial INTEGER NOT NULL DEFAULT 0,
-  added_at TEXT NOT NULL,
-  tracked_at TEXT
+  added_at TEXT NOT NULL
 );
 CREATE UNIQUE INDEX ux_companies_ticker ON companies(ticker COLLATE NOCASE);
 
-CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT);   -- sec_user_agent, period
+CREATE TABLE user_companies (
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  cik TEXT NOT NULL REFERENCES companies(cik) ON DELETE CASCADE,
+  tracked_at TEXT NOT NULL,
+  PRIMARY KEY (user_id, cik)
+);
+
+CREATE TABLE user_preferences (
+  user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  period TEXT NOT NULL
+);
+
+CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT);   -- operator settings
 
 CREATE TABLE filings (
   accession_number TEXT PRIMARY KEY,

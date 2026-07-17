@@ -275,6 +275,8 @@ textarea.input { min-height: 100px; resize: vertical; }
 .watermark { position: absolute; width: 720px; height: 720px; border: 1px solid rgba(204, 235, 221, .07); border-radius: 50%; box-shadow: 0 0 0 90px rgba(204, 235, 221, .025), 0 0 0 180px rgba(204, 235, 221, .014); }
 .setup-card { position: relative; width: min(100%, 780px); padding: clamp(28px, 5vw, 54px); border: 1px solid rgba(255, 255, 255, .12); border-radius: var(--radius-xl); background: var(--color-canvas); box-shadow: 0 28px 90px rgba(0, 0, 0, .26); }
 .setup-card.unlock-card { width: min(100%, 520px); }
+.otp-input { font-size: 22px !important; letter-spacing: .32em; text-align: center; }
+.auth-secondary { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px; }
 .setup-kicker { color: var(--color-accent); font: 650 10px var(--font-mono); letter-spacing: .17em; text-transform: uppercase; }
 .setup h1 { max-width: 700px; color: var(--color-ink); font: 500 clamp(32px, 5vw, 52px)/1.08 var(--font-serif); letter-spacing: -.04em; }
 .setup-lede { color: var(--color-body); font-size: var(--text-body-lg); line-height: 1.65; }

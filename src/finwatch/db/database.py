@@ -14,7 +14,7 @@ from pathlib import Path
 
 # Bump SCHEMA_VERSION whenever schema.sql changes shape. APPLICATION_ID ("FWL1") marks a
 # finwatch-lean database so a same-version file from another tool is still rejected.
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 APPLICATION_ID = 0x46574C31
 
 
@@ -76,6 +76,17 @@ def _install_or_verify_schema(conn: sqlite3.Connection) -> None:
     app_id = conn.execute("PRAGMA application_id").fetchone()[0]
     version = conn.execute("PRAGMA user_version").fetchone()[0]
     if app_id == 0 and version == 0:
+        existing = conn.execute(
+            """SELECT name FROM sqlite_master
+                 WHERE name NOT LIKE 'sqlite_%'
+                   AND type IN ('table', 'view', 'index', 'trigger')
+                 LIMIT 1"""
+        ).fetchone()
+        if existing is not None:
+            raise SchemaVersionError(
+                "This non-empty database is not marked as the current finwatch schema. "
+                "Back up the directory and start fresh before deploying schema version 5."
+            )
         conn.executescript(
             f"BEGIN;\n{_schema_sql()}\n"
             f"PRAGMA application_id = {APPLICATION_ID};\n"
@@ -94,5 +105,9 @@ def _install_or_verify_schema(conn: sqlite3.Connection) -> None:
 def init_db(db_path: str | Path) -> sqlite3.Connection:
     """Connect and install/verify the schema. Returns the open connection."""
     conn = connect(db_path)
-    _install_or_verify_schema(conn)
+    try:
+        _install_or_verify_schema(conn)
+    except Exception:
+        conn.close()
+        raise
     return conn

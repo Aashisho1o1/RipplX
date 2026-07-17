@@ -1,10 +1,12 @@
-"""Ingestion orchestration.
+"""
+Ingestion orchestration.
 
 `add` registers a tracked company (keyed on CIK). `ingest` runs, for every
 tracked CIK: refresh the issuer profile + filing index (bounded by a backfill window,
 idempotent for incremental polling), and flatten companyfacts into ``xbrl_facts``.
 Each CIK's steps fail independently so one bad ticker never aborts the batch.
 """
+
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -15,7 +17,7 @@ from pydantic import BaseModel
 
 from finwatch.config import Config
 from finwatch.core.types import sector_from_sic
-from finwatch.db.repositories import Company, Filing, Repo, XbrlFact
+from finwatch.db.repositories import LOCAL_USER_ID, Company, Filing, Repo, XbrlFact
 from finwatch.ingest.edgar import EdgarClient, EdgarHTTPError, normalize_cik
 from finwatch.ingest.tickers import resolve_ticker
 from finwatch.xbrl.companyfacts import CompanyFactsEntry, iter_companyfacts
@@ -86,7 +88,8 @@ def _rows_from_valid(valid: list[CompanyFactsEntry], cik: str) -> list[XbrlFact]
 
 
 def companyfacts_to_rows(cf_json: dict, cik: str) -> list[XbrlFact]:
-    """Flatten SEC companyfacts JSON into ``XbrlFact`` rows.
+    """
+    Flatten SEC companyfacts JSON into ``XbrlFact`` rows.
 
     Mirrors the FactStore.from_companyfacts split: durations carry period_start +
     period_end; instants (no ``start``) carry ``instant`` only. companyfacts is
@@ -121,6 +124,8 @@ class IngestService:
     def track_company(
         self,
         ticker: str,
+        *,
+        user_id: str = LOCAL_USER_ID,
     ) -> Company:
         """Resolve a ticker to its CIK and mark the company tracked (ticker only)."""
         ticker = ticker.strip().upper()
@@ -133,7 +138,7 @@ class IngestService:
             raise TickerNotFoundError(ticker)
         now = self._now_fn()
         self.repo.upsert_company(Company(cik=rec.cik, ticker=ticker, name=rec.title, added_at=now))
-        self.repo.track_company(rec.cik, at=now)
+        self.repo.track_company(rec.cik, at=now, user_id=user_id)
         company = self.repo.get_company(rec.cik)
         assert company is not None  # just upserted
         return company

@@ -9,6 +9,7 @@ export default defineConfig({
   },
   test: {
     environment: "jsdom",
+    environmentOptions: { jsdom: { url: "https://alpha.example" } },
     setupFiles: "./src/test/setup.ts",
   },
 });

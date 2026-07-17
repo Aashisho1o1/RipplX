@@ -25,6 +25,7 @@ from pydantic import BaseModel, FiniteFloat
 from finwatch.metrics.envelope import InputUsed
 from finwatch.xbrl.companyfacts import FactRejection, iter_companyfacts
 
+#AS is this concept map below enough
 # Priority-ordered tag lists. "dei:" prefix selects the dei taxonomy.
 CONCEPT_MAP: dict[str, list[str]] = {
     "revenue": [

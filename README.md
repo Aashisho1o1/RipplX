@@ -120,32 +120,35 @@ Do not commit `.env`; it is ignored by Git. The demo needs none of these values.
 4. Read the findings and click the SEC evidence links. A routine filing may correctly produce no
    findings.
 
-## Hosted alpha: one Docker deployment path
+## Hosted alpha: public email-code access
 
 Docker is the only supported hosted-alpha packaging path. The image builds the React frontend,
 installs the Python application from `uv.lock`, serves UI and API from one process, runs as a
 non-root user, and stores SQLite at `/data/finwatch.db`.
 
-This is a single-operator alpha, not a public SaaS deployment. Its bearer token is an
-**operator/admin credential**, not a participant login and not tenant authorization. Never give one
-instance or token to multiple concierge participants. Either keep the experience operator-mediated
-(the operator alone accesses finwatch and shares only a manually reviewed digest), or provision one
-isolated container, SQLite database/volume, hostname, and bearer token per participant. Each
-container still runs one in-process worker and uses one persistent volume at `/data`. Hosted ticker
-registration is serialized and capped at 25 tracked tickers per workspace; that is a resource and
-LLM-wallet bound, not tenant isolation.
+Hosted signup is public: a visitor enters any valid email address, receives a six-digit code, and
+gets a private workspace. There is no invite list or password. Login codes live for ten minutes in
+the one server process; the signed login cookie lasts 30 days. Watchlists, preferences, and jobs are
+user-scoped; provider keys are session-scoped. Public SEC filings, XBRL facts, and verified analyses
+are reused across workspaces.
 
 Create a `.env` file on the deployment host:
 
 ```dotenv
 SEC_USER_AGENT=Your Name your-email@example.com
 FINWATCH_MODEL=openai/your-evaluated-model
-OPENAI_API_KEY=your-openai-key
-FINWATCH_AUTH_TOKEN=replace-with-a-random-value-of-at-least-32-characters
+FINWATCH_AUTH_SECRET=replace-with-a-random-value-of-at-least-32-characters
 FINWATCH_ALLOWED_HOSTS=alpha.example.com
+RESEND_API_KEY=re_your_resend_key
+FINWATCH_EMAIL_FROM=RipplX <login@your-verified-domain.example>
 ```
 
-Generate an access token without placing it in shell history:
+On Railway, set the same six values in the service Variables tab, mount a persistent volume at
+`/data`, and set `FINWATCH_ALLOWED_HOSTS` to the exact Railway/custom-domain hostname. Do not add a
+shared `OPENAI_API_KEY` or `OPENROUTER_API_KEY` for browser users; each participant supplies the key
+matching `FINWATCH_MODEL` after login.
+
+Generate the cookie-signing secret without placing it in shell history:
 
 ```bash
 python -c "import secrets; print(secrets.token_urlsafe(32))"
@@ -164,27 +167,37 @@ docker run --rm \
 
 Required remote controls:
 
-- `FINWATCH_AUTH_TOKEN` must contain at least 32 characters. It is the operator/admin credential;
-  never reuse or distribute it as a participant password. Every `/api/*` request requires it as an
-  `Authorization: Bearer` token. The unlock screen keeps it only in JavaScript module memory; it is
-  not written to browser storage and is intentionally lost on refresh.
+- `FINWATCH_AUTH_SECRET` must contain at least 32 characters. Rotating it signs everyone out.
+- `RESEND_API_KEY` and `FINWATCH_EMAIL_FROM` send login codes. Verify the sender domain with Resend
+  before launch. Provider failures are returned to users as fixed, non-diagnostic messages.
 - `FINWATCH_ALLOWED_HOSTS` must contain the exact public hostname, without scheme or path. Use a
   comma-separated list only when the same instance genuinely has multiple trusted hostnames.
-- Terminate TLS in front of the container. Never send the bearer token or an API key over a
-  plaintext public connection.
+- `SEC_USER_AGENT` is the operator's EDGAR contact and is never exposed as the participant email.
+- Terminate TLS in front of the container. Hosted cookies are `Secure`, and provider keys must not
+  cross a plaintext public connection.
 - Keep the service at one instance. Jobs live in process memory and are lost on restart; SQLite
   is a single-node store. Stop the instance before a raw filesystem copy/snapshot of `/data`, test
   restores, and apply the host's encryption and access controls.
-- Keep each workspace at or below 25 tracked tickers. Registration is serialized to enforce the
-  cap, but the cap does not create participant accounts or authorization boundaries.
+- Each workspace is capped at 25 tracked tickers. The process still runs one job globally at a time.
 - `GET /healthz` is intentionally public and returns only service health. Interactive API docs
   are disabled in remote mode.
+- Sessions are stateless. Logout removes this browser's cookie and in-memory provider key, but a
+  copied cookie is not centrally revocable; it remains valid until its expiry or signing-secret
+  rotation. This is an accepted public-alpha limitation with no persistent session registry.
 
-Remote serving fails closed if the auth token or host allowlist is missing. The CLI also refuses
-a non-loopback bind unless `--allow-remote` is explicit. The token provides an operator boundary
-only: it is not user accounts, tenant isolation, or authorization between participants. Concierge
-participants must never share direct access to an instance; use operator-mediated review or one
-isolated DB/container/token deployment per participant.
+Hosted browser users add the OpenAI or OpenRouter key matching `FINWATCH_MODEL` in Settings. The key
+is isolated by browser session, captured when a job is submitted, never stored in SQLite/cookies or
+returned by the API, pruned when the session expires, and lost when the process restarts. Hosted web
+requests intentionally ignore shared `OPENAI_API_KEY` / `OPENROUTER_API_KEY` environment values;
+those remain available to local and CLI workflows.
+
+Schema v5 is a clean prototype break, not a migration. Before upgrading an existing Railway volume,
+back up `/data`, stop the old deployment, recreate the database/volume, and deploy. Old schemas fail
+with an explicit backup-and-reset error. `.env` files are excluded from both Git and the Docker build
+context; keep a local copy mode-restricted (for example `chmod 600 .env`).
+
+Remote serving fails closed if its signing secret, email sender configuration, SEC contact, or host
+allowlist is missing. The CLI also refuses a non-loopback bind unless `--allow-remote` is explicit.
 
 ## CLI and developer tooling
 
@@ -216,22 +229,22 @@ authoritative command list.
   withholding.
 - React renders filing/model text as escaped text; the launch UI does not render raw filing HTML.
 - SQLite and the `/data` volume are plaintext unless the operator supplies filesystem or volume
-  encryption. They contain tracked tickers, SEC data, generated analyses, and the SEC User-Agent.
-  They do not contain OpenAI keys or the hosted bearer token. A database upgraded from the broader
-  research prototype may still contain dormant legacy portfolio fields; audit or start with a fresh
-  alpha database before inviting participants.
+  encryption. They contain account emails, private ticker membership/preferences, SEC data,
+  generated analyses, and the SEC User-Agent. They do not contain login codes, session cookies, or
+  participant provider keys. Schema upgrades require a fresh database rather than carrying legacy
+  prototype fields forward.
 
 The disclaimer remains part of every canonical digest:
 
 > Educational analysis of public information for the portfolio owner's own decision-making. Not
 > individualized investment advice. Data may be incomplete or delayed.
 
-## Concierge alpha
+## Early-user feedback
 
 The first launch is deliberately supervised. See
-[`docs/CONCIERGE_ALPHA.md`](docs/CONCIERGE_ALPHA.md) for the 5–10-user protocol, manual digest
-review checklist, and the seven feedback questions. The application does not recruit or contact
-participants automatically.
+[`docs/CONCIERGE_ALPHA.md`](docs/CONCIERGE_ALPHA.md) for the early-user protocol, manual digest
+review checklist, and feedback questions. Signup itself is public; recruitment and feedback remain
+operator-led.
 
 ## Development checks
 

@@ -2,6 +2,7 @@
 
 from finwatch.db.database import SchemaVersionError, connect, init_db
 from finwatch.db.repositories import (
+    LOCAL_USER_ID,
     Analysis,
     Company,
     Computation,
@@ -10,6 +11,9 @@ from finwatch.db.repositories import (
     FilingSection,
     FilingStageRun,
     Repo,
+    User,
+    UserCompany,
+    UserPreference,
     VerificationResult,
     XbrlFact,
 )
@@ -26,6 +30,10 @@ __all__ = [
     "Filing",
     "FilingStageRun",
     "FilingSection",
+    "LOCAL_USER_ID",
+    "User",
+    "UserCompany",
+    "UserPreference",
     "VerificationResult",
     "XbrlFact",
 ]
