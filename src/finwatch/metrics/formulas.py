@@ -8,6 +8,7 @@ The launch pipeline calls ``compute_starter`` — exactly the six shipped metric
 """
 from __future__ import annotations
 
+import math
 from datetime import date
 from typing import Optional, Sequence
 
@@ -41,6 +42,35 @@ def _val(rf: Optional[ResolvedFact]) -> Optional[float]:
 
 def _collect(*rfs: Optional[ResolvedFact]) -> list[InputUsed]:
     return [r.to_input_used() for r in rfs if r is not None]
+
+
+def xbrl_rounding_slack(decimals: str | None) -> float | None:
+    """Maximum absolute rounding error implied by SEC XBRL ``decimals``."""
+    if decimals is None:
+        return None
+    value = decimals.strip().upper()
+    if value == "INF":
+        return 0.0
+    try:
+        exponent = int(value)
+        slack = 0.5 * (10.0 ** (-exponent))
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return slack if math.isfinite(slack) else None
+
+
+def _direction_fields(current: ResolvedFact, prior: ResolvedFact) -> dict:
+    current_slack = xbrl_rounding_slack(current.fact.decimals)
+    prior_slack = xbrl_rounding_slack(prior.fact.decimals)
+    return {
+        "direction_delta": current.fact.value - prior.fact.value,
+        "direction_slack": (
+            current_slack + prior_slack
+            if current_slack is not None and prior_slack is not None
+            else None
+        ),
+        "direction_basis": "current_minus_prior",
+    }
 
 
 def _need(pairs: dict[str, Optional[ResolvedFact]]):
@@ -139,7 +169,7 @@ def _contiguous_quarters(rows: Sequence[ResolvedFact]) -> bool:
 
 # ---------------------------------------------------------------- metrics --
 def revenue_growth(store: FactStore, sector: SectorInfo, as_of: str) -> MetricResult:
-    V = "revenue_growth.v3"
+    V = "revenue_growth.v4"
     _, as_of_error = _parse_as_of(as_of)
     if as_of_error:
         return _unavailable("revenue_growth", V, as_of, [as_of_error])
@@ -181,11 +211,12 @@ def revenue_growth(store: FactStore, sector: SectorInfo, as_of: str) -> MetricRe
     return _res("revenue_growth", V, as_of, status=MetricStatus.COMPUTED,
                 value=round(yoy, 6), components=comps,
                 inputs_used=_collect(cur, prior, *(q if not q_freshness else [])),
+                **_direction_fields(cur, prior),
                 sector_applicability=["universal"])
 
 
 def _trend_metric(name: str, concept: str, store: FactStore, as_of: str) -> MetricResult:
-    V = f"{name}.v2"
+    V = f"{name}.v3"
     _, as_of_error = _parse_as_of(as_of)
     if as_of_error:
         return _unavailable(name, V, as_of, [as_of_error])
@@ -226,6 +257,7 @@ def _trend_metric(name: str, concept: str, store: FactStore, as_of: str) -> Metr
     return _res(name, V, as_of, status=MetricStatus.COMPUTED,
                 value=None if yoy is None else round(yoy, 6), components=comps,
                 inputs_used=_collect(cur, prior, *(qs if not q_freshness else [])),
+                **_direction_fields(cur, prior),
                 sector_applicability=["universal"])
 
 
@@ -285,7 +317,7 @@ def liquidity_basics(store: FactStore, sector: SectorInfo, as_of: str) -> Metric
 
 
 def share_count_change(store: FactStore, sector: SectorInfo, as_of: str) -> MetricResult:
-    V = "share_count_change.v2"
+    V = "share_count_change.v3"
     _, as_of_error = _parse_as_of(as_of)
     if as_of_error:
         return _unavailable("share_count_change", V, as_of, [as_of_error])
@@ -323,7 +355,8 @@ def share_count_change(store: FactStore, sector: SectorInfo, as_of: str) -> Metr
     return _res("share_count_change", V, as_of, status=MetricStatus.COMPUTED,
                 value=round(chg, 6),
                 components={"current": cur.fact.value, "prior": prior.fact.value},
-                inputs_used=_collect(cur, prior), sector_applicability=["universal"])
+                inputs_used=_collect(cur, prior), **_direction_fields(cur, prior),
+                sector_applicability=["universal"])
 
 
 def simple_leverage(store: FactStore, sector: SectorInfo, as_of: str) -> MetricResult:
@@ -422,4 +455,3 @@ def compute_starter(store: FactStore, sector: SectorInfo, *, as_of: str) -> Metr
     bundle.results["share_count_change"] = share_count_change(store, sector, as_of)
     bundle.results["simple_leverage"] = simple_leverage(store, sector, as_of)
     return bundle
-

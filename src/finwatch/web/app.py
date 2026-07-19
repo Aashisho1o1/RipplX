@@ -645,6 +645,31 @@ def create_app(
                 raise ApiProblem(404, "filing_not_found", "Filing not found.")
             return result
 
+    @app.get("/api/filings/{accession}/certificate")
+    def filing_certificate(
+        request: Request,
+        accession: str = PathParam(pattern=_ACCESSION_PATTERN),
+        download: bool = False,
+        demo: bool = False,
+    ):
+        principal = principal_for(request)
+        demo = demo and not remote
+        with repo_context(demo) as repo:
+            result = PresentationService(repo, user_id=principal.user_id).certificate(accession)
+            if result is None:
+                raise ApiProblem(404, "certificate_not_found", "Certificate not found.")
+            if not download:
+                return result
+            return Response(
+                content=result.model_dump_json(indent=2),
+                media_type="application/json",
+                headers={
+                    "Content-Disposition": (
+                        f'attachment; filename="ripplx-{accession}-certificate.json"'
+                    )
+                },
+            )
+
     @app.get("/api/companies")
     def companies(request: Request):
         principal = principal_for(request)
@@ -875,11 +900,20 @@ def create_app(
             )
             edgar = EdgarClient(sec_user_agent, cache_dir=cache)
             llm = LiteLLMClient(model, api_key=api_key)
+            skeptic_model = os.environ.get("FINWATCH_SKEPTIC_MODEL", "").strip() or model
+            if skeptic_model.split("/", 1)[0] != model.split("/", 1)[0]:
+                raise RuntimeError("Generator and Skeptic must use the same configured provider.")
+            skeptic = (
+                LiteLLMClient(skeptic_model, api_key=api_key)
+                if skeptic_model != model else llm
+            )
             orchestrator = build_orchestrator(
                 repo,
                 llm=llm,
+                skeptic_llm=skeptic,
                 companyfacts_provider=lambda selected_cik: edgar.companyfacts(selected_cik),
                 model=model,
+                skeptic_model=skeptic_model,
             )
             partial = False
             try:

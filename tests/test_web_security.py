@@ -382,7 +382,7 @@ def test_job_api_never_returns_exception_or_progress_diagnostics(tmp_path):
         {
             "key": "MSFT:extract",
             "state": "failed",
-            "message": "Finding important changes could not be completed.",
+            "message": "Researching important changes could not be completed.",
             "verdict": None,
             "stage": "extract",
             "diagnostics": {},

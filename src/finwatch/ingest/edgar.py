@@ -8,7 +8,9 @@ store forever). The httpx client, clock, and sleep are all injectable so tests r
 with zero network and zero real waiting.
 """
 
-#AS: Last comments talk about hard requirement: make sure it'ss ensible and logicala nd ibndustry dstandard ahrd req. We are in prorotuype, so good to stay elana nd fleixble.
+#AS: Last comments talk about hard requirement: make sure it'ss ensible and
+# logicala nd ibndustry dstandard ahrd req. We are in prorotuype, so good to stay
+# elana nd fleixble.
 
 from __future__ import annotations
 

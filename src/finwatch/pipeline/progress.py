@@ -7,11 +7,11 @@ from datetime import UTC, datetime
 
 from finwatch.db.repositories import Repo
 
-PIPELINE_STAGES = ("download", "parse", "extract", "metrics", "verify")
+PIPELINE_STAGES = ("download", "parse", "metrics", "extract", "verify")
 STAGE_LABELS = {
     "download": "Downloaded",
     "parse": "Parsed",
-    "extract": "Extracted",
+    "extract": "Researched",
     "metrics": "Metrics computed",
     "verify": "Verified",
 }

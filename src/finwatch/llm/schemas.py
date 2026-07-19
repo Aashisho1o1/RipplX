@@ -11,12 +11,12 @@ values are normalized before use.
 
 from __future__ import annotations
 
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
 
-from finwatch.core.text_policy import contains_authored_quantity, contains_trade_instruction
 from finwatch.core.types import CRITICAL_DOC_FLAGS
+from finwatch.metrics.catalog import MetricId
 
 _STRICT = ConfigDict(extra="forbid")
 
@@ -86,17 +86,18 @@ class Finding(BaseModel):
     """A qualitative conclusion that is inseparable from its exact SEC evidence."""
 
     model_config = _STRICT
+    finding_id: Literal["f1", "f2", "f3"]
     headline: str = Field(min_length=1, max_length=240)
     severity: Severity
     critical_flag: str | None = None
+    metric_id: MetricId | None = None
+    direction: Literal["up", "down", "flat"] | None = None
     evidence: list[FindingEvidence] = Field(min_length=1, max_length=3)
 
     @model_validator(mode="after")
     def _qualitative_and_controlled(self):
-        if contains_authored_quantity(self.headline):
-            raise ValueError("finding headline must be qualitative; numbers belong in evidence")
-        if contains_trade_instruction(self.headline):
-            raise ValueError("finding headline must not contain trade instructions")
+        if (self.metric_id is None) != (self.direction is None):
+            raise ValueError("metric_id and direction must appear together")
         if self.critical_flag is not None:
             flag = self.critical_flag.strip().lower()
             if flag not in CRITICAL_DOC_FLAGS:
@@ -124,6 +125,9 @@ class P1Output(BaseModel):
 
     @model_validator(mode="after")
     def _findings_match_classification(self):
+        ids = [finding.finding_id for finding in self.findings]
+        if len(ids) != len(set(ids)):
+            raise ValueError("finding_id values must be unique within a P1 output")
         for finding in self.findings:
             for evidence in finding.evidence:
                 if evidence.accession_number != self.accession_number:

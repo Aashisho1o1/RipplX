@@ -1,7 +1,7 @@
-"""Pipeline orchestrator: P0 → P1 → starter metrics → verify (per filing).
+"""Pipeline orchestrator: P0 → metrics → research harness → verify (per filing).
 
-Deterministic control flow around one stochastic extraction stage. The verifier gates
-the result and any blocking failure withholds the entire LLM-derived presentation.
+Deterministic control flow around one bounded stochastic research stage. Finding-local
+failures are pruned inside the harness; only run-level failures withhold the filing.
 P2/P3 research modules are deliberately outside the prototype launch path.
 """
 from __future__ import annotations
@@ -17,7 +17,6 @@ from finwatch.llm.stages import P1Extractor
 from finwatch.metrics.envelope import MetricsBundle
 from finwatch.metrics.service import MetricsService
 from finwatch.pipeline.progress import ProgressCallback, StageReporter
-from finwatch.preprocess.diff import RiskFactorDiff
 from finwatch.preprocess.preprocessor import Preprocessor
 from finwatch.verify.checks import EvidenceClaim, VerificationReport, VerifyBundle, run_all
 from finwatch.verify.orchestrator import persist_report, section_texts_from_repo
@@ -33,18 +32,6 @@ class FilingAnalysis:
     verification: VerificationReport
     withheld: bool
     starter_metrics: list = field(default_factory=list)
-
-def risk_diff_to_dict(diff: RiskFactorDiff) -> dict:
-    def para(p):
-        return {"text": p.text, "char_start": p.char_start, "char_end": p.char_end}
-
-    return {
-        "added": [para(p) for p in diff.added],
-        "removed": [para(p) for p in diff.removed],
-        "modified": [{"prior": para(m.prior), "current": para(m.current),
-                      "similarity": m.similarity} for m in diff.modified],
-    }
-
 
 def assemble_verify_bundle(
     p1: P1Output,
@@ -62,11 +49,11 @@ def assemble_verify_bundle(
     authored_lines = [finding.headline for finding in p1.findings]
     lines = list(authored_lines)
     evidence: list[EvidenceClaim] = []
-    for finding_index, finding in enumerate(p1.findings):
+    for finding in p1.findings:
         for evidence_index, pv in enumerate(finding.evidence):
             lines.append(pv.snippet)
             evidence.append(EvidenceClaim(
-                claim_id=f"finding-{finding_index + 1}-evidence-{evidence_index + 1}",
+                claim_id=f"{finding.finding_id}-evidence-{evidence_index + 1}",
                 accession_number=pv.accession_number,
                 section_key=pv.section_key, char_start=pv.char_start, char_end=pv.char_end,
                 snippet=pv.snippet, text_sha256=None,
@@ -78,8 +65,6 @@ def assemble_verify_bundle(
         fact_store_values=[],
         evidence_claims=evidence,
         section_texts=section_texts,
-        extraction_confidence=p1.extraction_confidence,
-        extraction_gaps=list(p1.gaps),
         trade_action=None,
         disclaimer_text=disclaimer,
     )
@@ -192,37 +177,9 @@ class Orchestrator:
             "is_amendment": bool(filing.is_amendment),
             "amends_accession": pp.amends_accession,
         }
-        rf_diff = risk_diff_to_dict(pp.risk_factor_diff) if pp.risk_factor_diff else None
-
-        # --- P1: extract ---------------------------------------------------
-        stored_p1 = self.repo.latest_analysis(filing.accession_number, "P1")
-        if reusable("extract", stored_p1):
-            assert stored_p1 is not None
-            p1_out = P1Output.model_validate_json(stored_p1.output_json)
-            p1_aid = stored_p1.id
-            reporter.completed(
-                "extract",
-                {"analysis_id": p1_aid, "resumed": True},
-                message="Extracted (reused stored analysis)",
-            )
-        else:
-            p1_out, p1_aid, _ = run_stage(
-                "extract",
-                lambda: self.p1.run(
-                    filing_meta=filing_meta,
-                    sections=sections,
-                    risk_factor_diff=rf_diff,
-                ),
-                lambda result: {
-                    "analysis_id": result[1],
-                    "severity": result[0].classification.overall_severity,
-                    "finding_count": len(result[0].findings),
-                },
-            )
-
         # --- metrics -------------------------------------------------------
-        # Persist to `computations` so the digest renders "Verified numbers" straight
-        # from the DB (deterministic, no LLM at render time — CLAUDE.md §15).
+        # Metrics run before research so the model can inspect deterministic results
+        # through get_metric; the public stage names and persistence remain unchanged.
         metrics_were_complete = resume and reporter.is_complete("metrics")
 
         def compute_metrics():
@@ -240,6 +197,47 @@ class Orchestrator:
                 "resumed": metrics_were_complete,
             },
         )
+        data_quality = self.metrics_service.data_quality(
+            filing.cik, as_of=as_of, form_type=filing.form_type
+        )
+
+        prior_sections: dict[str, dict] = {}
+        for section_key in sections:
+            prior = self.repo.prior_comparable_section(
+                filing.cik, pp.form_family, section_key, filing.filed_at
+            )
+            if prior is not None:
+                prior_sections[section_key] = {
+                    "accession_number": prior[0], "text": prior[1]
+                }
+
+        # --- P1: bounded tool-calling research -----------------------------
+        stored_p1 = self.repo.latest_analysis(filing.accession_number, "P1")
+        if reusable("extract", stored_p1):
+            assert stored_p1 is not None
+            p1_out = P1Output.model_validate_json(stored_p1.output_json)
+            p1_aid = stored_p1.id
+            reporter.completed(
+                "extract",
+                {"analysis_id": p1_aid, "resumed": True},
+                message="Extracted (reused stored analysis)",
+            )
+        else:
+            p1_out, p1_aid, _ = run_stage(
+                "extract",
+                lambda: self.p1.run(
+                    filing_meta=filing_meta,
+                    sections=sections,
+                    prior_sections=prior_sections,
+                    metrics=metrics,
+                    data_quality=data_quality,
+                ),
+                lambda result: {
+                    "analysis_id": result[1],
+                    "severity": result[0].classification.overall_severity,
+                    "finding_count": len(result[0].findings),
+                },
+            )
 
         # --- verify: launch-output gate (V1/V4/V5) ---------------------------
         # A blocking failure withholds all LLM-derived output. There is no in-place
@@ -256,9 +254,7 @@ class Orchestrator:
         # V2 validates the XBRL DATA (never repairable by re-running the LLM). V2a (A=L+E)
         # and V2c (Rev≥GP≥OpInc) run on every filing; V2b (cash tie-out) only on annual
         # filings (it compares a fiscal-year change).
-        v2 = self.metrics_service.data_quality(
-            filing.cik, as_of=as_of, form_type=filing.form_type)
-        combined = list(core.results) + list(v2)
+        combined = list(core.results) + list(data_quality)
         blocking = any(c.verdict == "fail" and c.severity == "blocking" for c in combined)
         warns = any(c.verdict == "warn" for c in combined)
         report = VerificationReport(

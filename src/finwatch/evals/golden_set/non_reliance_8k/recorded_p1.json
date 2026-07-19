@@ -4,6 +4,7 @@
   "form_type": "8-K",
   "classification": {"overall_severity": "critical"},
   "findings": [{
+    "finding_id": "f1",
     "headline": "Prior financial statements should not be relied upon",
     "severity": "critical",
     "critical_flag": "item_4_02_non_reliance",

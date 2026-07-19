@@ -24,17 +24,19 @@ loop is intentionally narrow:
    or the newest supported filing across tracked tickers when no ticker is selected. You can narrow
    the run to the newest 10-K, 10-Q, or 8-K. An already terminal newest filing is a no-op; the
    system never falls through to older filings within the selected scope.
-4. Produce zero to three qualitative findings. Every finding must carry an exact quotation with
-   accession, section, character offsets, section hash, and an HTTPS SEC link.
+4. Research the filing through a bounded allowlisted tool loop, then publish zero to three
+   qualitative findings. Every finding must carry an exact quotation with accession, section,
+   server-derived character offsets, section hash, and an HTTPS SEC link.
 5. Show only the starter metrics: revenue growth, net-income trend, operating cash flow,
    liquidity, share-count change, and a net-debt / (operating income + D&A) leverage proxy.
    Share-count direction is reported neutrally—not inferred to be a buyback or dilution. Stale,
    future-dated, or malformed source periods are shown as unavailable, never relabeled as current.
 
 Numbers may appear only in deterministic metric rows sourced from SEC XBRL or inside exact SEC
-quotations. The browser and Markdown digest use the same canonical presentation model. If a
-blocking verifier or presentation-integrity check fails, all LLM-derived findings are withheld;
-the user sees a manual-review state instead of partial analysis.
+quotations. Structured direction claims are compiled against current-minus-prior metric deltas and
+SEC-decimals rounding slack. The browser and Markdown digest use the same canonical presentation
+model. Finding-local failures drop only that finding; surviving findings and metrics publish.
+Provider/malformed-action breakdown and filing-scope/critical-coverage failures withhold the run.
 
 The model still makes the qualitative selection, headline, and importance judgment. Verification
 proves that its displayed evidence is exact and that displayed numbers come from allowed sources;
@@ -96,6 +98,7 @@ Copy `.env.example` to `.env`. The real process environment takes precedence ove
 SEC_USER_AGENT=Your Name your-email@example.com
 FINWATCH_DB=./data/finwatch.db
 FINWATCH_MODEL=openai/your-evaluated-model
+FINWATCH_SKEPTIC_MODEL=
 OPENAI_API_KEY=
 ```
 
@@ -103,6 +106,8 @@ OPENAI_API_KEY=
   setup; unlike an API key, this setting is persisted in SQLite.
 - `FINWATCH_MODEL` is the single operator-selected launch model and must use the `openai/` or
   `openrouter/` LiteLLM prefix. The browser displays it read-only.
+- `FINWATCH_SKEPTIC_MODEL` optionally selects a stronger finance Skeptic on the same provider. When
+  absent, the Generator model is reused. The Skeptic can object to a finding but cannot approve it.
 - `OPENAI_API_KEY` or `OPENROUTER_API_KEY` (matching the model prefix) is the production provider
   credential read from the environment.
 - Instead of setting `OPENAI_API_KEY`, a local user may enter a key in Settings. That key exists
@@ -225,8 +230,11 @@ authoritative command list.
 - Annual metric sources older than 550 days and instant/share sources older than 200 days fail
   closed as unavailable. Non-finite, future, missing-date, and malformed facts are rejected.
 - Findings are capped at three and must be qualitative; numbers belong in exact evidence.
-- The deterministic verifier never edits failed content into compliance. Blocking failure means
-  withholding.
+- The deterministic compiler never edits failed content into compliance. After one shared repair,
+  finding-local errors are pruned with typed reason codes. Whole-run withholding is reserved for
+  provider/action breakdown or filing-scope/critical-coverage failure.
+- Each analyzed filing exposes a compact tool count/trace and an owner-scoped verification
+  certificate download. Raw model output, secrets, and provider exceptions are not exposed.
 - React renders filing/model text as escaped text; the launch UI does not render raw filing HTML.
 - SQLite and the `/data` volume are plaintext unless the operator supplies filesystem or volume
   encryption. They contain account emails, private ticker membership/preferences, SEC data,
@@ -263,6 +271,11 @@ excluded from the normal suite.
 
 The broader v0.2 research system (P2/P3, signals, extended metrics) was removed in the lean cut;
 recover it from Git history if a future product decision justifies it.
+
+The pinned next iteration is intentionally narrow: when a registered metric is unavailable only
+because one fact is missing, `resolve_fact` may attempt bounded Tier-0→Tier-1 recovery from the
+current SEC filing text. Company IR, news, market data, generic plugins, subagents, Lean/Z3, and
+distributed job infrastructure remain deferred.
 
 ## License
 

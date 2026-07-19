@@ -64,13 +64,6 @@ def load_filing_projection(repo: Repo, filing: Filing) -> FilingProjection:
         except Exception:  # noqa: BLE001 - corrupt persisted output must fail closed
             llm_output_allowed = False
             p1 = None
-        else:
-            # Existing verification rows may predate the incomplete-extraction gate.
-            # Reapply the publication invariant so an old low-confidence or gapped
-            # artifact cannot appear as a reassuring "routine" filing after upgrade.
-            if p1.extraction_confidence == "low" or p1.gaps:
-                llm_output_allowed = False
-                p1 = None
     withheld = filing.status == "failed" or bool(analysis_present and not llm_output_allowed)
     withheld_reason = (
         "LLM-derived analysis withheld because deterministic verification did not pass."

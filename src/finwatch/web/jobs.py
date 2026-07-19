@@ -21,7 +21,7 @@ _SAFE_VERDICTS = frozenset({"PASS", "PASS_WITH_WARNINGS", "FAIL", "PARSED"})
 _STAGE_LABELS = {
     "download": "Downloading filing",
     "parse": "Preparing filing",
-    "extract": "Finding important changes",
+    "extract": "Researching important changes",
     "metrics": "Computing verified metrics",
     "verify": "Verifying evidence",
 }

@@ -37,8 +37,10 @@ def build_orchestrator(
     repo: Repo,
     *,
     llm: LLMClient,
+    skeptic_llm: LLMClient | None = None,
     companyfacts_provider: CompanyFactsProvider,
     model: str | None = None,
+    skeptic_model: str | None = None,
     now_fn: Callable[[], str] | None = None,
 ) -> Orchestrator:
     """Wire the launch pipeline around one production extraction model.
@@ -50,7 +52,11 @@ def build_orchestrator(
     metrics = MetricsService(repo, companyfacts_provider, now_fn=now_fn)
     return Orchestrator(
         repo, Preprocessor(repo, now_fn=now_fn),
-        P1Extractor(llm, repo, model_label=model, now_fn=now_fn),
+        P1Extractor(
+            llm, repo, skeptic_llm=skeptic_llm,
+            model_label=model, skeptic_model_label=skeptic_model,
+            now_fn=now_fn,
+        ),
         metrics, now_fn=now_fn)
 
 
@@ -96,8 +102,15 @@ def newest_filing_to_analyze(
     def eligible(filing: Filing | None) -> Filing | None:
         if filing is None or filing.status in _TERMINAL_STATUS:
             return None
-        extract = repo.get_filing_stage(filing.accession_number, "extract")
-        if extract is not None and extract.attempts >= _MAX_EXTRACT_ATTEMPTS:
+        attempts = max(
+            (
+                row.attempts
+                for stage in ("parse", "metrics", "extract")
+                if (row := repo.get_filing_stage(filing.accession_number, stage)) is not None
+            ),
+            default=0,
+        )
+        if attempts >= _MAX_EXTRACT_ATTEMPTS:
             return None
         return filing
 

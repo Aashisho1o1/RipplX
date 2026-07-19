@@ -29,13 +29,14 @@ class Config(BaseModel):
     sec_user_agent: str
     db_path: str = "./data/finwatch.db"
     model: str | None = None
+    skeptic_model: str | None = None
 
-    @field_validator("model")
+    @field_validator("model", "skeptic_model")
     @classmethod
     def one_production_provider(cls, value: str | None) -> str | None:
         if value is not None and not value.startswith(PRODUCTION_MODEL_PREFIXES):
             raise ValueError(
-                "FINWATCH_MODEL must use one of these production providers: "
+                "configured model must use one of these production providers: "
                 + ", ".join(PRODUCTION_MODEL_PREFIXES)
             )
         return value
@@ -71,4 +72,5 @@ def load_config(env_path: Path = DEFAULT_ENV_PATH) -> Config:
         sec_user_agent=user_agent,
         db_path=os.environ.get("FINWATCH_DB", "./data/finwatch.db"),
         model=os.environ.get("FINWATCH_MODEL", "").strip() or None,
+        skeptic_model=os.environ.get("FINWATCH_SKEPTIC_MODEL", "").strip() or None,
     )

@@ -47,6 +47,15 @@ export function FilingPage() {
         </div>
       )}</div>
       {parsedSections.length > 0 && <p className="mono faint">Sections: {parsedSections.join(", ")}</p>}
+      {detail.research && <details className="research-audit">
+        <summary>Research tools used: {detail.research.tool_call_count}</summary>
+        <div className="research-audit-body">
+          <p><strong>Outcome:</strong> {detail.research.outcome.replaceAll("_", " ")} · <strong>Repair:</strong> {detail.research.repair_used ? "used" : "not needed"}</p>
+          {detail.research.tool_names.length > 0 && <p className="mono faint">{detail.research.tool_names.join(" · ")}</p>}
+          {detail.research.dropped_findings.length > 0 && <div><strong>Dropped findings: {detail.research.dropped_findings.length}</strong>{detail.research.dropped_findings.map(row => <p className="mono faint" key={row.finding_id}>{row.finding_id}: {row.error_codes.join(", ")}</p>)}</div>}
+          {detail.certificate_url && <a className="button ghost" href={`${detail.certificate_url}?download=true`}>Download verification certificate</a>}
+        </div>
+      </details>}
     </section>}
 
     <section className="surface section"><div className="surface-header"><div><span className="section-kicker">Qualitative layer</span><h2>What changed</h2></div><span className="verified-label"><i /> Evidence verified</span></div><p className="metric-caption">The model selects significance; deterministic checks prove each displayed quotation is exact. The checks do not determine whether the interpretation is important to you.</p>{withheldReason ? <p className="empty-line">Findings are withheld until deterministic verification passes.</p> : filing.findings.length ? <FindingList findings={filing.findings} /> : <p className="empty-line">No evidence-backed changes were selected.</p>}</section>

@@ -31,6 +31,18 @@ def test_load_config_accepts_allowlisted_production_providers(monkeypatch, tmp_p
         load_config(env_path=tmp_path / "missing.env")
 
 
+def test_optional_skeptic_model_uses_the_same_allowlist(monkeypatch, tmp_path):
+    monkeypatch.setenv("SEC_USER_AGENT", "Test User test@example.com")
+    monkeypatch.setenv("FINWATCH_SKEPTIC_MODEL", "openrouter/deepseek/deepseek-chat")
+    assert load_config(
+        env_path=tmp_path / "missing.env"
+    ).skeptic_model == "openrouter/deepseek/deepseek-chat"
+
+    monkeypatch.setenv("FINWATCH_SKEPTIC_MODEL", "anthropic/other-model")
+    with pytest.raises(ValueError, match="production providers"):
+        load_config(env_path=tmp_path / "missing.env")
+
+
 def test_real_env_wins_over_dotenv(monkeypatch, tmp_path):
     env = tmp_path / ".env"
     env.write_text('SEC_USER_AGENT="From File file@example.com"\n', encoding="utf-8")

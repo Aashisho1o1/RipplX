@@ -4,6 +4,7 @@
   "form_type": "8-K",
   "classification": {"overall_severity": "medium"},
   "findings": [{
+    "finding_id": "f1",
     "headline": "Chief executive leadership changed",
     "severity": "medium",
     "critical_flag": null,

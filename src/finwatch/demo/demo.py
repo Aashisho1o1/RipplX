@@ -51,11 +51,19 @@ class DemoLLM:
         json_mode: bool = True,
         max_tokens: int = LAUNCH_MAX_OUTPUT_TOKENS,
     ) -> LLMResponse:
-        stage = "P1"
-        text = self.stage_outputs.get(stage)
+        if "finance Skeptic" in system:
+            return LLMResponse(
+                text=json.dumps({"action": "done", "obligations": []}), model=self.model
+            )
+        text = self.stage_outputs.get("P1")
         if text is None:
-            raise RuntimeError(f"demo: no recorded {stage} output for the current filing")
-        return LLMResponse(text=text, model=self.model)
+            raise RuntimeError("demo: no recorded P1 output for the current filing")
+        draft = json.loads(text)
+        for index, finding in enumerate(draft["findings"], start=1):
+            finding.setdefault("finding_id", f"f{index}")
+        return LLMResponse(
+            text=json.dumps({"action": "submit", "draft": draft}), model=self.model
+        )
 
 
 @dataclass(frozen=True)

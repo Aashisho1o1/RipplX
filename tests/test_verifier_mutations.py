@@ -94,12 +94,14 @@ def test_mutation_e_price_target_language_fails_v5():
         ("high", ["Input was truncated before controls."]),
     ],
 )
-def test_incomplete_extraction_fails_v5(confidence: str, gaps: list[str]):
+def test_model_reported_incomplete_extraction_is_nonblocking(
+    confidence: str, gaps: list[str]
+):
     b = make_bundle()
     b.extraction_confidence = confidence
     b.extraction_gaps = gaps
     r = run_all(b, make_store(), SectorInfo(SectorClass.GENERAL, False))
-    assert "V5" in failing_ids(r)
+    assert "V5" not in failing_ids(r)
 
 
 @pytest.mark.parametrize(

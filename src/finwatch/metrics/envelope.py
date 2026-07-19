@@ -43,6 +43,9 @@ class MetricResult(BaseModel):
     formula_version: str
     as_of: str
     confidence: str = "high"  # high | medium | low
+    direction_delta: Optional[FiniteFloat] = None
+    direction_slack: Optional[FiniteFloat] = Field(default=None, ge=0)
+    direction_basis: Optional[str] = None
 
     @field_validator("components")
     @classmethod
@@ -66,6 +69,17 @@ class MetricResult(BaseModel):
     @property
     def computed(self) -> bool:
         return self.status == MetricStatus.COMPUTED
+
+    @property
+    def deterministic_direction(self) -> str | None:
+        """Return the rounding-aware direction, or None when it cannot be proved."""
+        if self.direction_delta is None or self.direction_slack is None:
+            return None
+        if self.direction_delta > self.direction_slack:
+            return "up"
+        if self.direction_delta < -self.direction_slack:
+            return "down"
+        return "flat"
 
     def numeric_leaves(self) -> list[float]:
         """All numeric values carried by this result (for verifier V1 matching)."""

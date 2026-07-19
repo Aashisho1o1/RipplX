@@ -43,12 +43,14 @@ src/finwatch/
 ├── ingest/                   EDGAR client, ticker→CIK, filing/companyfacts cache
 ├── preprocess/               P0 form router, canonical sections, offsets, hashes, diffs
 ├── llm/
-│   ├── schemas.py            strict launch P1 contract + dormant P2/P3 schemas
-│   ├── stages.py             bounded P1 call/schema repair/persistence
+│   ├── schemas.py            strict finding + structured-direction contract
+│   ├── harness.py            bounded JSON tools/agenda/repair/Skeptic/trace
+│   ├── stages.py             thin P1 harness facade
 │   └── router.py             injected client; LiteLLM implementation
 ├── prompts/
 │   ├── foundation.md         prompt-injection and evidence rules
-│   ├── P1_extractor.md       launch max-three-finding prompt
+│   ├── P1_extractor.md       Generator action/tool protocol
+│   ├── P1_skeptic.md         one-directional finance objection protocol
 │   └── P2_impact.md, P3_rationale.md                 dormant research
 ├── xbrl/                     point-in-time SEC companyfacts normalization
 ├── metrics/
@@ -58,10 +60,11 @@ src/finwatch/
 │   └── formulas.py           starter + dormant extended pure formulas    ⚙
 ├── pipeline/
 │   ├── run.py                newest-only production wiring/scheduling
-│   ├── orchestrator.py       P0→P1→starter metrics→publication gate
+│   ├── orchestrator.py       P0→metrics→tool harness→publication gate
 │   ├── progress.py           five-stage persisted ledger
 │   └── adapters.py           dormant P2/P3/matrix adapters
 ├── verify/
+│   ├── compiler.py           finding-local compile/repair/prune + direction gate ⚙
 │   ├── checks.py             deterministic V1–V5 primitives              ⚙
 │   ├── orchestrator.py       report persistence + non-blocking V2 audit
 │   └── presentation.py       exact final FilingDigestEntry verifier
@@ -104,12 +107,15 @@ Ticker
   │                                + full source hashes
   │                                           │
   │                                           ▼
-  │                                P1: 0..3 findings
-  │                                + 1..3 exact quotes each
+  └─► SEC companyfacts ─► as-of FactStore ─► six metrics + decimals/direction slack
+                                              │
+canonical section catalog + MetricBundle ─────┘
   │
-  └─► SEC companyfacts ─► as-of FactStore ─► compute_starter() ─► computations
+  └─► Generator JSON actions ─► allowlisted deterministic tools
+        ─► draft ─► compiler ─► one shared repair ─► finance Skeptic
+        ─► final compiler/per-finding prune ─► P1 + P1_TRACE
 
-P1 + starter MetricBundle + stored section text
+surviving P1 + exact metric snapshot + stored section text
   │
   ├─► V1 numeric provenance
   ├─► V4 citation exactness
@@ -132,7 +138,8 @@ canonical.build_filing_entry()
           ▼
 PresentationService BriefView/FilingDetailView
           ├─► FastAPI JSON ─► React
-          └─► render_brief_markdown() ─► Markdown
+          ├─► render_brief_markdown() ─► Markdown
+          └─► owner-scoped stable verification certificate
 ```
 
 No user-visible content path reads P2, P3, signal logs, dormant claim graphs, extended metrics, or
@@ -146,22 +153,24 @@ projection, not two independent trust paths.
 `pipeline/progress.py` defines the current ledger exactly:
 
 ```
-download → parse → extract → metrics → verify
+download → parse → metrics → extract → verify
 ```
 
 `pipeline/run.newest_filing_to_analyze()` filters to 10-K/10-Q/8-K, optionally narrows to one form
 family, selects one newest filing, and returns no work when that filing is already `verified` or
 terminally `analyzed`. It never falls through to older history within the selected scope. A failed
-filing is eligible for at most two persisted extraction-stage attempts.
+filing is eligible for at most two persisted attempts at the active parse/metrics/extract stage.
 
 `process_filing()` always passes `resume=False`: every retry downloads and rebuilds the whole attempt.
 There is no production API/CLI for accession selection, historical replay, partial-stage rerun, or
 offline reverify. The internal orchestrator retains some reusable-artifact support for tests/history;
 the launch runner does not expose it.
 
-`llm/stages.py` gives one extraction-stage invocation one initial model call plus at most one strict
-schema-repair call. Input is capped at 240,000 serialized characters; output is capped at 2,000
-tokens. This model-call bound is distinct from the two persisted full-attempt bound above.
+`llm/harness.py` gives one extraction-stage invocation eight Generator turns, six Generator tool
+requests, one preflight, one shared repair, and two Skeptic tool requests. Duplicate calls consume
+budget but reuse cached results. Only trusted catalogs enter the initial prompt; filing text is
+retrieved as bounded tool data. Each model action is strict JSON and output is capped at 2,000
+tokens. These bounds are distinct from the two persisted full-attempt bound above.
 
 ---
 
@@ -172,8 +181,9 @@ tokens. This model-call bound is distinct from the two persisted full-attempt bo
    not the original HTML byte stream.
 
 2. **P1 contract** — `llm.schemas.P1Output` rejects extra fields and contains at most three
-   qualitative, non-numeric findings. Each finding has one to three exact evidence spans, controlled
-   severity, and an optional controlled critical flag. Trusted filing identity must match, and
+   uniquely identified findings (`f1`–`f3`). Each finding has one to three exact evidence spans,
+   controlled severity/critical flag, and an optional paired registry `metric_id` + direction.
+   Trusted filing identity must match, and
    routed Items 1.03/2.04/3.01/4.02 require their critical section-backed finding. No parallel
    general claim graph is needed for launch.
 
@@ -182,7 +192,10 @@ tokens. This model-call bound is distinct from the two persisted full-attempt bo
    `metrics/catalog.py`. Each persisted row must round-trip the metric name, status, formula
    version, and `as_of`; presentation rejects inconsistent rows. Display vocabulary is neutral:
    share count increased/decreased/flat, and net debt / (operating income + D&A) is explicitly a
-   proxy rather than reported EBITDA. User-facing surfaces say “computed as of.”
+   proxy rather than reported EBITDA. Normalized facts and inputs preserve SEC `decimals`.
+   Directional metrics expose current-minus-prior delta and the sum of both raw rounding slacks;
+   unknown decimals means unknown direction, never zero slack. User-facing surfaces say “computed
+   as of.”
 
 4. **Point-in-time contract** — companyfacts entries without a provable filing date or filed after
    the filing's `as_of` are excluded before normalization. Current annual legs older than 550 days
@@ -199,20 +212,30 @@ tokens. This model-call bound is distinct from the two persisted full-attempt bo
    P1 only when filing status is `verified`, persisted V1/V4/V5 rows all pass, and no blocking result
    fails. Otherwise P1 is absent and the filing is marked withheld/manual review.
 
-7. **Exact DTO contract** — `canonical.build_filing_entry()` is the sole constructor for a public
-   filing entry. `verify.presentation.verify_filing_entry()` checks the final object, not a precursor.
-   One candidate error withholds the complete filing analysis; it never silently drops a bad finding
-   and publishes the remainder as clean.
+7. **Compiler/prune contract** — `verify.compiler.compile_draft()` classifies errors as run-level or
+   finding-local. After one repair it drops only locally invalid findings, recomputes severity, and
+   publishes metrics-only when none survive. `FORM_SCOPE`, `CRITICAL_COVERAGE`, provider failure,
+   and repeated malformed actions are the only whole-run withholding paths.
 
-8. **Rendering contract** — `PresentationService` is the only database-to-content adapter.
+8. **Exact DTO contract** — `canonical.build_filing_entry()` is the sole constructor for a public
+   filing entry. `verify.presentation.verify_filing_entry()` checks the final object, not a precursor.
+   Candidate-local corruption is pruned; identity/persisted-gate/final-DTO corruption withholds.
+
+9. **Rendering contract** — `PresentationService` is the only database-to-content adapter.
    `render_brief_markdown(BriefView)` serializes the same DTO returned to the browser and escapes
    filing/model text as text.
 
-9. **Production model contract** — `FINWATCH_MODEL` must have an `openai/` or `openrouter/` prefix
+10. **Production model contract** — `FINWATCH_MODEL` and optional `FINWATCH_SKEPTIC_MODEL` must use
+   the same supported `openai/` or `openrouter/` provider prefix
    and production credential discovery recognizes `OPENAI_API_KEY` / `OPENROUTER_API_KEY` plus the
    process-memory browser key. Model bake-off flexibility is developer tooling, not runtime provider routing.
 
-10. **Ticker-only contract** — public holding create/update schemas accept identity only. Shares,
+11. **Certificate contract** — `P1_TRACE` stores validated tool hashes, agenda states, dropped codes,
+   budgets, models/prompts, and the exact metric envelopes used by that run. The owner-scoped
+   certificate is a stable hash over that snapshot; it never reconstructs provenance from later
+   metric rows.
+
+12. **Ticker-only contract** — public holding create/update schemas accept identity only. Shares,
     cost basis, targets, horizons, and theses are neither collected nor returned. Dormant DB columns
     do not expand the public contract.
 
@@ -224,12 +247,14 @@ tokens. This model-call bound is distinct from the two persisted full-attempt bo
 |---|---|
 | Maximum three findings | P1 schema, prompt, canonical DTO, final DTO verifier |
 | Every finding has direct evidence | P1 schema + canonical exact-span construction |
-| Headline contains no number | P1 schema + V1/authored-text path + final DTO verifier |
+| Headline contains no number | compiler + V1/authored-text path + final DTO verifier |
 | Quote is exact | V4 + canonical offset equality + full-hash DTO verification |
 | Citation points to SEC | Canonical trusted URL construction + final DTO verifier |
 | Metric number is deterministic | starter formula → persisted computation → validated metric DTO |
+| Structured direction exceeds rounding uncertainty | SEC decimals → metric slack → compiler |
 | Future fact cannot enter filing-dated computation | `metrics.service.as_of_facts()` |
-| Failed verification leaks no LLM bytes | persisted projection gate + withheld DTO |
+| Local failure leaks no bad finding | compiler/canonical per-finding prune + dropped codes |
+| Run-level failure leaks no LLM bytes | persisted projection gate + withheld DTO |
 | Browser and Markdown agree | both consume the same `BriefView` |
 | Trade/price language is absent | P1 prompt/schema, V5, final DTO verifier |
 | Uncertainty is explicit | universal metric states + boring/withheld presentation states |
@@ -297,7 +322,7 @@ filing artifacts in plaintext; filesystem/container access is the data-at-rest b
 ## 9. Evaluation contract
 
 `src/finwatch/evals/golden_set/manifest.yaml` pins 12 real SEC accessions spanning critical, boring,
-and routine cases. The recorded harness runs P0/P1/verification/canonical projection without network
+and routine cases. The recorded harness runs P0/metrics/tool harness/verification/canonical projection without network
 or keys. The optional live harness fetches the pinned primary document and calls a candidate model.
 
 Acceptance emphasizes 100% critical-flag recall, valid strict JSON, publication/canonical pass rate,
@@ -319,6 +344,13 @@ types/pages, digest rendering, and launch CLI controls:
 
 Keep dormant code clearly labeled and isolated. Reactivation requires an explicit plan that updates
 this document, the mirrored context files, threat model, user contract, and tests in the same change.
+
+The one pinned post-harness addition is a bounded `resolve_fact` tool for registered metrics with a
+missing precondition: Tier 0 aliases/derivations, then current-filing Tier 1 exact-span extraction,
+with at most two facts and three searches. Admission requires deterministic parse, explicit
+unit/scale/period, input-contract compatibility, and redundant-derivation agreement within combined
+rounding slack. Tier 2+ sources, generic plugins, subagents, bitemporal redesign, financial mathlib,
+Lean/Z3/SMT, and discovery/alpha systems remain deferred.
 
 ---
 

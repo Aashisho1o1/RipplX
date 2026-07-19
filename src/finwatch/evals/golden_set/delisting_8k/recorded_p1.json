@@ -4,6 +4,7 @@
   "form_type": "8-K",
   "classification": {"overall_severity": "critical"},
   "findings": [{
+    "finding_id": "f1",
     "headline": "Nasdaq issued a delisting determination",
     "severity": "critical",
     "critical_flag": "item_3_01_delisting",

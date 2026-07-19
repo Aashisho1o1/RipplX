@@ -13,10 +13,11 @@ PROMPT_SUITE_VERSION = "v2"
 _FOUNDATION_PLACEHOLDER = "[FOUNDATION BLOCK]"
 
 STAGE_P1 = "P1_extractor"
-_STAGE_VERSIONS = {STAGE_P1: "v4"}
+STAGE_SKEPTIC = "P1_skeptic"
+_STAGE_VERSIONS = {STAGE_P1: "v5", STAGE_SKEPTIC: "v1"}
 # Stage prompts MUST embed the shared foundation block (untrusted-input / prompt-injection
 # defense). ``foundation`` itself is not a stage and carries no placeholder.
-_STAGE_PROMPTS = frozenset({STAGE_P1})
+_STAGE_PROMPTS = frozenset({STAGE_P1, STAGE_SKEPTIC})
 
 
 def _read(name: str) -> str:

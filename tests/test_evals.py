@@ -1,6 +1,8 @@
 """Golden-set eval harness: recorded run, scoring, thresholds, bake-off, report."""
 from __future__ import annotations
 
+import json
+
 from finwatch.evals.golden import load_manifest
 from finwatch.evals.harness import (
     ModelReport,
@@ -125,9 +127,19 @@ def test_bakeoff_survives_a_case_fetch_failure():
             raise RuntimeError("simulated 404")
         return load_case_html(c.id)
 
+    def client_for(case):
+        def respond(system, _user):
+            if "finance Skeptic" in system:
+                return json.dumps({"action": "done", "obligations": []})
+            draft = json.loads(load_recorded_p1(case.id))
+            for index, finding in enumerate(draft.get("findings", []), start=1):
+                finding["finding_id"] = f"f{index}"
+            return json.dumps({"action": "submit", "draft": draft})
+        return FakeLLMClient(responder=respond)
+
     rep = run_model(
         "m",
-        lambda c: FakeLLMClient(responder=lambda _s, _u, cid=c.id: load_recorded_p1(cid)),
+        client_for,
         html_for, cases)
     assert len(rep.scores) == len(cases)   # every case scored — no crash
     crit = [s for s in rep.scores if s.category == "critical"]

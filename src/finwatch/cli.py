@@ -160,11 +160,14 @@ def _run_pipeline(cfg: Config, *, cik: str | None):
     cache_dir = Path(cfg.db_path).parent / "cache" if cfg.db_path != ":memory:" else None
     edgar = EdgarClient(cfg.sec_user_agent, cache_dir=cache_dir)
     llm = LiteLLMClient(cfg.model)
+    skeptic = LiteLLMClient(cfg.skeptic_model) if cfg.skeptic_model else llm
     orch = build_orchestrator(
         repo,
         llm=llm,
+        skeptic_llm=skeptic,
         companyfacts_provider=lambda c: edgar.companyfacts(c),
         model=cfg.model,
+        skeptic_model=cfg.skeptic_model or cfg.model,
     )
 
     def fetch_html(url: str) -> str:

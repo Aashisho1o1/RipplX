@@ -10,6 +10,7 @@ from finwatch.llm.stages import P1Extractor
 from finwatch.metrics.service import MetricsService
 from finwatch.pipeline.orchestrator import Orchestrator
 from finwatch.preprocess.preprocessor import Preprocessor
+from finwatch.presentation.service import PresentationService
 
 FX = Path(__file__).parent / "fixtures"
 TENQ = (FX / "tenq_sample.html").read_text()
@@ -19,15 +20,20 @@ ACCN, CIK = "0000789019-24-000001", "0000789019"
 P1_JSON = json.dumps({
     "accession_number": ACCN, "ticker": "MSFT", "form_type": "10-Q",
     "classification": {"overall_severity": "medium"},
-    "findings": [{"headline": "Revenue rose on services", "severity": "medium",
+    "findings": [{"finding_id": "f1", "headline": "Revenue rose on services", "severity": "medium",
         "critical_flag": None, "evidence": [{
             "accession_number": ACCN, "form_type": "10-Q", "section_key": "mdna",
             "char_start": 98, "char_end": 135,
             "snippet": "Net sales increased 5% year over year"}]}],
     "extraction_confidence": "high", "gaps": [],
 })
+def _respond(system, _user):
+    if "finance Skeptic" in system:
+        return json.dumps({"action": "done", "obligations": []})
+    return json.dumps({"action": "submit", "draft": json.loads(P1_JSON)})
+
 def _orchestrator(repo):
-    llm = FakeLLMClient(responder=lambda _s, _u: P1_JSON)
+    llm = FakeLLMClient(responder=_respond)
     return Orchestrator(
         repo, Preprocessor(repo, now_fn=lambda: "t"),
         P1Extractor(llm, repo, model_label="fake/m", now_fn=lambda: "t"),
@@ -59,7 +65,7 @@ def test_pipeline_end_to_end_passes_and_persists():
 
     # persisted: one P1 analysis with embedded evidence; no parallel claim graph
     stages = {a.stage for a in repo.list_analyses(ACCN)}
-    assert stages == {"P1"}
+    assert stages == {"P1", "P1_TRACE"}
     assert repo.count_verification_results(fa.p1_analysis_id) == len(fa.verification.results)
     progress = {stage.stage: stage for stage in repo.list_filing_stages(ACCN)}
     assert progress["parse"].status == "completed"
@@ -67,6 +73,15 @@ def test_pipeline_end_to_end_passes_and_persists():
     assert progress["extract"].status == "completed"
     assert "signal" not in progress
     assert progress["verify"].status == "completed"
+
+    repo.track_company(CIK, at="t")
+    certificate = PresentationService(repo).certificate(ACCN)
+    assert certificate is not None
+    assert certificate.schema_version == "certificate.v1"
+    assert certificate.published_finding_ids == ["f1"]
+    assert certificate.evidence[0]["section_sha256"]
+    assert certificate.metrics
+    assert all("formula_version" in row for row in certificate.metrics)
 
 
 def test_pipeline_runs_v1_v4_v5_and_v2_data_quality_without_v3():
@@ -91,7 +106,7 @@ def test_launch_pipeline_only_runs_p1():
             raise AssertionError("P3 must not run in the launch pipeline")
         if "portfolio manager and risk officer" in s:
             raise AssertionError("P2 must not run in the launch pipeline")
-        return P1_JSON
+        return _respond(s, _u)
 
     llm = FakeLLMClient(responder=responder)
     orch = Orchestrator(
@@ -102,7 +117,7 @@ def test_launch_pipeline_only_runs_p1():
 
     fa = orch.process_html(filing=repo.get_filing(ACCN), html=TENQ, as_of="2025-05-01")
 
-    assert {a.stage for a in repo.list_analyses(ACCN)} == {"P1"}
+    assert {a.stage for a in repo.list_analyses(ACCN)} == {"P1", "P1_TRACE"}
     assert all("chair the investment committee" not in system for system, _ in llm.calls)
     assert all("portfolio manager and risk officer" not in system for system, _ in llm.calls)
     assert "V3" not in {c.check_id for c in fa.verification.results}

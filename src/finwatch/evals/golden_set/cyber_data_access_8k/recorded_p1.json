@@ -4,6 +4,7 @@
   "form_type": "8-K",
   "classification": {"overall_severity": "critical"},
   "findings": [{
+    "finding_id": "f1",
     "headline": "Threat actor accessed user data",
     "severity": "critical",
     "critical_flag": "cyber_1_05_critical_tier",

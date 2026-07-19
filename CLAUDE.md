@@ -84,8 +84,9 @@ shadow signal. Educational output supports the user's own decision.
   inseparable from one to three exact filing quotations. Finding headlines contain no numbers.
 - Numbers shown as financial metrics come only from SEC XBRL and deterministic Python formulas.
 - Numbers inside qualitative findings may appear only inside exact SEC quotations.
-- Deterministic checks gate publication. If the required checks or the exact browser DTO fail, all
-  LLM-derived output for that filing is withheld; the system does not partially publish it.
+- Deterministic checks gate publication per finding. A bad finding is dropped with typed reason
+  codes; surviving findings and deterministic metrics still publish. Whole-filing withholding is
+  limited to provider/malformed-action breakdown or failed `FORM_SCOPE`/`CRITICAL_COVERAGE`.
 - Verification proves provenance, exactness, schema, and hygiene. It does **not** prove that the
   model's interpretation of importance is correct, so the UI labels findings as AI-selected.
 
@@ -109,27 +110,29 @@ explicit product decision.
 ## 3. Current launch architecture
 
 ```
-EDGAR filing index + primary document ──► download
-                                      ──► P0 parse canonical sections + exact offsets/hashes
-                                      ──► P1 extract ≤3 qualitative, evidence-backed findings
+EDGAR filing index + primary document ──► download ──► P0 canonical sections/hashes
+SEC companyfacts ──► point-in-time XBRL normalization ──► six starter metrics + rounding slack
 
-SEC companyfacts ──► point-in-time XBRL normalization ──► six starter metrics
+section catalog + metrics ──► bounded P1 JSON tool loop ──► compiler ──► one shared repair
+                          ──► finance Skeptic ──► final compiler/per-finding prune
 
-P1 + metrics + stored sections ──► deterministic publication gate
+surviving P1 + metrics + stored sections ──► deterministic publication gate
                                   ├─ V1 numeric provenance
                                   ├─ V4 exact citation integrity
                                   ├─ V5 schema/advice/hygiene
                                   └─ V2 XBRL identities (warning only; never an LLM gate)
                                   ──► exact canonical FilingDigestEntry DTO
                                       ├─ browser API/React
-                                      └─ deterministic Markdown serializer
+                                      ├─ deterministic Markdown serializer
+                                      └─ verification certificate + compact tool trace
 ```
 
 The persisted pipeline ledger has exactly five current stages:
-`download → parse → extract → metrics → verify`.
+`download → parse → metrics → extract → verify`.
 
 P3 is not constructed, so V3 rule re-derivation is `skipped_not_applicable`. P2 is not constructed
-or called. There is one stochastic stage: P1.
+or called. P1 is one bounded provider-neutral harness: a Generator may call five deterministic
+tools, a finance Skeptic may add only finding-local objections, and the compiler is the sole judge.
 
 ### Launch scheduling and retries
 
@@ -137,11 +140,11 @@ or called. There is one stochastic stage: P1.
   run to one of those three form families; amendments remain in their base-form family.
 - If that newest filing is already `verified` or terminally `analyzed`/withheld, the run is a no-op.
   It never falls through to an older filing.
-- Every production retry is a fresh full attempt: download, parse, extract, metrics, verify. No
+- Every production retry is a fresh full attempt: download, parse, metrics, extract, verify. No
   parse-only/extract-only user control and no mixing of artifacts from different attempts.
-- A failed newest filing gets at most two persisted extraction-stage attempts total. Inside one
-  extraction-stage attempt, strict schema parsing permits one repair call, so at most two model
-  calls occur for that attempt.
+- A failed newest filing gets at most two persisted attempts at the active parse/metrics/extract
+  stage. One harness attempt has eight Generator turns, six Generator tool requests, one shared
+  repair, and two Skeptic tool requests; every action is strict JSON and every loop is bounded.
 - The in-process job runner has one worker. Jobs are ephemeral across process restarts; this is an
   accepted alpha limitation, not a durable-queue claim.
 
@@ -249,7 +252,9 @@ Production computes and persists only:
 6. `simple_leverage`
 
 Every result uses the universal `computed | unavailable | not_applicable` envelope, formula version,
-effective `as_of`, and source inputs. The browser DTO also carries the source computation ID. The
+effective `as_of`, and source inputs, including SEC `decimals`. Revenue, net income, CFO, and share
+count also carry `direction_delta`, conservative `direction_slack`, and `direction_basis`; missing
+rounding metadata never becomes zero slack. The browser DTO carries the source computation ID. The
 full formula catalog remains tested research code but is not called, persisted, or presented by the
 launch metrics service. Price, valuation, and holding/portfolio inputs are absent.
 
@@ -263,9 +268,11 @@ dates say “computed as of”; `effective_as_of` remains only an internal DTO f
 ## 9. P1 extraction and LLM boundary
 
 `P1Output` is a strict pydantic contract (`extra="forbid"`): filing identity, severity, zero to
-three findings, extraction confidence, and gaps. Each finding has a qualitative headline with no
-digits or numeric words, controlled severity/critical flag, and one to three exact quotations of at
-most 25 words. Offsets are relative to the named canonical section and must satisfy
+three uniquely identified findings, extraction confidence, and nonblocking gaps. Each finding uses
+`f1`/`f2`/`f3`, a controlled severity/critical flag, and one to three exact quotations of at most 25
+words. Optional `metric_id` and `direction` fields must appear together; the compiler compares them
+against the registry metric's rounding-aware delta. Offsets are server-derived relative to the
+named canonical section and must satisfy
 `section_text[start:end] == snippet`.
 
 Medium/high/critical classifications require a finding; an empty finding list is legitimate only
@@ -274,8 +281,17 @@ corresponding critical, section-backed finding; prompt/evaluation rules cover se
 going-concern, auditor, control, and material-cyber cases. No evidence means no finding. Echoed
 accession, ticker, and form must match trusted filing metadata before persistence.
 
-The combined P1 input is capped at 240,000 characters and output at 2,000 tokens. Production accepts
-one `FINWATCH_MODEL` using the `openai/` or `openrouter/` prefix, with the matching `OPENAI_API_KEY`
+The initial P1 prompt contains only trusted filing/section/metric catalogs. The Generator retrieves
+bounded evidence progressively through `search_sections`, `get_changes`, `get_metric`,
+`get_accounting_checks`, and one `check_draft` preflight; duplicate calls are cached but still spend
+budget. Every turn receives the agenda, validated observations, compiler errors, and remaining
+budget. A second model pass is a one-directional finance Skeptic: it may call the four read tools and
+add typed objections to a specific finding, but never author, approve, or promote a finding. Output
+is capped at 2,000 tokens per call.
+
+Production accepts one `FINWATCH_MODEL` using the `openai/` or `openrouter/` prefix, with an optional
+`FINWATCH_SKEPTIC_MODEL` on the same provider (otherwise it reuses the Generator), and the matching
+`OPENAI_API_KEY`
 or `OPENROUTER_API_KEY`; other providers and base-URL overrides stay out of the launch path. Broader
 provider/model flexibility inside dormant developer utilities is not a production configuration
 promise. CLI/local keys may come from the environment or browser session memory. Hosted participants
@@ -299,13 +315,24 @@ The verifier is deterministic and never edits content to make a check pass.
   questions; regenerating P1 cannot repair source accounting data.
 - **V3:** not applicable because no P3 decision exists in launch.
 
+Before the legacy publication checks, `verify/compiler.py` deterministically anchors evidence,
+rejects unsafe/authored-number headlines, enforces changed-span support where applicable, and checks
+structured metric direction. After the shared repair, findings with local error codes are pruned and
+classification is recomputed; no survivors means a routine metrics-only publication. Dropping a
+required critical finding fails `CRITICAL_COVERAGE` and withholds the filing.
+
 Publication additionally requires a `verified` filing status, persisted passing V1/V4/V5 rows, and
 no blocking failure. `presentation/canonical.py` then constructs the exact `FilingDigestEntry` used
 by both surfaces: it accepts at most three findings, attaches the trusted SEC URL and actual full
 section SHA-256, rechecks exact offsets/quotes, rejects duplicate/ambiguous evidence, and runs
-`verify/presentation.py` over the final DTO. Any error withholds every LLM-derived byte for that
-filing. Browser projections and `/api/jobs` expose only fixed safe messages; persisted raw stage
-details are never projected to those surfaces.
+`verify/presentation.py` over the final DTO. Candidate-local projection errors drop only that
+candidate; identity, persisted-gate, or final-DTO failures withhold the filing. Browser projections
+and `/api/jobs` expose only fixed safe messages; persisted raw stage details are never projected.
+
+The final P1 stays in stage `P1`; the validated harness trace and exact metric snapshot stay in
+`P1_TRACE`. `GET /api/filings/{accession}/certificate` returns an owner-scoped, stable-hash audit
+certificate. The filing UI shows only the tool count, compact trace, dropped codes, and download;
+raw model output and provider exceptions never cross the API boundary.
 
 ---
 
@@ -372,9 +399,15 @@ not a multi-provider production surface.
 
 ## Roadmap — out of scope unless explicitly requested
 
-P2/P3 or signal reactivation · broker import/sync · portfolio accounting · Form 4 tracking · news ·
+**Pinned next iteration after harness validation:** bounded `resolve_fact` Tier 0→1 only, triggered
+by an existing metric's missing precondition. It may admit at most two facts from the current SEC
+filing after exact-span, deterministic parse, unit/scale/period, input-contract, and redundant-
+derivation checks; no web/IR/news/market sources.
+
+Otherwise deferred: P2/P3 or signal reactivation · broker import/sync · portfolio accounting · Form 4 tracking · news ·
 earnings calls · sector-relative valuation · durable distributed jobs · teams/roles · historical
-analysis replay · MCP wrapper · deeper symbolic reasoning.
+analysis replay · provider-native function calling · generic plugins/subagents · bitemporal redesign
+· financial mathlib · Lean/Z3/SMT/AI-Hilbert · deeper symbolic reasoning.
 
 ## Where to find things
 
@@ -383,10 +416,10 @@ analysis replay · MCP wrapper · deeper symbolic reasoning.
 | Launch status and quickstart | `README.md` |
 | Current module/data-flow contracts | `SYSTEM_DESIGN.md` |
 | DB DDL (single fresh schema, no migrations) | `src/finwatch/db/schema.sql`, `db/database.py` |
-| Extraction prompt and injection rules | `src/finwatch/prompts/foundation.md`, `P1_extractor.md` |
+| Harness/compiler/prompts | `src/finwatch/llm/harness.py`, `verify/compiler.py`, `prompts/P1_*.md` |
 | Starter metric catalog/service | `src/finwatch/metrics/catalog.py`, `service.py` |
 | Launch pipeline and scheduling | `src/finwatch/pipeline/orchestrator.py`, `run.py`, `progress.py` |
-| Publication checks | `src/finwatch/verify/checks.py`, `verify/presentation.py` |
+| Publication checks | `src/finwatch/verify/compiler.py`, `checks.py`, `verify/presentation.py` |
 | Canonical projection and renderer | `src/finwatch/presentation/`, `src/finwatch/digest/render.py` |
 | Web/API/security | `src/finwatch/web/`, `web/` |
 | 12-case golden set | `src/finwatch/evals/golden_set/manifest.yaml` |

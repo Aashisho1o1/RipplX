@@ -66,7 +66,7 @@ def test_raw_p1_contract_rejects_more_than_three_findings():
         conn.close()
 
 
-def test_one_bad_evidence_span_withholds_every_finding():
+def test_one_bad_evidence_span_drops_only_its_finding():
     conn = build_demo_db()
     try:
         repo = Repo(conn)
@@ -84,8 +84,8 @@ def test_one_bad_evidence_span_withholds_every_finding():
 
         entry = _entry(repo)
 
-        assert entry.withheld is True
-        assert entry.findings == []
+        assert entry.withheld is False
+        assert [finding.headline for finding in entry.findings] == ["Going concern doubt"]
     finally:
         conn.close()
 
@@ -126,7 +126,7 @@ def test_blocking_verifier_failure_exposes_no_llm_content():
         ("high", ["Input was truncated before controls."]),
     ],
 )
-def test_incomplete_persisted_extraction_is_withheld_despite_old_passes(
+def test_model_reported_confidence_and_gaps_do_not_override_compiler_passes(
     confidence: str, gaps: list[str]
 ):
     conn = build_demo_db()
@@ -145,8 +145,8 @@ def test_incomplete_persisted_extraction_is_withheld_despite_old_passes(
 
         entry = _entry(repo)
 
-        assert entry.withheld is True
-        assert entry.findings == []
+        assert entry.withheld is False
+        assert len(entry.findings) == 2
     finally:
         conn.close()
 

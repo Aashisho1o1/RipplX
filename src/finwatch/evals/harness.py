@@ -8,6 +8,7 @@ architecture — re-run the bake-off whenever the model landscape shifts.
 """
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
@@ -195,9 +196,19 @@ def run_model(
 def run_recorded(cases: list[GoldenCase] | None = None) -> ModelReport:
     """Deterministic run over the bundled recorded responses (no network / no keys)."""
     cases = cases or load_manifest()
+    def recorded_client(case: GoldenCase) -> FakeLLMClient:
+        def respond(system: str, _user: str) -> str:
+            if "finance Skeptic" in system:
+                return json.dumps({"action": "done", "obligations": []})
+            draft = json.loads(load_recorded_p1(case.id))
+            for index, finding in enumerate(draft.get("findings", []), start=1):
+                finding.setdefault("finding_id", f"f{index}")
+            return json.dumps({"action": "submit", "draft": draft})
+        return FakeLLMClient(responder=respond)
+
     return run_model(
         "recorded",
-        lambda c: FakeLLMClient(responder=lambda _s, _u, cid=c.id: load_recorded_p1(cid)),
+        recorded_client,
         lambda c: load_case_html(c.id),
         cases,
     )

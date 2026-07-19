@@ -29,18 +29,24 @@ ACCN, CIK = "0000789019-24-000070", "0000789019"
 _P1 = json.dumps({
     "accession_number": ACCN, "ticker": "MSFT", "form_type": "10-Q",
     "classification": {"overall_severity": "medium"},
-    "findings": [{"headline": "Services growth", "severity": "medium",
+    "findings": [{"finding_id": "f1", "headline": "Services growth", "severity": "medium",
         "critical_flag": None, "evidence": [{
             "accession_number": ACCN, "form_type": "10-Q", "section_key": "mdna",
             "snippet": "Net sales increased 5% year over year"}]}],
     "extraction_confidence": "high", "gaps": [],
 })
+def _harness_response(system, draft):
+    if "finance Skeptic" in system:
+        return json.dumps({"action": "done", "obligations": []})
+    return json.dumps({"action": "submit", "draft": json.loads(draft)})
+
+
 def _responder(system, _user):
     if "chair the investment committee" in system:
         raise AssertionError("P3 must not run in the launch pipeline")
     if "portfolio manager and risk officer" in system:
         raise AssertionError("P2 must not run in the launch pipeline")
-    return _P1
+    return _harness_response(system, _P1)
 
 
 def _seed(repo, *, owned=1, url="https://www.sec.gov/x.htm"):
@@ -91,7 +97,7 @@ def test_process_latest_runs_pipeline_persists_and_digest_renders():
     assert results[0].verdict in ("PASS", "PASS_WITH_WARNINGS")
 
     # every stage persisted; filing marked processed; digest now has content
-    assert {a.stage for a in repo.list_analyses(ACCN)} == {"P1"}
+    assert {a.stage for a in repo.list_analyses(ACCN)} == {"P1", "P1_TRACE"}
     assert repo.get_filing(ACCN).status in ("verified", "analyzed")
     assert repo.get_filing(ACCN).processed_at == "t"
     md = render_digest(repo, since="2024-01-01").markdown
@@ -108,14 +114,14 @@ def test_server_anchors_evidence_and_ignores_model_supplied_offsets():
     wrong_offsets = json.dumps({
         "accession_number": ACCN, "ticker": "MSFT", "form_type": "10-Q",
         "classification": {"overall_severity": "medium"},
-        "findings": [{"headline": "Services growth", "severity": "medium",
+        "findings": [{"finding_id": "f1", "headline": "Services growth", "severity": "medium",
             "critical_flag": None, "evidence": [{
                 "accession_number": ACCN, "form_type": "10-Q", "section_key": "mdna",
                 "char_start": 0, "char_end": 3,  # deliberately wrong
                 "snippet": "Net sales increased 5% year over year"}]}],
         "extraction_confidence": "high", "gaps": [],
     })
-    llm = FakeLLMClient(responder=lambda _s, _u: wrong_offsets)
+    llm = FakeLLMClient(responder=lambda system, _u: _harness_response(system, wrong_offsets))
     orch = build_orchestrator(repo, llm=llm, companyfacts_provider=lambda _c: MSFT_CF,
                               model="fake/model", now_fn=lambda: "t")
     result = process_latest(repo, orch, fetch_html=lambda _u: TENQ, now_fn=lambda: "t")
@@ -137,19 +143,22 @@ def test_non_verbatim_evidence_snippet_is_withheld():
     fabricated = json.dumps({
         "accession_number": ACCN, "ticker": "MSFT", "form_type": "10-Q",
         "classification": {"overall_severity": "medium"},
-        "findings": [{"headline": "Fabricated claim", "severity": "medium",
+        "findings": [{"finding_id": "f1", "headline": "Fabricated claim", "severity": "medium",
             "critical_flag": None, "evidence": [{
                 "accession_number": ACCN, "form_type": "10-Q", "section_key": "mdna",
                 "snippet": "This exact sentence never appears in the filing text at all."}]}],
         "extraction_confidence": "high", "gaps": [],
     })
-    llm = FakeLLMClient(responder=lambda _s, _u: fabricated)
+    llm = FakeLLMClient(responder=lambda system, _u: _harness_response(system, fabricated))
     orch = build_orchestrator(repo, llm=llm, companyfacts_provider=lambda _c: MSFT_CF,
                               model="fake/model", now_fn=lambda: "t")
     result = process_latest(repo, orch, fetch_html=lambda _u: TENQ, now_fn=lambda: "t")
 
-    assert not (result[0].ok and not result[0].withheld)  # never published
+    assert result[0].ok and not result[0].withheld  # finding-local failure; metrics still publish
     assert "Fabricated claim" not in render_digest(repo, since="2024-01-01").markdown
+    trace = json.loads(repo.latest_analysis(ACCN, "P1_TRACE").output_json)
+    assert trace["outcome"] == "metrics_only"
+    assert trace["dropped_findings"][0]["error_codes"] == ["QUOTE_NOT_EXACT"]
 
 
 def test_process_is_idempotent():
@@ -388,12 +397,14 @@ def test_transient_verify_failure_retries_one_fresh_complete_attempt(monkeypatch
     updated_p1["findings"][0]["evidence"][0]["snippet"] = (
         "Net sales decreased 7% year over year"
     )
-    llm.responder = lambda _system, _user: json.dumps(updated_p1)
+    llm.responder = lambda system, _user: _harness_response(
+        system, json.dumps(updated_p1)
+    )
     retry = process_latest(repo, orch, fetch_html=lambda _u: updated_html, now_fn=lambda: "t2")
     assert retry[0].ok
     analyses = [a for a in repo.list_analyses(ACCN) if a.stage == "P1"]
     assert len(analyses) == 2
-    assert len(llm.calls) == p1_calls + 1
+    assert len(llm.calls) == p1_calls + 2  # Generator + finance Skeptic
     assert len(repo.list_computations("MSFT")) == first_computation_count * 2
     latest = json.loads(repo.latest_analysis(ACCN, "P1").output_json)
     assert latest["findings"][0]["evidence"][0]["snippet"] == (
@@ -429,9 +440,10 @@ def test_failed_filing_stops_after_one_full_retry_and_third_click_is_free():
 
     assert not first[0].ok and not second[0].ok
     assert third == []
-    assert len(llm.calls) == calls_after_retry == 2
-    extract = repo.get_filing_stage(ACCN, "extract")
-    assert extract is not None and extract.attempts == 2
+    assert len(llm.calls) == calls_after_retry == 0  # metrics fail before paid model work
+    metrics = repo.get_filing_stage(ACCN, "metrics")
+    assert metrics is not None and metrics.attempts == 2
+    assert repo.get_filing_stage(ACCN, "extract") is None
     assert repo.get_filing(ACCN).status == "failed"
     assert "withheld — could not be verified" in render_digest(
         repo, since="2024-01-01"

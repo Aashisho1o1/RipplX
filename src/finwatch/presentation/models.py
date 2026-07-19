@@ -102,12 +102,47 @@ class PipelineStageView(BaseModel):
     diagnostics: dict = Field(default_factory=dict)
 
 
+class DroppedFindingView(BaseModel):
+    finding_id: str
+    error_codes: list[str] = Field(default_factory=list)
+
+
+class ResearchTraceView(BaseModel):
+    outcome: Literal["published", "partial", "metrics_only", "withheld"]
+    terminal_reason: str
+    tool_call_count: int
+    tool_names: list[str] = Field(default_factory=list)
+    repair_used: bool
+    dropped_findings: list[DroppedFindingView] = Field(default_factory=list)
+
+
+class CertificateView(BaseModel):
+    schema_version: str
+    certificate_sha256: str
+    filing: dict
+    outcome: str
+    terminal_reason: str
+    published_finding_ids: list[str] = Field(default_factory=list)
+    dropped_findings: list[DroppedFindingView] = Field(default_factory=list)
+    classification: str | None = None
+    evidence: list[dict] = Field(default_factory=list)
+    metrics: list[dict] = Field(default_factory=list)
+    verification: list[VerificationCheckView] = Field(default_factory=list)
+    tool_calls: list[dict] = Field(default_factory=list)
+    agenda: list[dict] = Field(default_factory=list)
+    models: dict = Field(default_factory=dict)
+    prompts: dict = Field(default_factory=dict)
+    budgets: dict = Field(default_factory=dict)
+
+
 class FilingDetailView(BaseModel):
     filing: FilingDigestEntry
     verified_numbers: IssuerMetricsView | None = None
     verification: VerificationView | None = None
     withheld_reason: str | None = None
     pipeline: list[PipelineStageView] = Field(default_factory=list)
+    research: ResearchTraceView | None = None
+    certificate_url: str | None = None
     disclaimer: str = DISCLAIMER
 
 

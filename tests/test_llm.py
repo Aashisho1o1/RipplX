@@ -16,7 +16,9 @@ from finwatch.llm.router import (
     extract_json,
 )
 from finwatch.llm.schemas import P1Output
-from finwatch.llm.stages import P1_MAX_INPUT_CHARS, P1Extractor, StageError
+from finwatch.llm.stages import P1Extractor, StageError
+from finwatch.metrics.envelope import MetricsBundle
+from finwatch.verify.compiler import compile_draft
 
 VALID_P1 = {
     "accession_number": "a-1", "ticker": "T", "form_type": "8-K",
@@ -36,7 +38,8 @@ def _evidence(**over):
 
 def _finding(**over):
     value = {
-        "headline": "Results changed", "severity": "medium", "critical_flag": None,
+        "finding_id": "f1", "headline": "Results changed", "severity": "medium",
+        "critical_flag": None,
         "evidence": [_evidence()],
     }
     value.update(over)
@@ -48,8 +51,8 @@ def test_prompt_loader_splices_foundation_and_versions():
     text, version = load_prompt(STAGE_P1)
     assert "[FOUNDATION BLOCK]" not in text
     assert "R1. NUMBERS" in text            # foundation content spliced in
-    assert "senior buy-side research analyst" in text  # P1 role
-    assert version == "P1_extractor.v4+foundation.v2"
+    assert "filing-research Generator" in text
+    assert version == "P1_extractor.v5+foundation.v2"
     assert '"findings"' in text and '"critical_flag"' in text
     assert "the server derives them" in text  # offsets are server-anchored, not model-supplied
 
@@ -198,21 +201,22 @@ def test_critical_flag_is_strictly_controlled_and_severity_gated():
     assert valid.findings[0].critical_flag == "going_concern"
 
 
-def test_p1_rejects_numbers_in_headlines_and_severity_inconsistency():
+def test_p1_compiler_localizes_numbers_and_schema_keeps_severity_consistent():
     from pydantic import ValidationError
 
-    with pytest.raises(ValidationError):
-        P1Output.model_validate({
+    for headline in ("Revenue rose 12 percent", "Revenue rose fifty percent"):
+        draft = P1Output.model_validate({
             **VALID_P1,
             "classification": {"overall_severity": "medium"},
-            "findings": [_finding(headline="Revenue rose 12 percent")],
+            "findings": [_finding(headline=headline)],
         })
-    with pytest.raises(ValidationError):
-        P1Output.model_validate({
-            **VALID_P1,
-            "classification": {"overall_severity": "medium"},
-            "findings": [_finding(headline="Revenue rose fifty percent")],
-        })
+        result = compile_draft(
+            draft,
+            trusted_meta={"accession_number": "a-1", "ticker": "T", "form_type": "8-K"},
+            sections={"item_2_02": {"text": "hello"}},
+            metrics=MetricsBundle(),
+        )
+        assert "AUTHORED_NUMBER" in {issue.code for issue in result.issues}
     with pytest.raises(ValidationError):
         P1Output.model_validate({
             **VALID_P1,
@@ -227,22 +231,25 @@ def test_p1_rejects_numbers_in_headlines_and_severity_inconsistency():
         })
 
 
-def test_finding_headline_rejects_gerund_trade_advice_and_number_words():
-    # UX1 seam (P1 schema): the expanded policy must reject gerund/positive-recommendation
-    # advice and the added number words in an authored headline, not just the old verbs.
-    from pydantic import ValidationError
-
+def test_finding_headline_policy_is_a_finding_local_compiler_error():
     for headline in (
         "We recommend buying the shares",
         "Investors should consider adding shares",
         "Revenue quadrupled this year",
     ):
-        with pytest.raises(ValidationError):
-            P1Output.model_validate({
-                **VALID_P1,
-                "classification": {"overall_severity": "medium"},
-                "findings": [_finding(headline=headline)],
-            })
+        draft = P1Output.model_validate({
+            **VALID_P1,
+            "classification": {"overall_severity": "medium"},
+            "findings": [_finding(headline=headline)],
+        })
+        result = compile_draft(
+            draft,
+            trusted_meta={"accession_number": "a-1", "ticker": "T", "form_type": "8-K"},
+            sections={"item_2_02": {"text": "hello"}},
+            metrics=MetricsBundle(),
+        )
+        codes = {issue.code for issue in result.issues}
+        assert codes & {"UNSAFE_LANGUAGE", "AUTHORED_NUMBER"}
 
 
 def _p2_record(thesis_jid, net_jid):
@@ -269,9 +276,12 @@ def test_p1_extractor_persists_embedded_findings_without_claim_rows():
         "classification": {"overall_severity": "medium"},
         "findings": [_finding()],
     }
-    llm = FakeLLMClient(responder=lambda _s, _u: json.dumps(p1_json))
+    llm = FakeLLMClient(responder=lambda system, _u: json.dumps(
+        {"action": "done", "obligations": []}
+        if "finance Skeptic" in system else {"action": "submit", "draft": p1_json}
+    ))
     out, aid, _ = P1Extractor(llm, repo, model_label="fake/m", now_fn=lambda: "t").run(
-        filing_meta={"accession_number": "a-1", "ticker": "T"},
+        filing_meta={"accession_number": "a-1", "ticker": "T", "form_type": "8-K"},
         sections={"item_2_02": {"text": "hello"}})
     assert isinstance(out, P1Output)
     stored = repo.get_analysis(aid)
@@ -296,83 +306,89 @@ def test_p1_trusted_identity_mismatch_never_persists():
         "accession_number": "attacker-accession",
         "ticker": "EVIL",
     }
-    llm = FakeLLMClient(responder=lambda _s, _u: json.dumps(wrong))
+    llm = FakeLLMClient(responder=lambda _s, _u: json.dumps(
+        {"action": "submit", "draft": wrong}
+    ))
 
-    with pytest.raises(StageError, match="trusted filing metadata"):
+    with pytest.raises(StageError, match="form_scope"):
         P1Extractor(llm, repo).run(
             filing_meta={"accession_number": "a-1", "ticker": "T", "form_type": "8-K"},
             sections={},
         )
 
     assert len(llm.calls) == 2
-    assert repo.list_analyses("a-1") == []
+    assert repo.latest_analysis("a-1", "P1") is None
+    assert repo.latest_analysis("a-1", "P1_TRACE") is not None
 
 
 def test_canonical_critical_8k_item_cannot_be_omitted_or_downgraded():
     repo = Repo(init_db(":memory:"))
-    llm = FakeLLMClient(responder=lambda _s, _u: json.dumps(VALID_P1))
+    llm = FakeLLMClient(responder=lambda _s, _u: json.dumps(
+        {"action": "submit", "draft": VALID_P1}
+    ))
 
-    with pytest.raises(StageError, match="item_4_02_non_reliance"):
+    with pytest.raises(StageError, match="critical_coverage"):
         P1Extractor(llm, repo).run(
             filing_meta={"accession_number": "a-1", "ticker": "T", "form_type": "8-K"},
             sections={"item_4_02": {"text": "Statements should no longer be relied upon."}},
         )
 
     assert len(llm.calls) == 2
-    assert repo.list_analyses("a-1") == []
+    assert repo.latest_analysis("a-1", "P1") is None
+    assert repo.latest_analysis("a-1", "P1_TRACE") is not None
 
 
-def test_oversize_p1_input_is_rejected_before_any_llm_call():
+def test_large_section_is_progressively_disclosed_not_put_in_initial_prompt():
     repo = Repo(init_db(":memory:"))
-    llm = FakeLLMClient(responder=lambda _s, _u: json.dumps(VALID_P1))
+    llm = FakeLLMClient(responder=lambda _s, _u: json.dumps(
+        {"action": "submit", "draft": VALID_P1}
+    ))
 
-    with pytest.raises(StageError, match="character launch limit"):
-        P1Extractor(llm, repo).run(
-            filing_meta={"accession_number": "a-1", "ticker": "T"},
-            sections={"mdna": {"text": "x" * P1_MAX_INPUT_CHARS}},
-        )
+    P1Extractor(llm, repo).run(
+        filing_meta={"accession_number": "a-1", "ticker": "T", "form_type": "8-K"},
+        sections={"mdna": {"text": "x" * 240_000}},
+    )
 
-    assert llm.calls == []
-    assert repo.conn.execute("SELECT COUNT(*) FROM analyses").fetchone()[0] == 0
+    assert len(llm.calls) == 1
+    assert "x" * 1_000 not in llm.calls[0][1]
 
 
 def test_p1_extractor_repairs_one_schema_invalid_response():
     repo = Repo(init_db(":memory:"))
 
     def respond(_system, user):
-        if '"_schema_repair"' in user:
-            return json.dumps(VALID_P1)
-        return json.dumps({**VALID_P1, "findings": [{"headline": "unsupported"}]})
+        if '"last_error": "INVALID_ACTION"' in user:
+            return json.dumps({"action": "submit", "draft": VALID_P1})
+        return json.dumps({"action": "submit", "surprise": "invalid"})
 
     llm = FakeLLMClient(responder=respond)
     out, _, _ = P1Extractor(llm, repo).run(
-        filing_meta={"accession_number": "a-1", "ticker": "T"}, sections={}
+        filing_meta={"accession_number": "a-1", "ticker": "T", "form_type": "8-K"},
+        sections={},
     )
     assert out.findings == []
     assert len(llm.calls) == 2
 
 
 def test_schema_repair_prompt_does_not_leak_validation_error_text_to_model():
-    # LOW-9: pydantic's ValidationError names the exact failed constraint (here it
-    # echoes the bad input value). That detail must NOT be fed back to the model on the
-    # repair attempt — the schema alone drives a good-faith repair. Adversarial filing
-    # content should not get a precise hint about how validation failed.
+    # Invalid model output is never echoed back; only a controlled error code is.
     repo = Repo(init_db(":memory:"))
     sentinel = "ZZZSENTINEL"
 
     def respond(_system, user):
-        if '"_schema_repair"' in user:
-            return json.dumps(VALID_P1)
-        return json.dumps({**VALID_P1, "extraction_confidence": sentinel})
+        if '"last_error": "INVALID_ACTION"' in user:
+            return json.dumps({"action": "submit", "draft": VALID_P1})
+        return json.dumps({"action": "submit", "draft": sentinel})
 
     llm = FakeLLMClient(responder=respond)
     P1Extractor(llm, repo).run(
-        filing_meta={"accession_number": "a-1", "ticker": "T"}, sections={})
+        filing_meta={"accession_number": "a-1", "ticker": "T", "form_type": "8-K"},
+        sections={},
+    )
 
     assert len(llm.calls) == 2
     repair_user = llm.calls[1][1]
-    assert "_schema_repair" in repair_user and "json_schema" in repair_user
-    assert "validation_error" not in repair_user
+    assert '"last_error": "INVALID_ACTION"' in repair_user
     assert sentinel not in repair_user
 
 
@@ -382,10 +398,18 @@ def test_more_than_three_findings_is_stage_error_and_leaves_no_orphan_row():
     invalid = {
         **VALID_P1,
         "classification": {"overall_severity": "medium"},
-        "findings": [_finding(headline=name) for name in ("Alpha", "Beta", "Gamma", "Delta")],
+        "findings": [
+            _finding(finding_id=f"f{index}", headline=name)
+            for index, name in enumerate(("Alpha", "Beta", "Gamma", "Delta"), start=1)
+        ],
     }
-    llm = FakeLLMClient(responder=lambda _s, _u: json.dumps(invalid))
+    llm = FakeLLMClient(responder=lambda _s, _u: json.dumps(
+        {"action": "submit", "draft": invalid}
+    ))
     with pytest.raises(StageError):
         P1Extractor(llm, repo).run(
             filing_meta={"accession_number": "a-1", "ticker": "T"}, sections={})
-    assert repo.conn.execute("SELECT COUNT(*) FROM analyses").fetchone()[0] == 0
+    assert repo.latest_analysis("a-1", "P1") is None
+    trace = repo.latest_analysis("a-1", "P1_TRACE")
+    assert trace is not None
+    assert json.loads(trace.output_json)["terminal_reason"] == "malformed_action_breakdown"

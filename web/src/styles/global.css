@@ -270,6 +270,10 @@ textarea.input { min-height: 100px; resize: vertical; }
 .pipeline-stage strong, .pipeline-stage small { display: block; overflow: hidden; text-overflow: ellipsis; }
 .pipeline-stage strong { color: var(--color-ink); font-size: 11px; text-transform: capitalize; }
 .pipeline-stage small { margin-top: 3px; color: var(--color-faint); font-size: 9px; white-space: nowrap; }
+.research-audit { margin-top: 16px; padding-top: 14px; border-top: var(--border-hair); }
+.research-audit summary { cursor: pointer; color: var(--color-body); font-weight: 650; }
+.research-audit-body { display: grid; gap: 10px; padding-top: 12px; }
+.research-audit-body p { margin: 0; }
 
 .setup { position: relative; display: grid; min-height: 100vh; place-items: center; overflow: hidden; padding: 54px 24px; background: var(--color-sidebar); }
 .watermark { position: absolute; width: 720px; height: 720px; border: 1px solid rgba(204, 235, 221, .07); border-radius: 50%; box-shadow: 0 0 0 90px rgba(204, 235, 221, .025), 0 0 0 180px rgba(204, 235, 221, .014); }

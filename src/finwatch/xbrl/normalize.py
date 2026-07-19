@@ -97,6 +97,7 @@ class Fact(BaseModel):
     tag: str
     unit: str
     value: FiniteFloat
+    decimals: Optional[str] = None
     start: Optional[str] = None   # ISO date for durations
     end: Optional[str] = None     # ISO date: duration end, or instant date
     fy: Optional[int] = None
@@ -129,7 +130,7 @@ class ResolvedFact(BaseModel):
         f = self.fact
         return InputUsed(
             concept=self.concept, tag=f.tag, taxonomy=f.taxonomy,
-            value=f.value, unit_ref=f.unit, decimals=None,
+            value=f.value, unit_ref=f.unit, decimals=f.decimals,
             period_start=f.start,
             period_end=None if f.is_instant else f.end,
             instant=f.end if f.is_instant else None,
@@ -168,6 +169,7 @@ class FactStore:
             out.append(Fact(
                 taxonomy=entry.taxonomy, tag=entry.tag, unit=entry.unit,
                 value=entry.value,
+                decimals=None if e.get("decimals") is None else str(e.get("decimals")),
                 start=e.get("start"), end=e.get("end"),
                 fy=e.get("fy"), fp=e.get("fp"), form=e.get("form"),
                 accn=e.get("accn"), filed=e.get("filed"),

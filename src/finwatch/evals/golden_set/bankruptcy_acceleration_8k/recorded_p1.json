@@ -5,6 +5,7 @@
   "classification": {"overall_severity": "critical"},
   "findings": [
     {
+      "finding_id": "f1",
       "headline": "Voluntary bankruptcy cases commenced",
       "severity": "critical",
       "critical_flag": "item_1_03_bankruptcy",
@@ -18,6 +19,7 @@
       }]
     },
     {
+      "finding_id": "f2",
       "headline": "Debt obligations accelerated",
       "severity": "critical",
       "critical_flag": "item_2_04_acceleration",

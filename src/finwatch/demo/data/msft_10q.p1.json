@@ -4,6 +4,7 @@
   "form_type": "10-Q",
   "classification": {"overall_severity": "medium"},
   "findings": [{
+    "finding_id": "f1",
     "headline": "Quarterly revenue increased",
     "severity": "medium",
     "critical_flag": null,

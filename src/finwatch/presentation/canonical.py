@@ -133,7 +133,6 @@ def build_filing_entry(repo: Repo, view: FilingProjection) -> FilingDigestEntry:
         repo.list_filing_sections(view.filing.accession_number)
     )
     findings: list[FindingView] = []
-    candidate_errors: list[str] = []
     seen_evidence: set[tuple[tuple[str, int, int], ...]] = set()
     for source_index, candidate in enumerate(view.p1.findings):
         evidence, errors = _exact_evidence(
@@ -145,29 +144,24 @@ def build_filing_entry(repo: Repo, view: FilingProjection) -> FilingDigestEntry:
             entry.edgar_url,
         )
         if errors:
-            candidate_errors.extend(errors)
             continue
         evidence_key = tuple(
             sorted((row.section_key, row.char_start, row.char_end) for row in evidence)
         )
         if evidence_key in seen_evidence:
-            candidate_errors.append("duplicate evidence-backed finding")
             continue
         seen_evidence.add(evidence_key)
         try:
             findings.append(
                 FindingView(
-                    finding_id=f"finding-{source_index + 1}",
+                    finding_id=candidate.finding_id,
                     headline=candidate.headline,
                     severity=candidate.severity.upper(),
                     evidence=evidence,
                 )
             )
         except Exception:  # noqa: BLE001 - invalid LLM-authored display text fails closed
-            candidate_errors.append("finding does not satisfy the launch output contract")
-
-    if candidate_errors:
-        return _withhold(view)
+            continue
 
     findings.sort(key=lambda row: (_SEVERITY_RANK[row.severity], row.finding_id))
     entry = entry.model_copy(update={"findings": findings[:3]})
