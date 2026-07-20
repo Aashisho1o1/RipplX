@@ -86,19 +86,35 @@ def test_brief_excludes_unsupported_forms_for_tracked_companies():
         conn.close()
 
 
-def test_share_count_display_is_neutral_and_tiny_changes_render_flat():
+def test_share_count_display_follows_the_deterministic_direction():
+    """Displayed direction must be the gate's verdict, not a second heuristic.
+
+    This previously asserted the output of a hard-coded +/-0.0005 band applied to the
+    displayed percentage, on a fixture that carried no direction metadata at all. That
+    pinned a divergence: the deterministic gate judges direction against the SEC
+    `decimals` rounding slack, so it could prove a decrease on a filing whose displayed
+    percentage rounds to 0.0% and the page would still read "share count flat" — while
+    a model finding claiming "flat" was dropped as METRIC_CONTRADICTION on the same page.
+    """
     base = MetricResult(
         metric="share_count_change",
         status="computed",
         value=-0.000428,
-        formula_version="share_count_change.v2",
+        formula_version="share_count_change.v4",
         as_of="2024-04-25",
+    )
+    flat = base.model_copy(update={"direction_delta": 0.0, "direction_slack": 1000.0})
+    down = base.model_copy(
+        update={"value": -0.01, "direction_delta": -4_000_000.0, "direction_slack": 1.0}
+    )
+    up = base.model_copy(
+        update={"value": 0.01, "direction_delta": 4_000_000.0, "direction_slack": 1.0}
     )
 
     values = (
-        format_metric_value(base),
-        format_metric_value(base.model_copy(update={"value": -0.01})),
-        format_metric_value(base.model_copy(update={"value": 0.01})),
+        format_metric_value(flat),
+        format_metric_value(down),
+        format_metric_value(up),
     )
     assert values == (
         "0.0% YoY (share count flat)",
@@ -106,6 +122,22 @@ def test_share_count_display_is_neutral_and_tiny_changes_render_flat():
         "+1.0% YoY (share count increased)",
     )
     assert all(word not in " ".join(values).lower() for word in ("buyback", "dilution"))
+
+    # A proven decrease whose displayed percentage rounds to 0.0% must not read "flat".
+    proven_down_but_tiny = base.model_copy(
+        update={"direction_delta": -4_000_000.0, "direction_slack": 1.0}
+    )
+    assert format_metric_value(proven_down_but_tiny) == "0.0% YoY (share count decreased)"
+
+    # Without direction metadata the gate has no opinion and the display falls back to
+    # the value. This path is the PRODUCTION path: the SEC companyfacts API ships no
+    # `decimals` (zero occurrences across every cached issuer payload and recorded
+    # fixture), so deferring to deterministic_direction alone would delete the
+    # direction clause for every real issuer.
+    assert format_metric_value(base) == "0.0% YoY (share count flat)"
+    assert format_metric_value(
+        base.model_copy(update={"value": -0.017})
+    ) == "-1.7% YoY (share count decreased)"
 
 
 def test_simple_leverage_is_labeled_as_an_accounting_proxy():

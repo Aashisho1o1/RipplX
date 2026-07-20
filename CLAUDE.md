@@ -315,7 +315,9 @@ The verifier is deterministic and never edits content to make a check pass.
 - **V1 numeric provenance:** the shared authored-text policy rejects quantities, trade instructions,
   price targets, first-person valuation, and forbidden vocabulary from P1-authored headlines.
   Numeric filing content remains allowed inside declared exact evidence spans; displayed metric
-  numbers come from persisted starter computations.
+  numbers come from persisted starter computations. V1 and V5 judge the same unit the compiler
+  judges — one authored headline and one rendered line at a time — so a violation is always
+  attributable to a single finding and is pruned rather than failing the run.
 - **V4 citation integrity:** accession, section, bounds, exact substring, and stored source text are
   checked.
 - **V5 schema and hygiene:** strict P1 schema, disclaimer, no trade instructions/price targets, and

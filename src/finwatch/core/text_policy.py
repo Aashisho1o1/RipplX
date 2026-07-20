@@ -16,45 +16,85 @@ _AUTHORED_QUANTITY = re.compile(
     r"thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|"
     r"thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|thousand|million|"
     r"billion|trillion|percent|percentage|double|doubled|triple|tripled|"
-    r"quadruple|quadrupled|quintuple|quintupled|half|halved|twice|thrice|"
+    r"quadruple|quadrupled|quintuple|quintupled|halved|twice|thrice|"
     r"twofold|threefold|fourfold|fivefold|sixfold|sevenfold|eightfold|ninefold|"
-    r"tenfold|dozens?|scores?|quarters?|fractions?|fractional)\b|"
-    # Fraction phrasing ("a third", "a tenth"). A bare ordinal is deliberately not
-    # matched so rank prose ("its third-largest customer") is not read as a quantity.
-    r"\ba\s+(?:third|fourth|fifth|sixth|seventh|eighth|ninth|tenth)\b|"
+    r"tenfold|dozens?|scores?|fractions?|fractional)\b|"
+    # Fraction phrasing ("a third", "a quarter", "a tenth"). A bare ordinal is
+    # deliberately not matched so rank prose ("its third-largest customer") is not read
+    # as a quantity, and a following hyphen is excluded so compound nouns ("a
+    # third-party provider" — the canonical Item 1.05 cyber headline) are not either.
+    # Matching the fraction phrasing rather than the bare noun is what separates the
+    # magnitude "increased by a quarter" from the period "in the fourth quarter"; the
+    # latter is unavoidable in Item 4.02 non-reliance headlines.
+    r"\ba\s+(?:quarter|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth)\b(?!-)|"
+    # "half" is a magnitude ("cut in half", "half the workforce") except in the
+    # period senses a filing headline cannot avoid ("second half of the year") and
+    # the hyphenated compounds ("half-year", "half-life").
+    r"(?<!first\s)(?<!second\s)(?<!latter\s)(?<!fiscal\s)\bhalf\b(?!-)|"
     r"\b(?:basis\s+points?|bps)\b|"
     r"\b(?:low|mid|high)[\s-]+(?:single[\s-]+digits?|teens?|tens?)\b",
     re.IGNORECASE,
 )
 
-# Existing launch policy intentionally excludes standalone trade-action vocabulary
-# from authored headlines. Inflected forms (buying/bought/selling/sold, ...) and
-# positive-recommendation phrasing ("recommend buying", "consider adding") close
-# the gaps the original verb-stem-only list left open.
-
-#AS: COmment over above comment and codes below and other parts: Will hardcoding
-# these avoiding words wiork: LLM communication can give tehse words in repsonse,
-# and just bvcuase we avoid them here, may just jeopoardiize the LLm response...
-# think about the better approach.
-
-_TRADE_ACTION_WORD = re.compile(
-    r"\b(?:buy|buys|buying|bought|sell|sells|selling|sold|hold|"
-    r"trim|trims|trimming|accumulate|accumulates|accumulating|"
-    r"purchase|purchases|purchasing|dispose|disposes|disposing)\b",
-    re.IGNORECASE,
+# Authored headlines may not instruct a trade.
+#
+# Detection keys on the advisory FRAME, never on a bare verb. Trade verbs are also
+# ordinary accounting vocabulary — "the Company sold its European unit", "average
+# selling prices declined", "cost of goods sold rose", "new purchase commitments",
+# "trimming the workforce", "buying patterns shifted" — so matching them bare
+# suppressed valid findings and, on an Item 4.02/1.05 filing, could drop the required
+# critical finding and withhold the entire filing.
+#
+# Deleting those verbs instead is the opposite error and is worse: it let bare
+# imperatives ("Sell the shares ahead of the restatement", "Time to sell") publish.
+# What separates an instruction from a description is the grammar around the verb —
+# an imperative aimed at a security, an advice lead near a trade verb, a passive
+# instruction, or a first-person market posture — so that is what is matched.
+_SECURITY_OBJECT = (
+    r"(?:the\s+|these\s+|those\s+|your\s+|all\s+|more\s+)?"
+    r"(?:shares?|stock|stocks|equity|securities|position|holdings?|stake|name)"
+)
+_IMPERATIVE_VERB = (
+    r"(?:sell|buy|hold|trim|accumulate|divest|liquidate|short|exit|avoid|"
+    r"offload|unload|dump)"
+)
+_GERUND_VERB = r"(?:buying|selling|holding|trimming|accumulating|divesting|shorting)"
+_TRADE_VERB = (
+    r"(?:buy|buys|buying|sell|sells|selling|hold|holds|holding|trim|trims|trimming|"
+    r"accumulate|accumulates|accumulating|purchase|purchases|purchasing|"
+    r"dispose|disposes|disposing|divest|divests|divesting|"
+    r"liquidate|liquidates|liquidating|short|shorts|shorting|"
+    r"offload|unload|dump|exit|exits|exiting|avoid|avoids|avoiding|"
+    r"add|adds|adding|reduce|reduces|reducing|take\s+profits)"
+)
+_ADVICE_LEAD = (
+    r"(?:should|must|ought\s+to|needs?\s+to|advised\s+to|advises?\s+to|"
+    r"urged?\s+to|wise\s+to|time\s+to|recommend(?:s|ed|ing)?|recommendation)"
 )
 _TRADE_ADVICE_PHRASE = re.compile(
     r"(?:"
+    # Headline-initial imperative aimed at a security ("Sell the shares", "Trim the
+    # position"). Requiring the object keeps "Purchase commitments increased" and
+    # "Selling prices declined" — both legitimate headline openings — clean.
+    r"^\s*" + _IMPERATIVE_VERB + r"(?:\s+\w+){0,2}\s+" + _SECURITY_OBJECT + r"\b|"
+    r"^\s*(?:sell|buy|short|exit)\s+(?:on|into|before|ahead|now|at)\b|"
+    # Gerund-initial aimed at a security ("Buying shares looks attractive"), while
+    # "Buying patterns shifted" and "Trimming the workforce" stay clean.
+    r"^\s*" + _GERUND_VERB + r"(?:\s+\w+){0,1}\s+" + _SECURITY_OBJECT + r"\b|"
+    # An advice lead within a few words of a trade verb. The bounded gap defeats the
+    # one-intervening-word bypass ("Investors should immediately sell") and the subject
+    # is deliberately unenumerated, so "readers"/"holders"/"one" cannot evade it.
+    + _ADVICE_LEAD + r"(?:[\s,;:—-]+\w+){0,4}[\s,;:—-]+" + _TRADE_VERB + r"\b|"
+    # Passive instruction and first-person market posture.
+    r"\bbe\s+(?:sold|bought|exited|liquidated|divested|offloaded|trimmed)\b|"
+    r"\bwe\s+(?:are|would\s+be)\s+(?:buyers|sellers)\b|"
+    # Directed forms retained verbatim from the launch policy.
     r"\bstay\s+away(?:\s+from)?\b|"
     r"\breduce\s+(?:(?:your|the)\s+)?exposure\b|"
     r"\bexit\s+(?:(?:your|the)\s+)?(?:position|holding|stake)\b|"
     r"\bavoid\s+(?:the\s+)?(?:stock|shares?|security|company)\b|"
-    r"\b(?:you|investors?|shareholders?)\s+(?:should|must|need\s+to)\s+"
-    r"(?:avoid|exit|reduce|stay\s+away|consider|add|adding|accumulate|accumulating)\b|"
-    # A recommendation to take a *trade* action (not generic "recommended restating").
-    r"\brecommend(?:s|ed|ing)?\s+"
-    r"(?:buying|adding|accumulating|purchasing|selling|exiting|avoiding|reducing|"
-    r"staying\s+away|trimming|holding)\b|"
+    # "consider" needs a trailing space so the descriptive "is considering a new
+    # facility" cannot match.
     r"\bconsider\s+(?:buying|adding|accumulating|purchasing|selling|trimming|exiting)\b"
     r")",
     re.IGNORECASE,
@@ -95,7 +135,7 @@ def contains_authored_quantity(text: str) -> bool:
 
 def contains_trade_instruction(text: str) -> bool:
     """Whether model-authored prose contains forbidden trade-action language."""
-    return bool(_TRADE_ACTION_WORD.search(text) or _TRADE_ADVICE_PHRASE.search(text))
+    return bool(_TRADE_ADVICE_PHRASE.search(text))
 
 
 def authored_text_violations(text: str) -> list[str]:

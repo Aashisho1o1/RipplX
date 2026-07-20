@@ -587,3 +587,66 @@ def test_settings_roundtrip(repo):
     assert repo.get_setting("period") == "90d"
     repo.set_setting("period", "1y")
     assert repo.get_setting("period") == "1y"
+
+
+def _seed_linked_attempt(repo):
+    p1 = Analysis(
+        accession_number="a-1", ticker="AAA", stage="P1", model="m",
+        prompt_version="p", output_json='{"findings": []}', created_at="t",
+    )
+    return repo.insert_p1_with_trace(p1, lambda p1_id, p1_sha256: Analysis(
+        accession_number="a-1", ticker="AAA", stage="P1_TRACE", model="m",
+        prompt_version="p+s",
+        output_json=_attempt_trace(p1_id=p1_id, p1_sha256=p1_sha256), created_at="t",
+    ))
+
+
+def test_tampered_p1_bytes_break_the_attempt_link(repo):
+    """The SHA-256 link is what binds a trace to the exact P1 bytes it describes.
+
+    All three comparisons (insert, finalize, read) could be deleted with the whole
+    suite still green, so the headline guarantee of the attempt-binding work had no
+    executable guard.
+    """
+    p1_id, _trace_id, _sha = _seed_linked_attempt(repo)
+    assert repo.latest_linked_p1_attempt("a-1") is not None
+
+    repo.conn.execute(
+        "UPDATE analyses SET output_json = ? WHERE id = ?",
+        ('{"findings": [], "tampered": true}', p1_id),
+    )
+    repo.conn.commit()
+
+    assert repo.latest_linked_p1_attempt("a-1") is None
+
+
+def test_insert_rejects_a_trace_that_links_the_wrong_p1_bytes(repo):
+    p1 = Analysis(
+        accession_number="a-1", ticker="AAA", stage="P1", model="m",
+        prompt_version="p", output_json='{"findings": []}', created_at="t",
+    )
+    with pytest.raises(ValueError, match="link"):
+        repo.insert_p1_with_trace(p1, lambda p1_id, p1_sha256: Analysis(
+            accession_number="a-1", ticker="AAA", stage="P1_TRACE", model="m",
+            prompt_version="p+s",
+            output_json=_attempt_trace(p1_id=p1_id, p1_sha256="0" * 64),
+            created_at="t",
+        ))
+
+
+@pytest.mark.parametrize("payload", ["null", "[]", '"text"', "7", "{not json"])
+def test_malformed_trace_payload_fails_closed_instead_of_raising(repo, payload):
+    """A trace payload that parses to a JSON scalar or array is still malformed state.
+
+    Dereferencing it raised AttributeError out of the selector, which 500s the filing,
+    certificate AND brief endpoints — one corrupt row denying a whole workspace rather
+    than withholding one filing.
+    """
+    _seed_linked_attempt(repo)
+    trace_row = repo.latest_analysis("a-1", "P1_TRACE")
+    repo.conn.execute(
+        "UPDATE analyses SET output_json = ? WHERE id = ?", (payload, trace_row.id)
+    )
+    repo.conn.commit()
+
+    assert repo.latest_linked_p1_attempt("a-1") is None

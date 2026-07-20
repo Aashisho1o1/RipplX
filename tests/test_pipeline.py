@@ -13,7 +13,7 @@ from finwatch.metrics.service import MetricsService
 from finwatch.pipeline.orchestrator import Orchestrator
 from finwatch.preprocess.preprocessor import Preprocessor
 from finwatch.presentation.service import PresentationService
-from finwatch.verify.checks import CheckResult, VerificationReport
+from finwatch.verify.checks import CheckResult, VerificationReport, run_all
 
 FX = Path(__file__).parent / "fixtures"
 TENQ = (FX / "tenq_sample.html").read_text()
@@ -304,3 +304,148 @@ def test_launch_pipeline_only_runs_p1():
     assert all("portfolio manager and risk officer" not in system for system, _ in llm.calls)
     assert "V3" not in {c.check_id for c in fa.verification.results}
     assert fa.verification.verdict in ("PASS", "PASS_WITH_WARNINGS")
+
+
+def test_withheld_certificate_redacts_real_model_authored_tool_arguments(monkeypatch):
+    """Redaction must be proven against a run that actually calls a tool.
+
+    The existing withheld-certificate assertion is vacuous: its responder submits on the
+    first turn, so certificate.tool_calls is empty and `"arguments" not in row` holds for
+    zero rows. Every redaction site could be deleted with the suite still green. This
+    drives a real search_sections call carrying model-authored prose and asserts the
+    prose reaches neither the persisted trace nor the projected certificate.
+    """
+    secret = "SECRET-MODEL-QUERY-4242"
+    state = {"searched": False}
+
+    def responder(system, _user):
+        if "finance Skeptic" in system:
+            return json.dumps({"action": "done", "obligations": []})
+        if not state["searched"]:
+            state["searched"] = True
+            return json.dumps({
+                "action": "tool", "tool": "search_sections",
+                "arguments": {"scope": "current", "queries": [secret]},
+            })
+        return json.dumps({"action": "submit", "draft": json.loads(P1_JSON)})
+
+    repo = Repo(init_db(":memory:"))
+    _seed(repo)
+    monkeypatch.setattr(
+        "finwatch.pipeline.orchestrator.run_all",
+        lambda _bundle: VerificationReport(
+            verdict="FAIL",
+            results=[CheckResult(check_id="V5", verdict="fail", severity="blocking",
+                                 detail="sensitive verifier detail")],
+        ),
+    )
+    orchestrator = Orchestrator(
+        repo, Preprocessor(repo, now_fn=lambda: "t"),
+        P1Extractor(FakeLLMClient(responder=responder), repo,
+                    model_label="fake/m", now_fn=lambda: "t"),
+        MetricsService(repo, lambda _cik: MSFT_CF, now_fn=lambda: "t"),
+        now_fn=lambda: "t",
+    )
+    fa = orchestrator.process_html(
+        filing=repo.get_filing(ACCN), html=TENQ, as_of="2025-05-01"
+    )
+    assert fa.withheld
+    repo.track_company(CIK, at="t")
+
+    certificate = PresentationService(repo).certificate(ACCN)
+    assert certificate is not None
+    assert certificate.outcome == "withheld"
+    assert [row["tool"] for row in certificate.tool_calls] == ["search_sections"]
+    assert all("arguments" not in row for row in certificate.tool_calls)
+    assert secret not in certificate.model_dump_json()
+    assert secret not in repo.latest_analysis(ACCN, "P1_TRACE").output_json
+
+
+def _bundle_for(findings):
+    """Build a VerifyBundle exactly as production does, from a real P1Output."""
+    from finwatch.llm.schemas import P1Output
+    from finwatch.metrics.envelope import MetricsBundle
+    from finwatch.pipeline.orchestrator import assemble_verify_bundle
+
+    section = ("Management restated the reporting basis for each segment. "
+               "2024 remains the reference period for the segment.")
+    rank = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+    output = P1Output.model_validate({
+        "accession_number": ACCN, "ticker": "MSFT", "form_type": "10-Q",
+        "classification": {
+            "overall_severity": min((f["severity"] for f in findings), key=rank.__getitem__)
+        },
+        "findings": findings, "extraction_confidence": "high", "gaps": [],
+    })
+    return assemble_verify_bundle(
+        output, MetricsBundle(results={}), {f"{ACCN}:mdna": section}
+    )
+
+
+def _finding_citing(fid, headline, snippet):
+    section = ("Management restated the reporting basis for each segment. "
+               "2024 remains the reference period for the segment.")
+    start = section.find(snippet)
+    assert start >= 0
+    return {
+        "finding_id": fid, "headline": headline, "severity": "medium",
+        "critical_flag": None, "evidence": [{
+            "accession_number": ACCN, "form_type": "10-Q", "section_key": "mdna",
+            "char_start": start, "char_end": start + len(snippet), "snippet": snippet,
+        }],
+    }
+
+
+def test_v1_does_not_invent_an_orphan_number_across_the_rendered_join():
+    """A number inside an exact SEC quotation is legitimate source material.
+
+    V1 derived its candidate set from each snippet standalone but scanned the
+    newline-joined rendered text, so the bare-year whitelist — which depends on left
+    context — fired for the candidate and not for the scan. The filing was withheld
+    terminally for a number no finding authored.
+    """
+    bundle = _bundle_for([
+        _finding_citing("f1", "Management restated the reporting basis",
+                        "Management restated the reporting basis for each segment"),
+        _finding_citing("f2", "The reference period was clarified",
+                        "2024 remains the reference period for the segment"),
+    ])
+
+    report = run_all(bundle)
+
+    assert report.verdict == "PASS", [r.detail for r in report.results if r.verdict == "fail"]
+
+
+def test_v5_does_not_form_a_violation_across_two_clean_headlines():
+    """Each authored headline is judged alone, as the compiler judges it.
+
+    Concatenating headlines let "...rests on a" + "third party..." match the fraction
+    pattern across the join, failing the whole filing for a violation neither finding
+    contains.
+    """
+    from finwatch.core.text_policy import authored_text_violations
+
+    first, second = "Concentration now rests on a", "third party carrier was disclosed"
+    assert authored_text_violations(first) == []
+    assert authored_text_violations(second) == []
+
+    bundle = _bundle_for([
+        _finding_citing("f1", first, "Management restated the reporting basis"),
+        _finding_citing("f2", second, "remains the reference period"),
+    ])
+
+    report = run_all(bundle)
+
+    assert report.verdict == "PASS", [r.detail for r in report.results if r.verdict == "fail"]
+
+
+def test_v5_still_blocks_a_single_offending_headline():
+    bundle = _bundle_for([
+        _finding_citing("f1", "Investors should sell the shares",
+                        "Management restated the reporting basis"),
+    ])
+
+    report = run_all(bundle)
+
+    assert report.verdict == "FAIL"
+    assert any("trade" in (r.detail or "") for r in report.results if r.verdict == "fail")

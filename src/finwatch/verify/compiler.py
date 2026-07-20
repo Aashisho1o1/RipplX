@@ -93,6 +93,12 @@ def _finding_issues(
     issues: list[CompilerIssue] = []
     fid = finding.finding_id
     headline = finding.headline
+    # The schema's min_length=1 admits a whitespace-only headline, which carries no
+    # authored-text violation and therefore used to reach the final DTO verifier — the
+    # only layer that rejected it, and one that fails the whole entry rather than the
+    # finding. Reject it here so it is pruned like any other unpublishable finding.
+    if not headline.strip():
+        issues.append(CompilerIssue(code="EMPTY_HEADLINE", finding_id=fid))
     violations = authored_text_violations(headline)
     if "quantity" in violations:
         issues.append(CompilerIssue(code="AUTHORED_NUMBER", finding_id=fid))
@@ -111,6 +117,90 @@ def _finding_issues(
             ))
         elif actual != finding.direction:
             issues.append(CompilerIssue(code="METRIC_CONTRADICTION", finding_id=fid))
+    return issues
+
+
+_SEVERITY_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+
+
+def _evidence_span(finding: Finding) -> frozenset[tuple[str, int, int]] | None:
+    """The anchored spans a finding cites, or None if any span failed to anchor."""
+    spans: list[tuple[str, int, int]] = []
+    for evidence in finding.evidence:
+        if evidence.char_start is None or evidence.char_end is None:
+            return None
+        spans.append((evidence.section_key, evidence.char_start, evidence.char_end))
+    return frozenset(spans)
+
+
+def _required_coverage_flags(output: P1Output, section_keys: set[str]) -> dict[str, str]:
+    """Section key -> critical flag that must be covered for this filing to publish."""
+    if base_form(output.form_type) != "8-K":
+        return {}
+    return {
+        key: flag
+        for key, flag in _CRITICAL_8K_SECTION_FLAGS.items()
+        if key in section_keys
+    }
+
+
+def _satisfies_required_coverage(finding: Finding, required: dict[str, str]) -> bool:
+    return any(
+        finding.critical_flag == flag
+        and finding.severity == "critical"
+        and any(evidence.section_key == key for evidence in finding.evidence)
+        for key, flag in required.items()
+    )
+
+
+def _duplicate_evidence_issues(
+    output: P1Output,
+    *,
+    already_failing: set[str],
+    section_keys: set[str],
+) -> list[CompilerIssue]:
+    """Two findings citing the same evidence publish as one.
+
+    This rule previously existed only in the read-time canonical projection, which runs
+    long after the attempt snapshot is frozen. A compiler-approved finding was therefore
+    deleted at render time with no drop code, while the frozen trace and the signed
+    certificate still reported it published — and because the projection deduped in
+    finding order, a lower-severity finding could take the span from the critical one
+    that satisfied CRITICAL_COVERAGE.
+
+    Enforcing it here makes the drop typed and visible, and keeps the keeper the most
+    severe member so the post-prune coverage check still sees the required finding.
+    """
+    required = _required_coverage_flags(output, section_keys)
+    groups: dict[frozenset[tuple[str, int, int]], list[Finding]] = {}
+    for finding in output.findings:
+        # A finding that is being pruned for its own reasons must never evict a clean
+        # duplicate: it would take the span, then be dropped itself, losing both — and
+        # the repair prompt would blame the clean finding for the duplication.
+        if finding.finding_id in already_failing:
+            continue
+        span = _evidence_span(finding)
+        if span:
+            groups.setdefault(span, []).append(finding)
+
+    issues: list[CompilerIssue] = []
+    for group in groups.values():
+        if len(group) < 2:
+            continue
+        # Coverage first: a finding that discharges a required 8-K critical item can
+        # never be the loser, otherwise the finding_id tie-break — a label the model
+        # chooses freely — would decide whether the filing publishes or is withheld.
+        keeper = min(group, key=lambda row: (
+            0 if _satisfies_required_coverage(row, required) else 1,
+            0 if row.critical_flag else 1,
+            _SEVERITY_RANK.get(row.severity, 9),
+            row.finding_id,
+        ))
+        for finding in group:
+            if finding.finding_id != keeper.finding_id:
+                issues.append(CompilerIssue(
+                    code="DUPLICATE_EVIDENCE", finding_id=finding.finding_id
+                ))
     return issues
 
 
@@ -166,6 +256,14 @@ def compile_draft(
             require_change_basis=require_change,
             change_ranges=changes,
         ))
+
+    issues.extend(_duplicate_evidence_issues(
+        anchored,
+        already_failing={
+            issue.finding_id for issue in issues if issue.finding_id is not None
+        },
+        section_keys=set(sections),
+    ))
 
     # Keep one code per finding while preserving deterministic order.
     unique: list[CompilerIssue] = []

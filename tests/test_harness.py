@@ -405,8 +405,13 @@ def test_skeptic_objection_drops_only_targeted_finding_after_final_review():
         _finding("f2", "costs remained stable", headline="Costs remained stable"),
     )
     objection = _done([{"finding_id": "f2", "code": "LOW_CONFIDENCE"}])
+    # The repair resubmits the objected finding unchanged. The objection is now
+    # discharged deterministically at reconciliation (keyed on the cited evidence, so
+    # a renumbering cannot launder it) instead of depending on the second Skeptic pass
+    # re-raising it, which a live non-zero-temperature Skeptic might not do. The second
+    # pass therefore reviews only the surviving finding and has nothing to add.
     llm = FakeLLMClient(responses=[
-        _submit(draft), objection, _submit(draft), objection,
+        _submit(draft), objection, _submit(draft), _done([]),
     ])
 
     output = P1Extractor(llm, repo).run(
@@ -634,3 +639,176 @@ def test_provider_failure_withholds_and_records_terminal_reason():
     assert trace["research_outcome"] == "withheld"
     assert trace["research_terminal_reason"] == "provider_failed"
     assert "secret provider detail" not in json.dumps(trace)
+
+
+# ---------------------------------------------------------------- P1-2 compiler --
+_8K_META = {
+    "accession_number": META["accession_number"], "ticker": "TEST",
+    "form_type": "8-K", "cik": "0000000001", "filed_at": "2025-02-01",
+}
+_8K_SECTIONS = {"item_4_02": {"text": "The audit committee reviewed prior reporting."}}
+
+
+def _8k_finding(fid, severity, flag, headline):
+    return {
+        "finding_id": fid, "headline": headline, "severity": severity,
+        "critical_flag": flag, "metric_id": None, "direction": None,
+        "evidence": [{
+            "accession_number": _8K_META["accession_number"], "form_type": "8-K",
+            "section_key": "item_4_02", "snippet": "The audit committee reviewed prior reporting",
+        }],
+    }
+
+
+def _compile_8k(*findings, prune=True):
+    draft = P1Output.model_validate({
+        "accession_number": _8K_META["accession_number"], "ticker": "TEST",
+        "form_type": "8-K",
+        "classification": {"overall_severity": "critical"},
+        "findings": list(findings), "extraction_confidence": "high", "gaps": [],
+    })
+    return compile_draft(
+        draft, trusted_meta=_8K_META, sections=_8K_SECTIONS,
+        metrics=MetricsBundle(results={}), prune=prune,
+    )
+
+
+def test_duplicate_evidence_is_dropped_by_the_compiler_keeping_the_critical_finding():
+    """Two findings citing one span must be reconciled before the snapshot is frozen.
+
+    This rule used to live only in the read-time canonical projection, which runs after
+    finalize_attempt. A compiler-approved finding was deleted at render time with no
+    drop code while the frozen trace and signed certificate still reported it published,
+    and because the projection deduped in finding order the lower-severity finding took
+    the span from the critical one that satisfied CRITICAL_COVERAGE.
+    """
+    result = _compile_8k(
+        _8k_finding("f1", "high", None, "An accounting determination was disclosed"),
+        _8k_finding("f2", "critical", "item_4_02_non_reliance",
+                    "Prior statements are no longer reliable"),
+    )
+    assert [row.finding_id for row in result.output.findings] == ["f2"]
+    assert [(row.finding_id, row.error_codes) for row in result.dropped] == [
+        ("f1", ["DUPLICATE_EVIDENCE"])
+    ]
+    assert result.run_errors == []
+
+
+def test_whitespace_headline_is_a_finding_local_drop():
+    """min_length=1 admits "   ", which carries no authored-text violation.
+
+    It previously reached the final DTO verifier — the only layer that rejected it, and
+    one that fails the whole entry rather than the finding.
+    """
+    result = _compile_8k(
+        _8k_finding("f1", "critical", "item_4_02_non_reliance", "   "),
+    )
+    assert result.output.findings == []
+    assert [(row.finding_id, row.error_codes) for row in result.dropped] == [
+        ("f1", ["EMPTY_HEADLINE"])
+    ]
+
+
+# ------------------------------------------------------- P1-4 / P1-5 reconciliation --
+def _baseline_pair():
+    return _draft(
+        _finding("f1", "Revenue increased"),
+        _finding("f2", "costs remained stable", headline="Costs remained stable"),
+    )
+
+
+def _run(responses):
+    repo = Repo(init_db(":memory:"))
+    output = P1Extractor(FakeLLMClient(responses=list(responses)), repo).run(
+        filing_meta=META, sections=SECTIONS
+    ).output
+    trace = json.loads(
+        repo.latest_analysis(META["accession_number"], "P1_TRACE").output_json
+    )
+    return output, trace
+
+
+def test_repair_that_omits_a_clean_baseline_finding_records_the_loss():
+    """A clean, unobjected finding the repair silently drops must be recorded.
+
+    Nothing bound the repair draft to the baseline it replaced, so the finding vanished
+    with terminal_reason 'verified' and an empty dropped_findings — a trace
+    indistinguishable from a genuinely boring filing.
+    """
+    objection = _done([{"finding_id": "f2", "code": "MATERIALITY_OVERREACH"}])
+    only_f2 = _draft(_finding("f2", "costs remained stable", headline="Costs remained stable"))
+    _, trace = _run([_submit(_baseline_pair()), objection, _submit(only_f2), _done([])])
+
+    assert {"finding_id": "f1", "error_codes": ["REPAIR_OMITTED"]} in trace["dropped_findings"]
+    assert trace["research_terminal_reason"] != "verified"
+
+
+def test_renumbering_cannot_launder_a_skeptic_objection():
+    """Objections discharge on the cited evidence, not on the finding label.
+
+    A repair that resubmits objected content under a new id previously published that
+    content while the certificate recorded a drop that never happened.
+    """
+    objection = _done([{"finding_id": "f2", "code": "MATERIALITY_OVERREACH"}])
+    renumbered = _draft(
+        _finding("f1", "costs remained stable", headline="Costs remained stable")
+    )
+    output, trace = _run([_submit(_baseline_pair()), objection, _submit(renumbered), _done([])])
+
+    assert output.findings == []
+    assert any(
+        "MATERIALITY_OVERREACH" in row["error_codes"] for row in trace["dropped_findings"]
+    )
+
+
+def test_optional_repair_run_error_preserves_the_compiler_passing_baseline():
+    """A run error in the discarded repair draft describes that draft, not the filing.
+
+    The baseline already satisfied FORM_SCOPE before the repair was offered, so
+    withholding here discarded a clean finding for a cause the output does not carry —
+    and burned an attempt, taking the issuer's newest filing permanently dark.
+    """
+    objection = _done([{"finding_id": "f2", "code": "MATERIALITY_OVERREACH"}])
+    wrong_identity = _draft(_finding("f1", "Revenue increased"))
+    wrong_identity["ticker"] = "WRONG"
+    output, trace = _run([
+        _submit(_baseline_pair()), objection, _submit(wrong_identity), _done([]),
+    ])
+
+    assert [row.finding_id for row in output.findings] == ["f1"]
+    assert trace["research_outcome"] == "partial"
+    assert {"finding_id": "f2", "error_codes": ["MATERIALITY_OVERREACH"]} in trace[
+        "dropped_findings"
+    ]
+
+
+def test_headline_only_repair_discharges_the_objection():
+    """Rewriting the authored claim over the same quote IS the repair.
+
+    A Skeptic objection such as MATERIALITY_OVERREACH is about the claim, not the
+    quote. Keying the discharge on evidence alone treated the corrected finding as an
+    un-repaired resubmission and pruned it — withholding the whole filing when it was a
+    required 8-K critical finding.
+    """
+    objection = _done([{"finding_id": "f2", "code": "MATERIALITY_OVERREACH"}])
+    rewritten = _draft(
+        _finding("f1", "Revenue increased"),
+        _finding("f2", "costs remained stable", headline="Cost stability was disclosed"),
+    )
+    output, trace = _run([_submit(_baseline_pair()), objection, _submit(rewritten), _done([])])
+
+    assert [row.finding_id for row in output.findings] == ["f1", "f2"]
+    assert trace["dropped_findings"] == []
+    # Nothing was blocked, so the trace must not claim the Skeptic blocked anything.
+    assert trace["research_terminal_reason"] != "skeptic_blocked"
+
+
+def test_unchanged_resubmission_still_carries_its_objection():
+    objection = _done([{"finding_id": "f2", "code": "MATERIALITY_OVERREACH"}])
+    baseline = _baseline_pair()
+    output, trace = _run([_submit(baseline), objection, _submit(baseline), _done([])])
+
+    assert [row.finding_id for row in output.findings] == ["f1"]
+    assert {"finding_id": "f2", "error_codes": ["MATERIALITY_OVERREACH"]} in trace[
+        "dropped_findings"
+    ]

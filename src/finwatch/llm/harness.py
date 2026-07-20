@@ -13,7 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 from finwatch.db.repositories import Analysis, Repo
 from finwatch.llm.prompts import STAGE_P1, STAGE_SKEPTIC, load_prompt
 from finwatch.llm.router import LAUNCH_MAX_OUTPUT_TOKENS, LLMClient, LLMResponse, extract_json
-from finwatch.llm.schemas import Classification, P1Output
+from finwatch.llm.schemas import Classification, Finding, P1Output
 from finwatch.metrics.catalog import MetricId
 from finwatch.metrics.envelope import MetricResult, MetricsBundle
 from finwatch.preprocess.diff import diff_risk_factors, split_paragraphs
@@ -559,6 +559,18 @@ class FilingResearchHarness:
                     prune=True,
                 )
                 if final.run_errors:
+                    # A run error raised by the OPTIONAL repair draft describes that
+                    # discarded draft, not the filing: the baseline already satisfied
+                    # FORM_SCOPE/CRITICAL_COVERAGE before the repair was offered.
+                    # Withholding here would discard a compiler-passing baseline for a
+                    # cause the published output does not carry, so mirror the sibling
+                    # optional-repair guards and let run() fall back to the baseline.
+                    if optional_repair:
+                        return _GeneratorLoopResult(
+                            output=None,
+                            terminal_reason="repair_compile_failed",
+                            submitted=False,
+                        )
                     raise HarnessError(final.run_errors[0].lower())
                 dropped = list(final.dropped)
                 surviving = {finding.finding_id for finding in final.output.findings}
@@ -735,6 +747,29 @@ class FilingResearchHarness:
         ]
 
     @staticmethod
+    def _finding_signature(finding: Finding) -> tuple[str, frozenset[tuple[str, str]]]:
+        """Identify a finding by its authored claim AND the content it cites.
+
+        Keying on the label alone lets a repair launder an objection by renumbering:
+        the objected text publishes while the trace records a drop that never happened.
+        Keying on the evidence alone is the opposite error — a Skeptic objection such as
+        MATERIALITY_OVERREACH is about the authored claim, so rewriting the headline
+        over the same quote IS the repair, and treating it as an un-repaired
+        resubmission pruned the corrected finding (withholding the whole filing when it
+        was a required 8-K critical finding).
+
+        The signature is therefore the pair. An unchanged resubmission still carries its
+        objection; a genuinely rewritten claim discharges it and is re-reviewed by the
+        mandatory second Skeptic pass.
+        """
+        return (
+            finding.headline.strip(),
+            frozenset(
+                (evidence.section_key, evidence.snippet) for evidence in finding.evidence
+            ),
+        )
+
+    @staticmethod
     def _filing_snapshot(meta: dict) -> dict:
         return {
             "accession": meta["accession_number"],
@@ -862,18 +897,90 @@ class FilingResearchHarness:
                         else:
                             output = repaired.output
                             dropped.extend(repaired.dropped)
-                            surviving = {
+                            # Reconcile the repair against the baseline it replaced.
+                            # Nothing else binds the two: without this, a repair that
+                            # omits a clean finding loses it silently, and one that
+                            # renumbers an objected finding publishes the objected
+                            # content while recording a drop that did not happen.
+                            baseline_by_id = {
+                                finding.finding_id: finding
+                                for finding in baseline.findings
+                            }
+                            objected_codes: dict[
+                                tuple[str, frozenset[tuple[str, str]]], list[str]
+                            ] = {}
+                            for row in original_objections:
+                                target = baseline_by_id.get(row.finding_id)
+                                if target is None:
+                                    continue
+                                codes = objected_codes.setdefault(
+                                    self._finding_signature(target), []
+                                )
+                                if row.code not in codes:
+                                    codes.append(row.code)
+                            # Objected content that survived under ANY label still
+                            # carries its objection.
+                            carried = [
+                                SkepticObligation(
+                                    finding_id=finding.finding_id, code=code
+                                )
+                                for finding in output.findings
+                                for code in objected_codes.get(
+                                    self._finding_signature(finding), []
+                                )
+                            ]
+                            objection_caused_drop = False
+                            if carried:
+                                output, carried_drops = self._prune_objections(
+                                    output, carried, context
+                                )
+                                dropped.extend(carried_drops)
+                                objection_caused_drop = bool(carried_drops)
+                            surviving_ids = {
                                 finding.finding_id for finding in output.findings
                             }
-                            removed_objections = [
-                                row for row in original_objections
-                                if row.finding_id not in surviving
-                            ]
-                            dropped.extend(DroppedFinding(
-                                finding_id=row.finding_id,
-                                error_codes=[row.code],
-                            ) for row in removed_objections)
-                            if removed_objections:
+                            surviving_sigs = {
+                                self._finding_signature(finding)
+                                for finding in output.findings
+                            }
+                            recorded = {row.finding_id for row in dropped}
+                            # An objected finding the repair actually removed is a
+                            # discharged objection; record why it is gone. A finding
+                            # still published under its own id was repaired with new
+                            # evidence and is not a drop.
+                            for row in original_objections:
+                                if row.finding_id in surviving_ids:
+                                    continue
+                                # The objected finding is gone, so the objection took
+                                # effect regardless of which layer recorded the drop —
+                                # the generator loop already records repair_targets.
+                                objection_caused_drop = True
+                                if row.finding_id in recorded:
+                                    continue
+                                dropped.append(DroppedFinding(
+                                    finding_id=row.finding_id,
+                                    error_codes=[row.code],
+                                ))
+                                recorded.add(row.finding_id)
+                            # A clean, unobjected baseline finding the repair simply
+                            # dropped must be recorded rather than silently lost.
+                            for finding in baseline.findings:
+                                if finding.finding_id in surviving_ids:
+                                    continue
+                                if finding.finding_id in recorded:
+                                    continue
+                                if self._finding_signature(finding) in surviving_sigs:
+                                    continue
+                                dropped.append(DroppedFinding(
+                                    finding_id=finding.finding_id,
+                                    error_codes=["REPAIR_OMITTED"],
+                                ))
+                                recorded.add(finding.finding_id)
+                            # Only claim the Skeptic blocked something when it actually
+                            # did. A repair that addressed every objection leaves the
+                            # run verified; reporting skeptic_blocked there would put a
+                            # drop that never happened into the signed certificate.
+                            if objection_caused_drop:
                                 terminal = "skeptic_blocked"
                             if output.findings:
                                 second_review = self._skeptic_pass(

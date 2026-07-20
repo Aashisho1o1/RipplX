@@ -149,6 +149,10 @@ def build_filing_entry(repo: Repo, view: FilingProjection) -> FilingDigestEntry:
             sorted((row.section_key, row.char_start, row.char_end) for row in evidence)
         )
         if evidence_key in seen_evidence:
+            # Defence in depth only. verify/compiler.py drops duplicate-evidence
+            # findings before the attempt snapshot is frozen, so a compiler-approved
+            # attempt cannot reach here with duplicates; this guard now catches only
+            # persisted state that bypassed the compiler.
             continue
         seen_evidence.add(evidence_key)
         try:

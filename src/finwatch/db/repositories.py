@@ -740,8 +740,10 @@ class Repo:
                 raise ValueError("P1 and P1_TRACE identities must match")
             try:
                 trace_payload = json.loads(trace.output_json)
-            except (TypeError, json.JSONDecodeError) as exc:
+            except (TypeError, ValueError) as exc:
                 raise ValueError("P1_TRACE must contain valid JSON") from exc
+            if not isinstance(trace_payload, dict):
+                raise ValueError("P1_TRACE must contain a JSON object")
             if (
                 trace_payload.get("schema_version") != "harness.v2"
                 or trace_payload.get("p1_analysis_id") != p1_id
@@ -797,9 +799,11 @@ class Repo:
             ).hexdigest()
             try:
                 initial_payload = json.loads(trace_row["output_json"])
-            except (TypeError, json.JSONDecodeError) as exc:
+            except (TypeError, ValueError) as exc:
                 raise ValueError("stored P1_TRACE is malformed") from exc
             for payload in (initial_payload, final_payload):
+                if not isinstance(payload, dict):
+                    raise ValueError("stored P1_TRACE must contain a JSON object")
                 if (
                     payload.get("schema_version") != "harness.v2"
                     or payload.get("p1_analysis_id") != p1_analysis_id
@@ -908,7 +912,13 @@ class Repo:
             return None
         try:
             payload = json.loads(trace.output_json)
-        except (TypeError, json.JSONDecodeError):
+        except (TypeError, ValueError):
+            return None
+        # A payload that parses to a JSON scalar or array is still malformed state.
+        # Dereferencing it raised AttributeError out of this selector, which 500s the
+        # filing, certificate AND brief endpoints — one corrupt row denying a whole
+        # workspace instead of failing this filing closed.
+        if not isinstance(payload, dict):
             return None
         if payload.get("schema_version") != "harness.v2":
             return None

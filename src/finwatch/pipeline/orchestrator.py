@@ -183,6 +183,10 @@ def assemble_verify_bundle(
     return VerifyBundle(
         rendered_text="\n".join(lines),
         authored_text="\n".join(authored_lines),
+        # The joined strings above stay for display/back-compat; V1 and V5 judge these
+        # per-unit lists so a violation is always attributable to one finding.
+        authored_units=list(authored_lines),
+        rendered_units=list(lines),
         metrics=metrics,
         fact_store_values=[],
         evidence_claims=evidence,

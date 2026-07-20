@@ -41,6 +41,14 @@ class VerifyBundle(BaseModel):
     # V5 scans only stochastic/authored prose. Exact SEC
     # quotations may legitimately contain trade/valuation words and are not advice.
     authored_text: str
+    # V1/V5 must evaluate the SAME unit the compiler evaluates: one authored headline,
+    # one rendered line. Scanning the concatenation lets a violation form across the
+    # join between two independently clean findings ("...reduce" + "Exposure..."), or
+    # strips the left-context a whitelist depends on, failing the whole filing for a
+    # cause no single finding contains. Empty lists mean "treat the joined text as one
+    # unit", which keeps direct constructions (tests, fixtures) behaving as before.
+    authored_units: list[str] = Field(default_factory=list)
+    rendered_units: list[str] = Field(default_factory=list)
     fact_store_values: list[float] = Field(default_factory=list)  # numeric XBRL leaves
     evidence_claims: list[EvidenceClaim] = Field(default_factory=list)
     section_texts: dict[str, str] = Field(default_factory=dict)   # f"{accn}:{section_key}"
@@ -49,6 +57,14 @@ class VerifyBundle(BaseModel):
     # V5:
     trade_action: Any = None
     disclaimer_text: Optional[str] = None
+
+    def authored_parts(self) -> list[str]:
+        """Authored prose as independently-evaluated units (see authored_units)."""
+        return self.authored_units or [self.authored_text]
+
+    def rendered_parts(self) -> list[str]:
+        """Rendered text as independently-evaluated units (see rendered_units)."""
+        return self.rendered_units or [self.rendered_text]
 
 
 class VerificationReport(BaseModel):
@@ -239,11 +255,16 @@ def _matches(tok: NumberToken, cands: list[float]) -> bool:
 def check_v1_numeric_provenance(bundle: VerifyBundle) -> list[CheckResult]:
     cands = _candidates(bundle)
     out: list[CheckResult] = []
-    for tok in extract_number_tokens(bundle.rendered_text):
-        if not _matches(tok, cands):
-            out.append(CheckResult(
-                check_id="V1", verdict="fail", severity="blocking",
-                detail=f"orphan number '{tok.raw}' at pos {tok.position}"))
+    # Scan each rendered unit standalone. _candidates() tokenizes each evidence snippet
+    # standalone too, so candidate extraction and scanning now see identical left
+    # context; a token whitelisted as a candidate can no longer lose that whitelist
+    # merely because another line was concatenated in front of it.
+    for unit in bundle.rendered_parts():
+        for tok in extract_number_tokens(unit):
+            if not _matches(tok, cands):
+                out.append(CheckResult(
+                    check_id="V1", verdict="fail", severity="blocking",
+                    detail=f"orphan number '{tok.raw}' at pos {tok.position}"))
     if not out:
         out.append(CheckResult(check_id="V1", verdict="pass",
                                severity="blocking", detail="all numbers matched"))
@@ -367,9 +388,15 @@ def check_v5_hygiene(bundle: VerifyBundle) -> list[CheckResult]:
         "first_person_valuation": "authored valuation language",
         "forbidden_vocabulary": "forbidden vocabulary",
     }
-    for violation in authored_text_violations(bundle.authored_text):
-        out.append(CheckResult(check_id="V5", verdict="fail",
-                               severity="blocking", detail=details[violation]))
+    # One authored headline at a time, matching the compiler's unit of judgement.
+    seen: set[str] = set()
+    for unit in bundle.authored_parts():
+        for violation in authored_text_violations(unit):
+            if violation in seen:
+                continue
+            seen.add(violation)
+            out.append(CheckResult(check_id="V5", verdict="fail",
+                                   severity="blocking", detail=details[violation]))
     if bundle.trade_action is not None:
         out.append(CheckResult(check_id="V5", verdict="fail",
                                severity="blocking",

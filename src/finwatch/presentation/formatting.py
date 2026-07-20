@@ -47,15 +47,33 @@ def format_metric_value(result: MetricResult) -> str:
             parts.append(f"current ratio {_num(components['current_ratio'])}")
         return " · ".join(parts)
     if metric == "share_count_change":
-        material_change = result.value if result.value is not None else 0.0
-        drift = (
-            "share count decreased"
-            if material_change <= -0.0005
-            else "share count increased"
-            if material_change >= 0.0005
-            else "share count flat"
-        )
-        return f"{_pct(result.value)} YoY ({drift})"
+        # Prefer the deterministic, rounding-aware verdict: the publication gate
+        # (verify/compiler.py) judges direction against the SEC `decimals` rounding
+        # slack, and a second heuristic here could print "flat" for a move the gate
+        # proved was a decrease — then drop a model finding for asserting exactly what
+        # this line displays.
+        #
+        # It is only a preference, not a replacement. The SEC companyfacts API does not
+        # emit `decimals` at all (verified: zero occurrences across every cached issuer
+        # payload and every recorded fixture), so deterministic_direction is None for
+        # real filings today. Deferring to it exclusively deleted the direction clause
+        # for every issuer. Fall back to the displayed value so nothing is lost while
+        # the gate has no opinion.
+        proven = {
+            "up": "share count increased",
+            "down": "share count decreased",
+            "flat": "share count flat",
+        }.get(result.deterministic_direction or "")
+        if proven is None:
+            material_change = result.value if result.value is not None else 0.0
+            proven = (
+                "share count decreased"
+                if material_change <= -0.0005
+                else "share count increased"
+                if material_change >= 0.0005
+                else "share count flat"
+            )
+        return f"{_pct(result.value)} YoY ({proven})"
     if metric == "simple_leverage":
         parts: list[str] = []
         if components.get("net_debt_to_ebitda") is not None:
