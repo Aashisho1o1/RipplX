@@ -9,7 +9,6 @@ from finwatch.verify.checks import (
 )
 from finwatch.verify.orchestrator import (
     data_quality_report,
-    persist_report,
     section_texts_from_repo,
 )
 
@@ -19,7 +18,6 @@ __all__ = [
     "VerifyBundle",
     "CheckResult",
     "EvidenceClaim",
-    "persist_report",
     "section_texts_from_repo",
     "data_quality_report",
 ]

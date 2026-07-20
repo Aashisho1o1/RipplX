@@ -140,25 +140,39 @@ class ToolTrace(BaseModel):
 class AgendaItem(BaseModel):
     model_config = _STRICT
     name: str
-    from_status: Literal["open", "discharged", "failed", "not_applicable"] = "open"
     status: Literal["open", "discharged", "failed", "not_applicable"]
-    finding_id: str | None = None
 
 
 class HarnessTrace(BaseModel):
     model_config = _STRICT
-    schema_version: Literal["harness.v1"] = "harness.v1"
-    outcome: Literal["published", "partial", "metrics_only", "withheld"]
-    terminal_reason: Literal[
+    schema_version: Literal["harness.v2"] = "harness.v2"
+    p1_analysis_id: int | None = None
+    trace_analysis_id: int | None = None
+    p1_output_sha256: str | None = None
+    research_outcome: Literal["published", "partial", "metrics_only", "withheld"]
+    publication_outcome: Literal["published", "partial", "metrics_only", "withheld"] | None = None
+    research_terminal_reason: Literal[
         "verified", "budget_exhausted", "compile_failed",
-        "skeptic_blocked", "provider_failed", "malformed_action_breakdown",
+        "skeptic_blocked", "skeptic_incomplete", "provider_failed",
+        "malformed_action_breakdown",
     ]
+    terminal_reason: Literal[
+        "verified", "budget_exhausted", "compile_failed", "skeptic_blocked",
+        "skeptic_incomplete", "provider_failed", "malformed_action_breakdown",
+        "verification_failed", "verification_incomplete",
+    ] | None = None
+    verification_verdict: Literal["PASS", "PASS_WITH_WARNINGS", "FAIL"] | None = None
+    filing_snapshot: dict
+    verification_snapshot: list[dict] = Field(default_factory=list)
+    publication_snapshot: dict = Field(default_factory=dict)
     generator_model: str
     skeptic_model: str
     generator_prompt_version: str
     skeptic_prompt_version: str
     generator_turns: int
+    generator_tool_calls: int
     skeptic_turns: int
+    skeptic_tool_calls: int
     tool_budget: int
     tool_calls: list[ToolTrace] = Field(default_factory=list)
     repair_used: bool
@@ -172,6 +186,7 @@ class HarnessTrace(BaseModel):
 class HarnessResult:
     output: P1Output
     analysis_id: int
+    trace_analysis_id: int
     response: LLMResponse
     trace: HarnessTrace
 
@@ -200,6 +215,28 @@ class _Usage:
 
 
 @dataclass
+class _Counters:
+    generator_turns: int = 0
+    generator_tool_calls: int = 0
+    skeptic_turns: int = 0
+    skeptic_tool_calls: int = 0
+
+
+@dataclass
+class _GeneratorLoopResult:
+    output: P1Output | None
+    dropped: list[DroppedFinding] = field(default_factory=list)
+    terminal_reason: str = "verified"
+    submitted: bool = False
+
+
+@dataclass
+class _SkepticPassResult:
+    obligations: list[SkepticObligation] = field(default_factory=list)
+    completed: bool = False
+
+
+@dataclass
 class ToolContext:
     filing_meta: dict
     sections: dict[str, dict]
@@ -207,11 +244,53 @@ class ToolContext:
     metrics: MetricsBundle
     data_quality: list[CheckResult]
     change_ranges: dict[str, list[tuple[int, int]]] = field(default_factory=dict)
+    change_catalog: dict[str, list[dict]] = field(default_factory=dict)
     tool_cache: dict[str, dict] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        """Freeze the complete deterministic diff before the model can act."""
+        for key in sorted(_CHANGE_SECTIONS.intersection(self.sections)):
+            current = self.sections[key].get("text", "")
+            prior_row = self.prior_sections.get(key)
+            rows: list[dict] = []
+            current_ranges: list[tuple[int, int]] = []
+            if prior_row:
+                diff = diff_risk_factors(prior_row.get("text", ""), current)
+                for row in diff.added:
+                    rows.append({
+                        "kind": "added", "section_key": key,
+                        "char_start": row.char_start, "char_end": row.char_end,
+                        "snippet": row.text, "similarity": None,
+                    })
+                    current_ranges.append((row.char_start, row.char_end))
+                for row in diff.modified:
+                    rows.append({
+                        "kind": "modified", "section_key": key,
+                        "char_start": row.current.char_start,
+                        "char_end": row.current.char_end,
+                        "snippet": row.current.text, "similarity": row.similarity,
+                    })
+                    current_ranges.append((row.current.char_start, row.current.char_end))
+                rows.extend({
+                    "kind": "removed", "section_key": key,
+                    "char_start": row.char_start, "char_end": row.char_end,
+                    "snippet": row.text,
+                } for row in diff.removed)
+            elif self.has_prior_comparable:
+                for row in split_paragraphs(current):
+                    rows.append({
+                        "kind": "added", "section_key": key,
+                        "char_start": row.char_start, "char_end": row.char_end,
+                        "snippet": row.text, "similarity": None,
+                    })
+                    current_ranges.append((row.char_start, row.char_end))
+            self.change_catalog[key] = rows
+            self.change_ranges[key] = current_ranges
 
     @property
     def has_prior_comparable(self) -> bool:
-        return bool(self.prior_sections)
+        explicit = self.filing_meta.get("has_prior_comparable")
+        return bool(self.prior_sections) if explicit is None else bool(explicit)
 
     def _section_rows(self, scope: str) -> dict[str, dict]:
         return self.sections if scope == "current" else self.prior_sections
@@ -252,49 +331,12 @@ class ToolContext:
         return {"results": results}
 
     def get_changes(self, args: GetChangesArgs) -> dict:
-        changes: list[dict] = []
-        for key in args.section_keys:
-            if key not in _CHANGE_SECTIONS or key not in self.sections:
-                continue
-            current = self.sections[key].get("text", "")
-            prior_row = self.prior_sections.get(key)
-            prior = prior_row.get("text", "") if prior_row else ""
-            if prior_row:
-                diff = diff_risk_factors(prior, current)
-                current_rows = [
-                    ("added", row.char_start, row.char_end, row.text, None)
-                    for row in diff.added
-                ] + [
-                    ("modified", row.current.char_start, row.current.char_end,
-                     row.current.text, row.similarity)
-                    for row in diff.modified
-                ]
-                removed = [
-                    {"kind": "removed", "section_key": key,
-                     "char_start": row.char_start, "char_end": row.char_end,
-                     "snippet": row.text}
-                    for row in diff.removed[:args.max_results]
-                ]
-            elif self.has_prior_comparable:
-                current_rows = [
-                    ("added", row.char_start, row.char_end, row.text, None)
-                    for row in split_paragraphs(current)
-                ]
-                removed = []
-            else:
-                current_rows = []
-                removed = []
-            ranges = self.change_ranges.setdefault(key, [])
-            for kind, start, end, snippet, similarity in current_rows:
-                ranges.append((start, end))
-                if len(changes) < args.max_results * len(args.section_keys):
-                    changes.append({
-                        "kind": kind, "section_key": key,
-                        "char_start": start, "char_end": end,
-                        "snippet": snippet, "similarity": similarity,
-                    })
-            changes.extend(removed)
-        return {"changes": changes}
+        changes = [
+            row
+            for key in args.section_keys
+            for row in self.change_catalog.get(key, [])
+        ]
+        return {"changes": changes[:args.max_results]}
 
     def get_metric(self, args: GetMetricArgs) -> dict:
         return {"metrics": [
@@ -435,17 +477,23 @@ class FilingResearchHarness:
         usage: _Usage,
         state: dict,
         trace_calls: list[ToolTrace],
-        counters: dict[str, int],
+        counters: _Counters,
         repair_state: dict[str, bool],
-    ) -> tuple[P1Output, list[DroppedFinding], str]:
+        optional_repair: bool = False,
+    ) -> _GeneratorLoopResult:
         invalid_actions = 0
         check_draft_used = state.get("check_draft_used", False)
-        while counters["generator_turns"] < self.MAX_GENERATOR_TURNS:
-            counters["generator_turns"] += 1
+        submit_only = False
+        fallback_candidate: P1Output | None = None
+        while counters.generator_turns < self.MAX_GENERATOR_TURNS:
+            counters.generator_turns += 1
             state["budget"] = {
-                "generator_turns_remaining": self.MAX_GENERATOR_TURNS
-                - counters["generator_turns"],
-                "tool_calls_remaining": self.MAX_TOOL_CALLS - counters["tool_calls"],
+                "generator_turns_remaining": max(
+                    0, self.MAX_GENERATOR_TURNS - counters.generator_turns
+                ),
+                "tool_calls_remaining": max(
+                    0, self.MAX_TOOL_CALLS - counters.generator_tool_calls
+                ),
                 "repair_available": not repair_state["used"],
             }
             try:
@@ -456,9 +504,17 @@ class FilingResearchHarness:
             except HarnessError:
                 raise
             except Exception as exc:
+                if submit_only:
+                    break
                 invalid_actions += 1
                 state["last_error"] = "INVALID_ACTION"
                 if invalid_actions >= 2:
+                    if optional_repair:
+                        return _GeneratorLoopResult(
+                            output=None,
+                            terminal_reason="malformed_action_breakdown",
+                            submitted=False,
+                        )
                     raise HarnessError("malformed_action_breakdown") from exc
                 continue
 
@@ -473,6 +529,7 @@ class FilingResearchHarness:
                 )
                 if (compiled.issues or compiled.run_errors) and not repair_state["used"]:
                     repair_state["used"] = True
+                    fallback_candidate = compiled.output
                     state["repair_targets"] = {
                         finding_id: list(dict.fromkeys(
                             issue.code for issue in compiled.issues
@@ -513,16 +570,30 @@ class FilingResearchHarness:
                             finding_id=finding_id, error_codes=codes
                         ))
                 state.pop("repair_targets", None)
-                return final.output, dropped, "verified"
+                return _GeneratorLoopResult(
+                    output=final.output,
+                    dropped=dropped,
+                    terminal_reason="verified",
+                    submitted=True,
+                )
 
-            if counters["tool_calls"] >= self.MAX_TOOL_CALLS:
+            if submit_only:
                 break
-            counters["tool_calls"] += 1
+            if counters.generator_tool_calls >= self.MAX_TOOL_CALLS:
+                state["last_error"] = "TOOL_BUDGET_EXHAUSTED_SUBMIT_NOW"
+                state["instruction"] = (
+                    "Tool budget exhausted. The next and only accepted action is submit."
+                )
+                submit_only = True
+                if counters.generator_turns < self.MAX_GENERATOR_TURNS:
+                    continue
+                break
+            counters.generator_tool_calls += 1
             result, check_draft_used = self._execute_tool(
                 action, context, check_draft_used=check_draft_used
             )
             state["check_draft_used"] = check_draft_used
-            call_id = f"t{counters['tool_calls']}"
+            call_id = f"t{len(trace_calls) + 1}"
             observation = self._tool_observation(call_id, action.tool, result)
             state.setdefault("observations", []).append(observation)
             result_json = json.dumps(observation["result"], sort_keys=True)
@@ -533,9 +604,15 @@ class FilingResearchHarness:
                 result_sha256=hashlib.sha256(result_json.encode()).hexdigest(),
             ))
 
-        empty = self._empty_output(context.filing_meta)
+        if optional_repair:
+            return _GeneratorLoopResult(
+                output=None,
+                terminal_reason="budget_exhausted",
+                submitted=False,
+            )
+        candidate = fallback_candidate or self._empty_output(context.filing_meta)
         final = compile_draft(
-            empty,
+            candidate,
             trusted_meta=context.filing_meta,
             sections=context.sections,
             metrics=context.metrics,
@@ -545,7 +622,12 @@ class FilingResearchHarness:
         )
         if final.run_errors:
             raise HarnessError(final.run_errors[0].lower())
-        return final.output, final.dropped, "budget_exhausted"
+        return _GeneratorLoopResult(
+            output=final.output,
+            dropped=final.dropped,
+            terminal_reason="budget_exhausted",
+            submitted=fallback_candidate is not None,
+        )
 
     def _skeptic_pass(
         self,
@@ -555,13 +637,12 @@ class FilingResearchHarness:
         output: P1Output,
         trace_calls: list[ToolTrace],
         usage: _Usage,
-        counters: dict[str, int],
+        counters: _Counters,
         observations: list[dict],
-    ) -> list[SkepticObligation]:
+    ) -> _SkepticPassResult:
         if not output.findings:
-            return []
+            return _SkepticPassResult()
         invalid_actions = 0
-        local_tools = 0
         state = {
             "filing_meta": context.filing_meta,
             "draft": output.model_dump(mode="json"),
@@ -569,8 +650,12 @@ class FilingResearchHarness:
             "rules": {"may_only_add_obligations_or_use_read_tools": True},
         }
         while True:
-            counters["skeptic_turns"] += 1
-            state["budget"] = {"tool_calls_remaining": self.MAX_SKEPTIC_TOOL_CALLS-local_tools}
+            counters.skeptic_turns += 1
+            state["budget"] = {
+                "tool_calls_remaining": max(
+                    0, self.MAX_SKEPTIC_TOOL_CALLS - counters.skeptic_tool_calls
+                )
+            }
             try:
                 raw = self._call(
                     self.skeptic, usage, system=system, state=state, temperature=0.0
@@ -578,11 +663,11 @@ class FilingResearchHarness:
                 action = _SKEPTIC_ADAPTER.validate_python(raw)
             except HarnessError:
                 raise
-            except Exception as exc:
+            except Exception:
                 invalid_actions += 1
                 state["last_error"] = "INVALID_ACTION"
                 if invalid_actions >= 2:
-                    raise HarnessError("malformed_action_breakdown") from exc
+                    return _SkepticPassResult(completed=False)
                 continue
             if isinstance(action, SkepticDoneAction):
                 valid_ids = {finding.finding_id for finding in output.findings}
@@ -590,19 +675,18 @@ class FilingResearchHarness:
                     invalid_actions += 1
                     state["last_error"] = "UNKNOWN_FINDING_ID"
                     if invalid_actions >= 2:
-                        raise HarnessError("malformed_action_breakdown")
+                        return _SkepticPassResult(completed=False)
                     continue
-                return action.obligations
-            if local_tools >= self.MAX_SKEPTIC_TOOL_CALLS:
-                invalid_actions += 1
+                return _SkepticPassResult(
+                    obligations=action.obligations,
+                    completed=True,
+                )
+            if counters.skeptic_tool_calls >= self.MAX_SKEPTIC_TOOL_CALLS:
                 state["last_error"] = "SKEPTIC_TOOL_BUDGET_EXHAUSTED_RETURN_DONE"
-                if invalid_actions >= 2:
-                    raise HarnessError("malformed_action_breakdown")
-                continue
-            local_tools += 1
-            counters["tool_calls"] += 1
+                return _SkepticPassResult(completed=False)
+            counters.skeptic_tool_calls += 1
             result, _ = self._execute_tool(action, context, check_draft_used=True)
-            call_id = f"t{counters['tool_calls']}"
+            call_id = f"t{len(trace_calls) + 1}"
             observation = self._tool_observation(call_id, action.tool, result)
             state.setdefault("observations", []).append(observation)
             trace_calls.append(ToolTrace(
@@ -630,6 +714,56 @@ class FilingResearchHarness:
             created_at=self._now_fn(),
         ))
 
+    @staticmethod
+    def _merge_drops(rows: list[DroppedFinding]) -> list[DroppedFinding]:
+        merged: dict[str, list[str]] = {}
+        for row in rows:
+            codes = merged.setdefault(row.finding_id, [])
+            codes.extend(code for code in row.error_codes if code not in codes)
+        return [
+            DroppedFinding(finding_id=finding_id, error_codes=codes)
+            for finding_id, codes in merged.items()
+        ]
+
+    @staticmethod
+    def _objection_issues(
+        obligations: list[SkepticObligation],
+    ) -> list[CompilerIssue]:
+        return [
+            CompilerIssue(code=row.code, finding_id=row.finding_id)
+            for row in obligations
+        ]
+
+    @staticmethod
+    def _filing_snapshot(meta: dict) -> dict:
+        return {
+            "accession": meta["accession_number"],
+            "ticker": meta["ticker"],
+            "form": meta.get("form_type"),
+            "filed_at": meta.get("filed_at"),
+            "source_sha256": meta.get("source_sha256") or meta.get("raw_sha256"),
+        }
+
+    def _prune_objections(
+        self,
+        output: P1Output,
+        obligations: list[SkepticObligation],
+        context: ToolContext,
+    ) -> tuple[P1Output, list[DroppedFinding]]:
+        final = compile_draft(
+            output,
+            trusted_meta=context.filing_meta,
+            sections=context.sections,
+            metrics=context.metrics,
+            change_ranges=context.change_ranges,
+            has_prior_comparable=context.has_prior_comparable,
+            prune=True,
+            extra_issues=self._objection_issues(obligations),
+        )
+        if final.run_errors:
+            raise HarnessError(final.run_errors[0].lower())
+        return final.output, final.dropped
+
     def run(
         self,
         *,
@@ -647,10 +781,13 @@ class FilingResearchHarness:
         )
         trace_calls: list[ToolTrace] = []
         usage = _Usage()
-        counters = {"generator_turns": 0, "skeptic_turns": 0, "tool_calls": 0}
+        counters = _Counters()
         repair_state = {"used": False}
         dropped: list[DroppedFinding] = []
         terminal = "verified"
+        skeptic_status: Literal["discharged", "failed", "not_applicable"] = (
+            "not_applicable"
+        )
         state = {
             "filing_meta": filing_meta,
             "section_catalog": self._catalog(sections),
@@ -658,65 +795,115 @@ class FilingResearchHarness:
             "metric_catalog": [metric.value for metric in MetricId],
             "agenda": [
                 {"name": name, "status": "open"}
-                for name in (
-                    "FORM_SCOPE", "CRITICAL_COVERAGE", "CHANGE_BASIS", "EXACT_EVIDENCE",
-                    "NUMERIC_PROVENANCE", "DIRECTION_CONSISTENCY", "SAFE_LANGUAGE",
-                    "DATA_QUALITY_REVIEW", "SKEPTIC_REVIEW",
-                )
+                for name in ("FORM_SCOPE", "CRITICAL_COVERAGE", "SKEPTIC_REVIEW")
             ],
             "observations": [],
         }
         try:
-            output, generator_dropped, terminal = self._generator_loop(
+            generated = self._generator_loop(
                 system=generator_system, context=context, usage=usage, state=state,
                 trace_calls=trace_calls, counters=counters, repair_state=repair_state,
             )
-            dropped.extend(generator_dropped)
-            objections = self._skeptic_pass(
-                system=skeptic_system, context=context, output=output,
-                trace_calls=trace_calls, usage=usage, counters=counters,
-                observations=state.get("observations", []),
-            )
-            if objections and not repair_state["used"]:
-                repair_state["used"] = True
-                state["current_draft"] = output.model_dump(mode="json")
-                state["compiler_errors"] = [row.model_dump(mode="json") for row in objections]
-                repair_targets: dict[str, list[str]] = {}
-                for row in objections:
-                    codes = repair_targets.setdefault(row.finding_id, [])
-                    if row.code not in codes:
-                        codes.append(row.code)
-                state["repair_targets"] = repair_targets
-                state["instruction"] = (
-                    "The Skeptic added finding-local obligations. Submit one complete repair; "
-                    "drop any finding you cannot support."
-                )
-                output, repair_dropped, _ = self._generator_loop(
-                    system=generator_system, context=context, usage=usage, state=state,
-                    trace_calls=trace_calls, counters=counters, repair_state=repair_state,
-                )
-                dropped.extend(repair_dropped)
-                objections = self._skeptic_pass(
-                    system=skeptic_system, context=context, output=output,
-                    trace_calls=trace_calls, usage=usage, counters=counters,
+            if generated.output is None:
+                raise HarnessError("malformed_action_breakdown")
+            output = generated.output
+            dropped.extend(generated.dropped)
+            terminal = generated.terminal_reason
+            baseline = output.model_copy(deep=True)
+
+            if baseline.findings:
+                first_review = self._skeptic_pass(
+                    system=skeptic_system,
+                    context=context,
+                    output=baseline,
+                    trace_calls=trace_calls,
+                    usage=usage,
+                    counters=counters,
                     observations=state.get("observations", []),
                 )
-            if objections:
-                extra = [
-                    CompilerIssue(code=row.code, finding_id=row.finding_id)
-                    for row in objections
-                ]
-                final = compile_draft(
-                    output, trusted_meta=filing_meta, sections=sections, metrics=metrics,
-                    change_ranges=context.change_ranges,
-                    has_prior_comparable=context.has_prior_comparable,
-                    prune=True, extra_issues=extra,
-                )
-                if final.run_errors:
-                    raise HarnessError(final.run_errors[0].lower())
-                output = final.output
-                dropped.extend(final.dropped)
-                terminal = "skeptic_blocked"
+                if not first_review.completed:
+                    skeptic_status = "failed"
+                    terminal = "skeptic_incomplete"
+                else:
+                    skeptic_status = "discharged"
+                    original_objections = first_review.obligations
+                    if original_objections and not repair_state["used"]:
+                        repair_state["used"] = True
+                        state["current_draft"] = baseline.model_dump(mode="json")
+                        state["compiler_errors"] = [
+                            row.model_dump(mode="json") for row in original_objections
+                        ]
+                        repair_targets: dict[str, list[str]] = {}
+                        for row in original_objections:
+                            codes = repair_targets.setdefault(row.finding_id, [])
+                            if row.code not in codes:
+                                codes.append(row.code)
+                        state["repair_targets"] = repair_targets
+                        state["instruction"] = (
+                            "The Skeptic added finding-local obligations. Submit one complete "
+                            "repair; drop any finding you cannot support."
+                        )
+                        repaired = self._generator_loop(
+                            system=generator_system,
+                            context=context,
+                            usage=usage,
+                            state=state,
+                            trace_calls=trace_calls,
+                            counters=counters,
+                            repair_state=repair_state,
+                            optional_repair=True,
+                        )
+                        if repaired.output is None:
+                            output, objection_drops = self._prune_objections(
+                                baseline, original_objections, context
+                            )
+                            dropped.extend(objection_drops)
+                            terminal = "skeptic_blocked"
+                        else:
+                            output = repaired.output
+                            dropped.extend(repaired.dropped)
+                            surviving = {
+                                finding.finding_id for finding in output.findings
+                            }
+                            removed_objections = [
+                                row for row in original_objections
+                                if row.finding_id not in surviving
+                            ]
+                            dropped.extend(DroppedFinding(
+                                finding_id=row.finding_id,
+                                error_codes=[row.code],
+                            ) for row in removed_objections)
+                            if removed_objections:
+                                terminal = "skeptic_blocked"
+                            if output.findings:
+                                second_review = self._skeptic_pass(
+                                    system=skeptic_system,
+                                    context=context,
+                                    output=output,
+                                    trace_calls=trace_calls,
+                                    usage=usage,
+                                    counters=counters,
+                                    observations=state.get("observations", []),
+                                )
+                                if not second_review.completed:
+                                    skeptic_status = "failed"
+                                    output, unresolved_drops = self._prune_objections(
+                                        output, original_objections, context
+                                    )
+                                    dropped.extend(unresolved_drops)
+                                    terminal = "skeptic_incomplete"
+                                elif second_review.obligations:
+                                    output, objection_drops = self._prune_objections(
+                                        output, second_review.obligations, context
+                                    )
+                                    dropped.extend(objection_drops)
+                                    terminal = "skeptic_blocked"
+                    elif original_objections:
+                        output, objection_drops = self._prune_objections(
+                            baseline, original_objections, context
+                        )
+                        dropped.extend(objection_drops)
+                        terminal = "skeptic_blocked"
         except HarnessError as exc:
             reason = exc.reason
             mapped = (
@@ -725,13 +912,17 @@ class FilingResearchHarness:
                 else "compile_failed"
             )
             trace = HarnessTrace(
-                outcome="withheld", terminal_reason=mapped,
+                research_outcome="withheld",
+                research_terminal_reason=mapped,
+                filing_snapshot=self._filing_snapshot(filing_meta),
                 generator_model=self.generator_model or usage.model or "unknown",
                 skeptic_model=self.skeptic_model or usage.model or "unknown",
                 generator_prompt_version=generator_version,
                 skeptic_prompt_version=skeptic_version,
-                generator_turns=counters["generator_turns"],
-                skeptic_turns=counters["skeptic_turns"],
+                generator_turns=counters.generator_turns,
+                generator_tool_calls=counters.generator_tool_calls,
+                skeptic_turns=counters.skeptic_turns,
+                skeptic_tool_calls=counters.skeptic_tool_calls,
                 tool_budget=self.MAX_TOOL_CALLS + self.MAX_SKEPTIC_TOOL_CALLS,
                 tool_calls=trace_calls, repair_used=repair_state["used"],
                 metric_results=list(metrics.results.values()),
@@ -744,6 +935,10 @@ class FilingResearchHarness:
                         name="CRITICAL_COVERAGE",
                         status="failed" if reason == "critical_coverage" else "open",
                     ),
+                    AgendaItem(
+                        name="SKEPTIC_REVIEW",
+                        status="failed" if skeptic_status == "failed" else "not_applicable",
+                    ),
                 ],
                 dropped_findings=dropped,
             )
@@ -753,67 +948,71 @@ class FilingResearchHarness:
             )
             raise
 
-        merged_drops: dict[str, list[str]] = {}
-        for row in dropped:
-            target = merged_drops.setdefault(row.finding_id, [])
-            target.extend(code for code in row.error_codes if code not in target)
-        dropped = [
-            DroppedFinding(finding_id=finding_id, error_codes=codes)
-            for finding_id, codes in merged_drops.items()
-        ]
+        dropped = self._merge_drops(dropped)
         published_ids = [finding.finding_id for finding in output.findings]
-        outcome = (
+        research_outcome = (
             "metrics_only" if not published_ids else "partial" if dropped else "published"
         )
         trace = HarnessTrace(
-            outcome=outcome,
-            terminal_reason=terminal,
+            research_outcome=research_outcome,
+            research_terminal_reason=terminal,
+            filing_snapshot=self._filing_snapshot(filing_meta),
             generator_model=self.generator_model or usage.model or "unknown",
             skeptic_model=self.skeptic_model or usage.model or "unknown",
             generator_prompt_version=generator_version,
             skeptic_prompt_version=skeptic_version,
-            generator_turns=counters["generator_turns"],
-            skeptic_turns=counters["skeptic_turns"],
+            generator_turns=counters.generator_turns,
+            generator_tool_calls=counters.generator_tool_calls,
+            skeptic_turns=counters.skeptic_turns,
+            skeptic_tool_calls=counters.skeptic_tool_calls,
             tool_budget=self.MAX_TOOL_CALLS + self.MAX_SKEPTIC_TOOL_CALLS,
             tool_calls=trace_calls, repair_used=repair_state["used"],
             metric_results=list(metrics.results.values()),
             agenda=[
                 AgendaItem(name="FORM_SCOPE", status="discharged"),
                 AgendaItem(name="CRITICAL_COVERAGE", status="discharged"),
-                AgendaItem(name="DATA_QUALITY_REVIEW", status="discharged"),
-                AgendaItem(
-                    name="SKEPTIC_REVIEW",
-                    status="not_applicable" if not published_ids else "discharged",
-                ),
-            ] + [
-                AgendaItem(name=name, status="discharged", finding_id=finding_id)
-                for finding_id in published_ids
-                for name in (
-                    "CHANGE_BASIS", "EXACT_EVIDENCE", "NUMERIC_PROVENANCE",
-                    "DIRECTION_CONSISTENCY", "SAFE_LANGUAGE",
-                )
-            ] + [
-                AgendaItem(name="SKEPTIC_REVIEW", status="failed", finding_id=row.finding_id)
-                for row in dropped
+                AgendaItem(name="SKEPTIC_REVIEW", status=skeptic_status),
             ],
-            published_finding_ids=published_ids,
             dropped_findings=dropped,
         )
-        analysis_id = self.repo.insert_analysis(Analysis(
+        p1_analysis = Analysis(
             accession_number=filing_meta["accession_number"], ticker=filing_meta["ticker"],
             stage="P1", model=self.generator_model or usage.model or "unknown",
             prompt_version=generator_version, output_json=output.model_dump_json(),
             tokens_in=usage.tokens_in, tokens_out=usage.tokens_out,
             cost_usd=usage.cost_usd if usage.saw_cost else None,
             created_at=self._now_fn(),
-        ))
-        self._persist_trace(
-            meta=filing_meta, trace=trace, usage=usage,
-            prompt_version=f"{generator_version}+{skeptic_version}",
         )
+
+        def trace_factory(p1_id: int, p1_sha256: str) -> Analysis:
+            linked = trace.model_copy(update={
+                "p1_analysis_id": p1_id,
+                "p1_output_sha256": p1_sha256,
+            })
+            return Analysis(
+                accession_number=filing_meta["accession_number"],
+                ticker=filing_meta["ticker"],
+                stage="P1_TRACE",
+                model=self.generator_model or usage.model or "unknown",
+                prompt_version=f"{generator_version}+{skeptic_version}",
+                output_json=linked.model_dump_json(),
+                tokens_in=usage.tokens_in,
+                tokens_out=usage.tokens_out,
+                cost_usd=usage.cost_usd if usage.saw_cost else None,
+                created_at=self._now_fn(),
+            )
+
+        analysis_id, trace_analysis_id, p1_sha256 = self.repo.insert_p1_with_trace(
+            p1_analysis, trace_factory
+        )
+        trace = trace.model_copy(update={
+            "p1_analysis_id": analysis_id,
+            "trace_analysis_id": trace_analysis_id,
+            "p1_output_sha256": p1_sha256,
+        })
         response = LLMResponse(
             text="", model=self.generator_model or usage.model or "unknown",
             tokens_in=usage.tokens_in, tokens_out=usage.tokens_out,
             cost_usd=usage.cost_usd if usage.saw_cost else None,
         )
-        return HarnessResult(output, analysis_id, response, trace)
+        return HarnessResult(output, analysis_id, trace_analysis_id, response, trace)

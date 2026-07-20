@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from finwatch.db.repositories import Company, Filing, Repo
+from finwatch.db.repositories import Analysis, Company, Filing, Repo
+from finwatch.llm.harness import HarnessTrace
 from finwatch.llm.schemas import P1Output
 
 _REQUIRED_PUBLICATION_CHECKS = frozenset({"V1", "V4", "V5"})
@@ -20,6 +21,9 @@ class FilingProjection:
     withheld: bool
     withheld_reason: str | None = None
     data_quality: list[tuple[str, str]] = field(default_factory=list)
+    p1_analysis: Analysis | None = None
+    trace_analysis: Analysis | None = None
+    trace: HarnessTrace | None = None
 
     @property
     def ticker(self) -> str:
@@ -37,8 +41,29 @@ class FilingProjection:
 
 
 def load_filing_projection(repo: Repo, filing: Filing) -> FilingProjection:
-    p1a = repo.latest_analysis(filing.accession_number, "P1")
-    analysis_present = p1a is not None
+    latest_trace = repo.latest_analysis(filing.accession_number, "P1_TRACE")
+    analysis_present = (
+        latest_trace is not None
+        or repo.latest_analysis(filing.accession_number, "P1") is not None
+    )
+    linked = repo.latest_linked_p1_attempt(filing.accession_number)
+    p1a = linked[0] if linked is not None else None
+    trace_row = linked[1] if linked is not None else None
+    trace = None
+    if trace_row is not None:
+        try:
+            candidate = HarnessTrace.model_validate_json(trace_row.output_json)
+        except Exception:  # noqa: BLE001 - malformed state fails closed
+            candidate = None
+        if (
+            candidate is not None
+            and candidate.trace_analysis_id == trace_row.id
+            and candidate.publication_outcome is not None
+            and candidate.terminal_reason is not None
+            and candidate.filing_snapshot.get("accession") == filing.accession_number
+            and candidate.filing_snapshot.get("form") == filing.form_type
+        ):
+            trace = candidate
     results = repo.list_verification_results(p1a.id) if p1a else []
     # Strict publication gate: each required check must have exactly one persisted row
     # and that row must PASS. With server-side offset anchoring, production V4 is
@@ -55,7 +80,13 @@ def load_filing_projection(repo: Repo, filing: Filing) -> FilingProjection:
         row.verdict == "fail" and row.severity == "blocking" for row in results
     )
     llm_output_allowed = bool(
-        p1a and filing.status == "verified" and required_passed and not blocking
+        p1a
+        and trace
+        and filing.status == "verified"
+        and trace.publication_outcome in {"published", "partial", "metrics_only"}
+        and trace.verification_verdict in {"PASS", "PASS_WITH_WARNINGS"}
+        and required_passed
+        and not blocking
     )
     p1 = None
     if llm_output_allowed:
@@ -64,7 +95,9 @@ def load_filing_projection(repo: Repo, filing: Filing) -> FilingProjection:
         except Exception:  # noqa: BLE001 - corrupt persisted output must fail closed
             llm_output_allowed = False
             p1 = None
-    withheld = filing.status == "failed" or bool(analysis_present and not llm_output_allowed)
+    withheld = filing.status in {"failed", "analyzed"} or bool(
+        analysis_present and not llm_output_allowed
+    )
     withheld_reason = (
         "LLM-derived analysis withheld because deterministic verification did not pass."
         if withheld and analysis_present
@@ -84,6 +117,9 @@ def load_filing_projection(repo: Repo, filing: Filing) -> FilingProjection:
         withheld=withheld,
         withheld_reason=withheld_reason,
         data_quality=data_quality,
+        p1_analysis=p1a,
+        trace_analysis=trace_row,
+        trace=trace,
     )
 
 def in_window(filing: Filing, since: str | None, until: str | None) -> bool:

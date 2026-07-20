@@ -4,13 +4,16 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from finwatch.db import Company, Filing, Repo, init_db
+import pytest
+
+from finwatch.db import Analysis, Company, Filing, Repo, VerificationResult, init_db
 from finwatch.llm.router import FakeLLMClient
 from finwatch.llm.stages import P1Extractor
 from finwatch.metrics.service import MetricsService
 from finwatch.pipeline.orchestrator import Orchestrator
 from finwatch.preprocess.preprocessor import Preprocessor
 from finwatch.presentation.service import PresentationService
+from finwatch.verify.checks import CheckResult, VerificationReport
 
 FX = Path(__file__).parent / "fixtures"
 TENQ = (FX / "tenq_sample.html").read_text()
@@ -77,7 +80,10 @@ def test_pipeline_end_to_end_passes_and_persists():
     repo.track_company(CIK, at="t")
     certificate = PresentationService(repo).certificate(ACCN)
     assert certificate is not None
-    assert certificate.schema_version == "certificate.v1"
+    assert PresentationService(repo, user_id="untracked-user").certificate(ACCN) is None
+    assert certificate.schema_version == "certificate.v2"
+    assert certificate.p1_analysis_id == fa.p1_analysis_id
+    assert certificate.trace_analysis_id == fa.trace_analysis_id
     assert certificate.published_finding_ids == ["f1"]
     assert certificate.evidence[0]["section_sha256"]
     assert certificate.metrics
@@ -96,6 +102,178 @@ def test_pipeline_runs_v1_v4_v5_and_v2_data_quality_without_v3():
     assert {"V2a", "V2b", "V2c"} <= ids                 # V2 audit is present now
     assert "V3" not in ids
     assert fa.verification.verdict in ("PASS", "PASS_WITH_WARNINGS")
+
+
+def test_certificate_is_frozen_to_linked_attempt_not_later_database_rows():
+    repo = Repo(init_db(":memory:"))
+    _seed(repo)
+    fa = _orchestrator(repo).process_html(
+        filing=repo.get_filing(ACCN), html=TENQ, as_of="2025-05-01"
+    )
+    repo.track_company(CIK, at="t")
+    service = PresentationService(repo)
+    before = service.certificate(ACCN)
+    assert before is not None
+
+    later_id = repo.insert_analysis(Analysis(
+        accession_number=ACCN,
+        ticker="MSFT",
+        stage="P1",
+        model="later",
+        prompt_version="later",
+        output_json='{"unrelated":"later attempt row"}',
+        created_at="later",
+    ))
+    repo.insert_verification_results([VerificationResult(
+        analysis_id=later_id,
+        check_id="V1",
+        verdict="fail",
+        severity="blocking",
+        detail="later detail must not enter the certificate",
+        created_at="later",
+    )])
+    repo.conn.execute(
+        "UPDATE filing_sections SET text = ?, text_sha256 = ? WHERE accession_number = ?",
+        ("later reparsed text", "b" * 64, ACCN),
+    )
+    repo.conn.execute("UPDATE companies SET name = ? WHERE cik = ?", ("Later Name", CIK))
+    repo.conn.commit()
+
+    after = service.certificate(ACCN)
+    assert after is not None
+    assert after.model_dump_json() == before.model_dump_json()
+    assert after.certificate_sha256 == before.certificate_sha256
+    assert after.p1_analysis_id == fa.p1_analysis_id
+
+
+def test_downstream_verifier_failure_freezes_redacted_withheld_certificate(monkeypatch):
+    repo = Repo(init_db(":memory:"))
+    _seed(repo)
+    monkeypatch.setattr(
+        "finwatch.pipeline.orchestrator.run_all",
+        lambda _bundle: VerificationReport(
+            verdict="FAIL",
+            results=[CheckResult(
+                check_id="V5",
+                verdict="fail",
+                severity="blocking",
+                detail="sensitive verifier detail",
+            )],
+        ),
+    )
+
+    fa = _orchestrator(repo).process_html(
+        filing=repo.get_filing(ACCN), html=TENQ, as_of="2025-05-01"
+    )
+    assert fa.withheld
+    assert repo.get_filing(ACCN).status == "analyzed"
+    repo.track_company(CIK, at="t")
+    certificate = PresentationService(repo).certificate(ACCN)
+
+    assert certificate is not None
+    assert certificate.schema_version == "certificate.v2"
+    assert certificate.outcome == "withheld"
+    assert certificate.terminal_reason == "verification_failed"
+    assert certificate.published_finding_ids == []
+    assert certificate.classification is None
+    assert certificate.evidence == []
+    assert all("arguments" not in row for row in certificate.tool_calls)
+    assert all(row.detail is None for row in certificate.verification)
+    assert "sensitive verifier detail" not in certificate.model_dump_json()
+
+
+def test_verifier_interruption_finalizes_failed_attempt_without_certificate(monkeypatch):
+    repo = Repo(init_db(":memory:"))
+    _seed(repo)
+
+    def interrupted(_bundle):
+        raise RuntimeError("forced verifier interruption")
+
+    monkeypatch.setattr("finwatch.pipeline.orchestrator.run_all", interrupted)
+    with pytest.raises(RuntimeError, match="forced verifier interruption"):
+        _orchestrator(repo).process_html(
+            filing=repo.get_filing(ACCN), html=TENQ, as_of="2025-05-01"
+        )
+
+    assert repo.get_filing(ACCN).status == "failed"
+    trace = json.loads(repo.latest_analysis(ACCN, "P1_TRACE").output_json)
+    assert trace["terminal_reason"] == "verification_incomplete"
+    repo.track_company(CIK, at="t")
+    assert PresentationService(repo).certificate(ACCN) is None
+
+
+@pytest.mark.parametrize(
+    "corruption",
+    ["v1", "malformed", "pending", "wrong_accession", "mismatched_link"],
+)
+def test_certificate_never_falls_back_past_invalid_latest_trace(corruption):
+    repo = Repo(init_db(":memory:"))
+    _seed(repo)
+    _orchestrator(repo).process_html(
+        filing=repo.get_filing(ACCN), html=TENQ, as_of="2025-05-01"
+    )
+    repo.track_company(CIK, at="t")
+    prior_trace = repo.latest_analysis(ACCN, "P1_TRACE")
+    payload = json.loads(prior_trace.output_json)
+    payload["trace_analysis_id"] = None
+    if corruption == "v1":
+        payload["schema_version"] = "harness.v1"
+    elif corruption == "malformed":
+        payload = None
+    elif corruption == "pending":
+        payload["publication_outcome"] = None
+        payload["terminal_reason"] = None
+        payload["verification_verdict"] = None
+    elif corruption == "wrong_accession":
+        payload["filing_snapshot"]["accession"] = "wrong-accession"
+    else:
+        payload["p1_analysis_id"] = 999_999
+    repo.insert_analysis(Analysis(
+        accession_number=ACCN,
+        ticker="MSFT",
+        stage="P1_TRACE",
+        model="later",
+        prompt_version="later",
+        output_json="{" if payload is None else json.dumps(payload),
+        created_at="later",
+    ))
+
+    assert PresentationService(repo).certificate(ACCN) is None
+
+
+@pytest.mark.parametrize("status", ["verified", "analyzed"])
+def test_certificate_rejects_status_outcome_verdict_mismatch(monkeypatch, status):
+    repo = Repo(init_db(":memory:"))
+    _seed(repo)
+    if status == "analyzed":
+        monkeypatch.setattr(
+            "finwatch.pipeline.orchestrator.run_all",
+            lambda _bundle: VerificationReport(
+                verdict="FAIL",
+                results=[CheckResult(
+                    check_id="V5", verdict="fail", severity="blocking"
+                )],
+            ),
+        )
+    _orchestrator(repo).process_html(
+        filing=repo.get_filing(ACCN), html=TENQ, as_of="2025-05-01"
+    )
+    repo.track_company(CIK, at="t")
+    trace_row = repo.latest_analysis(ACCN, "P1_TRACE")
+    payload = json.loads(trace_row.output_json)
+    if status == "verified":
+        payload["publication_outcome"] = "withheld"
+        payload["verification_verdict"] = "FAIL"
+    else:
+        payload["publication_outcome"] = "metrics_only"
+        payload["verification_verdict"] = "PASS"
+    repo.conn.execute(
+        "UPDATE analyses SET output_json = ? WHERE id = ?",
+        (json.dumps(payload), trace_row.id),
+    )
+    repo.conn.commit()
+
+    assert PresentationService(repo).certificate(ACCN) is None
 
 def test_launch_pipeline_only_runs_p1():
     repo = Repo(init_db(":memory:"))

@@ -192,6 +192,28 @@ def test_restart_keeps_portfolio_results_but_drops_session_key(tmp_path, monkeyp
     assert pipeline["verify"] == "completed"
 
 
+def test_certificate_endpoint_returns_stable_attempt_linked_v2_artifact(tmp_path):
+    db_path = tmp_path / "finwatch.db"
+    build_demo_db(str(db_path)).close()
+    client = TestClient(
+        create_app(db_path=str(db_path), web_dist=tmp_path / "missing-dist"),
+        headers=LOCAL_BROWSER_HEADERS,
+    )
+    url = "/api/filings/0001683168-24-004848/certificate"
+
+    first = client.get(url)
+    second = client.get(url)
+
+    assert first.status_code == 200
+    assert first.content == second.content
+    payload = first.json()
+    assert payload["schema_version"] == "certificate.v2"
+    assert payload["p1_analysis_id"] > 0
+    assert payload["trace_analysis_id"] > 0
+    assert len(payload["p1_output_sha256"]) == 64
+    assert len(payload["certificate_sha256"]) == 64
+
+
 def test_analysis_captures_session_key_before_enqueue(tmp_path, monkeypatch):
     monkeypatch.setenv("SEC_USER_AGENT", "Test User test@example.com")
     monkeypatch.setenv("FINWATCH_MODEL", "openai/test")

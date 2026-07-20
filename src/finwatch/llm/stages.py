@@ -5,15 +5,10 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 
 from finwatch.db.repositories import Repo
-from finwatch.llm.harness import FilingResearchHarness, HarnessError
-from finwatch.llm.router import LLMClient, LLMResponse
-from finwatch.llm.schemas import P1Output
+from finwatch.llm.harness import FilingResearchHarness, HarnessError, HarnessResult
+from finwatch.llm.router import LLMClient
 from finwatch.metrics.envelope import MetricsBundle
 from finwatch.verify.checks import CheckResult
-
-# Retained as a public safety constant for callers/tests. The harness never sends the
-# full filing at once; individual observations are capped much lower.
-P1_MAX_INPUT_CHARS = 240_000
 
 
 def _now_iso() -> str:
@@ -51,9 +46,7 @@ class P1Extractor:
         prior_sections: dict | None = None,
         metrics: MetricsBundle | None = None,
         data_quality: list[CheckResult] | None = None,
-        risk_factor_diff: dict | None = None,  # compatibility input; get_changes supersedes it
-    ) -> tuple[P1Output, int, LLMResponse]:
-        del risk_factor_diff
+    ) -> HarnessResult:
         try:
             result = self.harness.run(
                 filing_meta=filing_meta,
@@ -64,4 +57,4 @@ class P1Extractor:
             )
         except HarnessError as exc:
             raise StageError(f"P1 harness stopped: {exc.reason}") from exc
-        return result.output, result.analysis_id, result.response
+        return result

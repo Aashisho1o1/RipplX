@@ -1,4 +1,4 @@
--- finwatch lean schema (v5). One product path: track tickers → analyze the newest
+-- finwatch lean schema (v6). One product path: track tickers → analyze the newest
 -- filing → six deterministic metrics → verified, canonical presentation. Installed
 -- once on a fresh database by db/database.py::init_db, which stamps application_id +
 -- user_version and refuses to open a database created by an older schema.

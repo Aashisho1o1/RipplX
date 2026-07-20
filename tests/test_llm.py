@@ -231,25 +231,37 @@ def test_p1_compiler_localizes_numbers_and_schema_keeps_severity_consistent():
         })
 
 
-def test_finding_headline_policy_is_a_finding_local_compiler_error():
-    for headline in (
-        "We recommend buying the shares",
-        "Investors should consider adding shares",
-        "Revenue quadrupled this year",
-    ):
-        draft = P1Output.model_validate({
-            **VALID_P1,
-            "classification": {"overall_severity": "medium"},
-            "findings": [_finding(headline=headline)],
-        })
-        result = compile_draft(
-            draft,
-            trusted_meta={"accession_number": "a-1", "ticker": "T", "form_type": "8-K"},
-            sections={"item_2_02": {"text": "hello"}},
-            metrics=MetricsBundle(),
-        )
-        codes = {issue.code for issue in result.issues}
-        assert codes & {"UNSAFE_LANGUAGE", "AUTHORED_NUMBER"}
+@pytest.mark.parametrize(
+    ("headline", "expected"),
+    [
+        ("Revenue moved by 25 bps", "AUTHORED_NUMBER"),
+        ("We recommend buying the shares", "UNSAFE_LANGUAGE"),
+        ("Our price target increased", "UNSAFE_LANGUAGE"),
+        ("We estimate a fair value for the shares", "UNSAFE_LANGUAGE"),
+        ("Guaranteed upside", "UNSAFE_LANGUAGE"),
+    ],
+)
+def test_finding_headline_policy_is_a_finding_local_compiler_error(
+    headline, expected
+):
+    draft = P1Output.model_validate({
+        **VALID_P1,
+        "classification": {"overall_severity": "medium"},
+        "findings": [
+            _finding(headline="Controls changed"),
+            _finding(finding_id="f2", headline=headline),
+        ],
+    })
+    result = compile_draft(
+        draft,
+        trusted_meta={"accession_number": "a-1", "ticker": "T", "form_type": "8-K"},
+        sections={"item_2_02": {"text": "hello"}},
+        metrics=MetricsBundle(),
+        prune=True,
+    )
+    assert [finding.finding_id for finding in result.output.findings] == ["f1"]
+    assert result.dropped[0].finding_id == "f2"
+    assert expected in result.dropped[0].error_codes
 
 
 def _p2_record(thesis_jid, net_jid):
@@ -280,9 +292,10 @@ def test_p1_extractor_persists_embedded_findings_without_claim_rows():
         {"action": "done", "obligations": []}
         if "finance Skeptic" in system else {"action": "submit", "draft": p1_json}
     ))
-    out, aid, _ = P1Extractor(llm, repo, model_label="fake/m", now_fn=lambda: "t").run(
+    result = P1Extractor(llm, repo, model_label="fake/m", now_fn=lambda: "t").run(
         filing_meta={"accession_number": "a-1", "ticker": "T", "form_type": "8-K"},
         sections={"item_2_02": {"text": "hello"}})
+    out, aid = result.output, result.analysis_id
     assert isinstance(out, P1Output)
     stored = repo.get_analysis(aid)
     assert stored.stage == "P1" and stored.model == "fake/m"
@@ -362,10 +375,10 @@ def test_p1_extractor_repairs_one_schema_invalid_response():
         return json.dumps({"action": "submit", "surprise": "invalid"})
 
     llm = FakeLLMClient(responder=respond)
-    out, _, _ = P1Extractor(llm, repo).run(
+    out = P1Extractor(llm, repo).run(
         filing_meta={"accession_number": "a-1", "ticker": "T", "form_type": "8-K"},
         sections={},
-    )
+    ).output
     assert out.findings == []
     assert len(llm.calls) == 2
 
@@ -412,4 +425,6 @@ def test_more_than_three_findings_is_stage_error_and_leaves_no_orphan_row():
     assert repo.latest_analysis("a-1", "P1") is None
     trace = repo.latest_analysis("a-1", "P1_TRACE")
     assert trace is not None
-    assert json.loads(trace.output_json)["terminal_reason"] == "malformed_action_breakdown"
+    assert json.loads(trace.output_json)["research_terminal_reason"] == (
+        "malformed_action_breakdown"
+    )

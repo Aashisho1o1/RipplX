@@ -5,6 +5,7 @@ import pytest
 from finwatch.db import Repo
 from finwatch.db.repositories import VerificationResult
 from finwatch.demo import DEMO_SINCE, build_demo_db
+from finwatch.llm.schemas import P1Output
 from finwatch.presentation.canonical import build_filing_entry
 from finwatch.presentation.projection import load_filing_projection
 from finwatch.presentation.service import PresentationService
@@ -76,13 +77,10 @@ def test_one_bad_evidence_span_drops_only_its_finding():
         # The first finding remains valid; corrupt only the second finding's span.
         evidence = output["findings"][1]["evidence"][0]
         evidence["char_start"] += 1
-        conn.execute(
-            "UPDATE analyses SET output_json = ? WHERE id = ?",
-            (json.dumps(output), analysis.id),
-        )
-        conn.commit()
-
-        entry = _entry(repo)
+        filing = repo.get_filing(_DPLS)
+        view = load_filing_projection(repo, filing)
+        view.p1 = P1Output.model_validate(output)
+        entry = build_filing_entry(repo, view)
 
         assert entry.withheld is False
         assert [finding.headline for finding in entry.findings] == ["Going concern doubt"]
@@ -137,13 +135,10 @@ def test_model_reported_confidence_and_gaps_do_not_override_compiler_passes(
         output = json.loads(analysis.output_json)
         output["extraction_confidence"] = confidence
         output["gaps"] = gaps
-        conn.execute(
-            "UPDATE analyses SET output_json = ? WHERE id = ?",
-            (json.dumps(output), analysis.id),
-        )
-        conn.commit()
-
-        entry = _entry(repo)
+        filing = repo.get_filing(_DPLS)
+        view = load_filing_projection(repo, filing)
+        view.p1 = P1Output.model_validate(output)
+        entry = build_filing_entry(repo, view)
 
         assert entry.withheld is False
         assert len(entry.findings) == 2

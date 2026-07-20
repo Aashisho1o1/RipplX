@@ -7,9 +7,10 @@ is_financial, is_amendment) are kept as ``int`` to match the DB exactly.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 
 from pydantic import BaseModel, FiniteFloat
 
@@ -460,6 +461,24 @@ class Repo:
         ).fetchone()
         return (row["accn"], row["text"]) if row else None
 
+    def has_prior_comparable_filing(
+        self, cik: str, base_form: str, filed_before: str
+    ) -> bool:
+        """Whether an earlier non-amendment filing of the same form exists.
+
+        This is intentionally filing-level rather than section-level: a comparable
+        prior filing may exist even when a section is new in the current document.
+        """
+        row = self.conn.execute(
+            """SELECT 1
+                 FROM filings
+                WHERE cik = ? AND form_type = ? AND is_amendment = 0
+                  AND filed_at < ?
+                LIMIT 1""",
+            (cik, base_form, filed_before),
+        ).fetchone()
+        return row is not None
+
     # ---- filing lifecycle ------------------------------------------------
     def set_amends_accession(self, accession_number: str, amends: str | None) -> None:
         self.conn.execute(
@@ -552,35 +571,6 @@ class Repo:
             (accession_number,),
         ).fetchall()
         return [FilingStageRun(**dict(row)) for row in rows]
-
-    def reset_filing_stages(self, accession_number: str, stages: Iterable[str]) -> None:
-        rows = [(accession_number, stage) for stage in stages]
-        self.conn.executemany(
-            """INSERT INTO filing_stage_runs
-                   (accession_number, stage, status, diagnostics_json)
-               VALUES (?, ?, 'pending', '{}')
-               ON CONFLICT(accession_number, stage) DO UPDATE SET
-                 status = 'pending', started_at = NULL, finished_at = NULL,
-                 error = NULL, diagnostics_json = '{}'""",
-            rows,
-        )
-        self.conn.commit()
-
-    def clear_filing_analysis(self, accession_number: str) -> None:
-        """Invalidate analysis derived from sections before an explicit parse/LLM rerun."""
-        ids = [
-            row["id"]
-            for row in self.conn.execute(
-                "SELECT id FROM analyses WHERE accession_number = ?", (accession_number,)
-            ).fetchall()
-        ]
-        if ids:
-            placeholders = ",".join("?" for _ in ids)
-            self.conn.execute(
-                f"DELETE FROM verification_results WHERE analysis_id IN ({placeholders})", ids
-            )
-            self.conn.execute(f"DELETE FROM analyses WHERE id IN ({placeholders})", ids)
-        self.conn.commit()
 
     # ---- computations (metric results) -----------------------------------
     def insert_computations(self, computations: Iterable[Computation]) -> int:
@@ -679,34 +669,6 @@ class Repo:
         self.conn.commit()
         return len(rows)
 
-    def replace_verification_results(
-        self, analysis_id: int, results: Iterable[VerificationResult]
-    ) -> int:
-        """Atomically replace one analysis's verifier report.
-
-        Materialize and validate the iterable before deleting the prior report. If
-        either deletion or insertion fails, the context manager rolls both back.
-        """
-        result_rows = list(results)
-        mismatched = [r.analysis_id for r in result_rows if r.analysis_id != analysis_id]
-        if mismatched:
-            raise ValueError("all verification results must belong to the replaced analysis")
-        rows = [
-            (r.analysis_id, r.check_id, r.verdict, r.severity, r.detail, r.created_at)
-            for r in result_rows
-        ]
-        with self.conn:
-            self.conn.execute(
-                "DELETE FROM verification_results WHERE analysis_id = ?", (analysis_id,)
-            )
-            self.conn.executemany(
-                """INSERT INTO verification_results
-                       (analysis_id, check_id, verdict, severity, detail, created_at)
-                   VALUES (?, ?, ?, ?, ?, ?)""",
-                rows,
-            )
-        return len(rows)
-
     def list_verification_results(self, analysis_id: int) -> list[VerificationResult]:
         rows = self.conn.execute(
             "SELECT * FROM verification_results WHERE analysis_id = ? ORDER BY id",
@@ -724,28 +686,201 @@ class Repo:
             ).fetchone()
         return int(row["n"])
 
-    # ---- analyses + claim graph ------------------------------------------
-    def insert_analysis(self, a: Analysis) -> int:
+    # ---- analyses --------------------------------------------------------
+    def _insert_analysis_row(self, analysis: Analysis) -> int:
         cur = self.conn.execute(
             """INSERT INTO analyses
                    (accession_number, ticker, stage, model, prompt_version, output_json,
                     tokens_in, tokens_out, cost_usd, created_at)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
-                a.accession_number,
-                a.ticker,
-                a.stage,
-                a.model,
-                a.prompt_version,
-                a.output_json,
-                a.tokens_in,
-                a.tokens_out,
-                a.cost_usd,
-                a.created_at,
+                analysis.accession_number,
+                analysis.ticker,
+                analysis.stage,
+                analysis.model,
+                analysis.prompt_version,
+                analysis.output_json,
+                analysis.tokens_in,
+                analysis.tokens_out,
+                analysis.cost_usd,
+                analysis.created_at,
             ),
         )
-        self.conn.commit()
         return int(cur.lastrowid)
+
+    def insert_analysis(self, a: Analysis) -> int:
+        cur_id = self._insert_analysis_row(a)
+        self.conn.commit()
+        return cur_id
+
+    def insert_p1_with_trace(
+        self,
+        p1: Analysis,
+        trace_factory: Callable[[int, str], Analysis],
+    ) -> tuple[int, int, str]:
+        """Atomically persist one P1 output and its exact linked harness trace.
+
+        ``trace_factory`` is intentionally pure and receives the inserted P1 ID plus
+        the SHA-256 of the exact UTF-8 bytes stored in ``P1.output_json``.  A factory
+        or second-insert failure rolls the entire pair back, so no successful research
+        attempt can expose an unlinked P1 row.
+        """
+        if p1.stage != "P1" or p1.id is not None:
+            raise ValueError("paired analysis insert requires a new P1 row")
+        p1_sha256 = hashlib.sha256(p1.output_json.encode("utf-8")).hexdigest()
+        with self.conn:
+            p1_id = self._insert_analysis_row(p1)
+            trace = trace_factory(p1_id, p1_sha256)
+            if trace.id is not None or trace.stage != "P1_TRACE":
+                raise ValueError("trace factory must return a new P1_TRACE row")
+            if (
+                trace.accession_number != p1.accession_number
+                or trace.ticker != p1.ticker
+            ):
+                raise ValueError("P1 and P1_TRACE identities must match")
+            try:
+                trace_payload = json.loads(trace.output_json)
+            except (TypeError, json.JSONDecodeError) as exc:
+                raise ValueError("P1_TRACE must contain valid JSON") from exc
+            if (
+                trace_payload.get("schema_version") != "harness.v2"
+                or trace_payload.get("p1_analysis_id") != p1_id
+                or trace_payload.get("p1_output_sha256") != p1_sha256
+            ):
+                raise ValueError("P1_TRACE does not link the exact stored P1 bytes")
+            trace_id = self._insert_analysis_row(trace)
+        return p1_id, trace_id, p1_sha256
+
+    def finalize_p1_attempt(
+        self,
+        p1_analysis_id: int,
+        trace_analysis_id: int,
+        *,
+        verification_results: Iterable[VerificationResult],
+        finalized_trace_json: str,
+        filing_status: str,
+        processed_at: str,
+    ) -> int:
+        """Atomically finalize one linked attempt and its publication gate.
+
+        Verification rows, the immutable final trace snapshot, and the filing's
+        terminal state move together.  Retained earlier P1/trace pairs remain linked
+        historical audit records and are never deleted by finalization.
+        """
+        if filing_status not in {"verified", "analyzed", "failed"}:
+            raise ValueError("invalid finalized filing status")
+        results = list(verification_results)
+        if any(result.analysis_id != p1_analysis_id for result in results):
+            raise ValueError("verification results must belong to the linked P1")
+        try:
+            final_payload = json.loads(finalized_trace_json)
+        except (TypeError, json.JSONDecodeError) as exc:
+            raise ValueError("finalized P1_TRACE must contain valid JSON") from exc
+        with self.conn:
+            p1_row = self.conn.execute(
+                "SELECT * FROM analyses WHERE id = ?", (p1_analysis_id,)
+            ).fetchone()
+            trace_row = self.conn.execute(
+                "SELECT * FROM analyses WHERE id = ?", (trace_analysis_id,)
+            ).fetchone()
+            if p1_row is None or p1_row["stage"] != "P1":
+                raise ValueError("linked P1 analysis is missing or invalid")
+            if trace_row is None or trace_row["stage"] != "P1_TRACE":
+                raise ValueError("linked P1_TRACE analysis is missing or invalid")
+            if (
+                p1_row["accession_number"] != trace_row["accession_number"]
+                or p1_row["ticker"] != trace_row["ticker"]
+            ):
+                raise ValueError("linked P1/P1_TRACE identities do not match")
+            expected_sha256 = hashlib.sha256(
+                str(p1_row["output_json"]).encode("utf-8")
+            ).hexdigest()
+            try:
+                initial_payload = json.loads(trace_row["output_json"])
+            except (TypeError, json.JSONDecodeError) as exc:
+                raise ValueError("stored P1_TRACE is malformed") from exc
+            for payload in (initial_payload, final_payload):
+                if (
+                    payload.get("schema_version") != "harness.v2"
+                    or payload.get("p1_analysis_id") != p1_analysis_id
+                    or payload.get("p1_output_sha256") != expected_sha256
+                ):
+                    raise ValueError("P1_TRACE link or output hash is invalid")
+            if final_payload.get("trace_analysis_id") != trace_analysis_id:
+                raise ValueError("finalized P1_TRACE does not identify its own row")
+            filing_snapshot = final_payload.get("filing_snapshot") or {}
+            if (
+                final_payload.get("publication_outcome") is None
+                or final_payload.get("terminal_reason") is None
+                or filing_snapshot.get("accession") != p1_row["accession_number"]
+                or filing_snapshot.get("ticker") != p1_row["ticker"]
+            ):
+                raise ValueError("finalized P1_TRACE snapshot is incomplete")
+            if filing_status == "verified" and final_payload["verification_verdict"] not in {
+                "PASS",
+                "PASS_WITH_WARNINGS",
+            }:
+                raise ValueError("verified status requires a passing verifier verdict")
+            if filing_status == "analyzed" and final_payload["verification_verdict"] != "FAIL":
+                raise ValueError("analyzed status requires a failed verifier verdict")
+            if filing_status == "failed" and final_payload["terminal_reason"] != (
+                "verification_incomplete"
+            ):
+                raise ValueError("failed finalization requires verification_incomplete")
+            if filing_status == "failed" and final_payload.get("verification_verdict") is not None:
+                raise ValueError("incomplete verification cannot carry a verifier verdict")
+            if filing_status in {"analyzed", "failed"}:
+                publication = final_payload.get("publication_snapshot") or {}
+                if (
+                    final_payload.get("publication_outcome") != "withheld"
+                    or final_payload.get("published_finding_ids")
+                    or publication.get("classification") is not None
+                    or publication.get("evidence")
+                    or any(
+                        call.get("arguments")
+                        for call in final_payload.get("tool_calls", [])
+                        if isinstance(call, dict)
+                    )
+                ):
+                    raise ValueError("withheld P1_TRACE must be redacted before persistence")
+            elif final_payload.get("publication_outcome") == "withheld":
+                raise ValueError("verified status cannot carry a withheld publication outcome")
+
+            self.conn.execute(
+                "DELETE FROM verification_results WHERE analysis_id = ?",
+                (p1_analysis_id,),
+            )
+            rows = [
+                (
+                    result.analysis_id,
+                    result.check_id,
+                    result.verdict,
+                    result.severity,
+                    result.detail,
+                    result.created_at,
+                )
+                for result in results
+            ]
+            self.conn.executemany(
+                """INSERT INTO verification_results
+                       (analysis_id, check_id, verdict, severity, detail, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                rows,
+            )
+            updated = self.conn.execute(
+                "UPDATE analyses SET output_json = ? WHERE id = ? AND stage = 'P1_TRACE'",
+                (finalized_trace_json, trace_analysis_id),
+            )
+            if updated.rowcount != 1:
+                raise ValueError("linked P1_TRACE could not be finalized")
+            status = self.conn.execute(
+                """UPDATE filings SET status = ?, processed_at = ?
+                     WHERE accession_number = ?""",
+                (filing_status, processed_at, p1_row["accession_number"]),
+            )
+            if status.rowcount != 1:
+                raise ValueError("linked filing is missing")
+        return len(results)
 
     def get_analysis(self, analysis_id: int) -> Analysis | None:
         row = self.conn.execute("SELECT * FROM analyses WHERE id = ?", (analysis_id,)).fetchone()
@@ -758,6 +893,43 @@ class Repo:
             (accession_number, stage),
         ).fetchone()
         return None if row is None else Analysis(**dict(row))
+
+    def latest_linked_p1_attempt(
+        self, accession_number: str
+    ) -> tuple[Analysis, Analysis] | None:
+        """Return the P1 linked by the latest strict v2 trace, or fail closed.
+
+        Selection deliberately starts from the latest trace.  It never falls back to
+        an earlier trace or independently selects the latest P1, preventing artifacts
+        from different attempts from being combined after a retry or partial write.
+        """
+        trace = self.latest_analysis(accession_number, "P1_TRACE")
+        if trace is None or trace.id is None:
+            return None
+        try:
+            payload = json.loads(trace.output_json)
+        except (TypeError, json.JSONDecodeError):
+            return None
+        if payload.get("schema_version") != "harness.v2":
+            return None
+        p1_id = payload.get("p1_analysis_id")
+        p1_sha256 = payload.get("p1_output_sha256")
+        if not isinstance(p1_id, int) or not isinstance(p1_sha256, str):
+            return None
+        trace_id = payload.get("trace_analysis_id")
+        if trace_id is not None and trace_id != trace.id:
+            return None
+        p1 = self.get_analysis(p1_id)
+        if (
+            p1 is None
+            or p1.stage != "P1"
+            or p1.accession_number != trace.accession_number
+            or p1.ticker != trace.ticker
+            or p1.accession_number != accession_number
+            or hashlib.sha256(p1.output_json.encode("utf-8")).hexdigest() != p1_sha256
+        ):
+            return None
+        return p1, trace
 
     def list_analyses(self, accession_number: str | None = None) -> list[Analysis]:
         if accession_number is None:

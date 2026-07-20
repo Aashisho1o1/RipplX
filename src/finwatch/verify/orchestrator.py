@@ -8,8 +8,8 @@ A production retry is a fresh full attempt, not an in-place stage regeneration.
 from __future__ import annotations
 
 from finwatch.core.types import SectorInfo
-from finwatch.db.repositories import Repo, VerificationResult
-from finwatch.verify.checks import CheckResult, VerificationReport, check_v2_identities
+from finwatch.db.repositories import Repo
+from finwatch.verify.checks import CheckResult, check_v2_identities
 from finwatch.xbrl.normalize import FactStore
 
 # Forms whose latest balance-sheet instant is a fiscal-year-end, so the V2b cash tie-out
@@ -76,28 +76,6 @@ def _balance_sheet_aligned(store: FactStore) -> bool:
             return False
         keys.add(r.fact.end)          # instant date is the balance-sheet period-end
     return len(keys) == 1
-
-def persist_report(
-    repo: Repo, analysis_id: int, report: VerificationReport, *, created_at: str
-) -> int:
-    """Persist every CheckResult in the report to ``verification_results``.
-
-    A re-verify of the same analysis REPLACES the prior rows (not appends): stale
-    blocking FAILs are cleared first so ``withheld`` (derived from any-blocking-
-    fail over all rows) reflects only the latest run, and rows don't accumulate on
-    every retry.
-    """
-    rows = [
-        VerificationResult(
-            analysis_id=analysis_id, check_id=c.check_id, verdict=c.verdict,
-            severity=c.severity, detail=c.detail or None, created_at=created_at,
-        )
-        for c in report.results
-    ]
-    return repo.replace_verification_results(analysis_id, rows)
-
-
-
 
 # -- VerifyBundle assembly helpers (parts sourced from the DB) ---------------
 def section_texts_from_repo(repo: Repo, accession_number: str) -> dict[str, str]:

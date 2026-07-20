@@ -119,6 +119,9 @@ class ResearchTraceView(BaseModel):
 class CertificateView(BaseModel):
     schema_version: str
     certificate_sha256: str
+    p1_analysis_id: int
+    trace_analysis_id: int
+    p1_output_sha256: str = Field(min_length=64, max_length=64)
     filing: dict
     outcome: str
     terminal_reason: str

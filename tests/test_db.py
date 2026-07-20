@@ -1,6 +1,8 @@
 """Data layer: schema install / legacy rejection + repository semantics."""
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import sqlite3
 import stat
@@ -9,6 +11,7 @@ import pytest
 
 from finwatch.db import (
     LOCAL_USER_ID,
+    Analysis,
     Company,
     Computation,
     Filing,
@@ -62,11 +65,12 @@ def test_legacy_or_foreign_database_is_rejected(tmp_path):
         init_db(path)
 
 
-def test_schema_v4_upgrade_fails_with_clear_backup_and_reset_instruction(tmp_path):
-    path = tmp_path / "schema-v4.db"
+@pytest.mark.parametrize("old_version", [4, 5])
+def test_old_schema_fails_with_clear_backup_and_reset_instruction(tmp_path, old_version):
+    path = tmp_path / f"schema-v{old_version}.db"
     conn = connect(path)
     conn.execute(f"PRAGMA application_id = {APPLICATION_ID}")
-    conn.execute("PRAGMA user_version = 4")
+    conn.execute(f"PRAGMA user_version = {old_version}")
     conn.commit()
     conn.close()
 
@@ -239,7 +243,27 @@ def test_filing_index_idempotent(repo):
     assert repo.known_accessions("1") == {"a-1"}
 
 
-def test_filing_stage_progress_persists_attempts_diagnostics_and_reset(repo):
+def test_prior_comparable_filing_is_independent_of_section_presence(repo):
+    repo.upsert_company(Company(cik="1", ticker="AAA", added_at="t"))
+    repo.upsert_filing(Filing(
+        accession_number="old",
+        cik="1",
+        form_type="10-Q",
+        filed_at="2024-01-01",
+    ))
+    repo.upsert_filing(Filing(
+        accession_number="current",
+        cik="1",
+        form_type="10-Q",
+        filed_at="2024-04-01",
+    ))
+
+    assert repo.has_prior_comparable_filing("1", "10-Q", "2024-04-01")
+    assert repo.prior_comparable_section("1", "10-Q", "new_section", "2024-04-01") is None
+    assert not repo.has_prior_comparable_filing("1", "10-K", "2024-04-01")
+
+
+def test_filing_stage_progress_persists_attempts_and_diagnostics(repo):
     repo.upsert_company(Company(cik="1", ticker="AAA", added_at="t"))
     repo.upsert_filing(
         Filing(accession_number="a-1", cik="1", form_type="10-K", filed_at="2024-01-01")
@@ -251,10 +275,6 @@ def test_filing_stage_progress_persists_attempts_diagnostics_and_reset(repo):
     stage = repo.get_filing_stage("a-1", "parse")
     assert stage.status == "failed" and stage.attempts == 1
     assert stage.error == "no sections" and '"bytes": 12' in stage.diagnostics_json
-
-    repo.reset_filing_stages("a-1", ["parse"])
-    reset = repo.get_filing_stage("a-1", "parse")
-    assert reset.status == "pending" and reset.attempts == 1 and reset.error is None
 
 
 def test_replace_xbrl_facts_replaces_not_appends(repo):
@@ -346,21 +366,219 @@ def test_computation_batch_rolls_back_on_insert_failure(repo):
     assert repo.count_computations("AAA") == 0
 
 
-def test_verification_report_replacement_rolls_back_on_insert_failure(repo):
-    old = VerificationResult(
-        analysis_id=7, check_id="V1", verdict="pass", severity="blocking",
-        detail="old report", created_at="t1",
+def _attempt_trace(
+    *,
+    p1_id: int,
+    p1_sha256: str,
+    publication_outcome: str | None = None,
+    verification_verdict: str | None = None,
+    terminal_reason: str | None = None,
+    trace_analysis_id: int | None = None,
+) -> str:
+    return json.dumps(
+        {
+            "schema_version": "harness.v2",
+            "p1_analysis_id": p1_id,
+            "trace_analysis_id": trace_analysis_id,
+            "p1_output_sha256": p1_sha256,
+            "publication_outcome": publication_outcome,
+            "verification_verdict": verification_verdict,
+            "terminal_reason": terminal_reason,
+            "filing_snapshot": {
+                "accession": "a-1",
+                "ticker": "AAA",
+                "form": "10-Q",
+                "filed": "2025-01-01",
+                "source_sha256": "a" * 64,
+            },
+        },
+        sort_keys=True,
+        separators=(",", ":"),
     )
-    repo.insert_verification_results([old])
-    valid_new = old.model_copy(update={"check_id": "V4", "detail": "new report"})
-    invalid_new = VerificationResult.model_construct(
-        analysis_id=7, check_id=None, verdict="pass", severity="blocking",
-        detail="invalid", created_at="t2",
+
+
+def test_p1_and_trace_insert_is_atomic_and_hashes_exact_stored_bytes(repo):
+    p1 = Analysis(
+        accession_number="a-1",
+        ticker="AAA",
+        stage="P1",
+        model="m",
+        prompt_version="p",
+        output_json='{"unicode":"Δ","spacing": true}',
+        created_at="t",
     )
+
+    def trace_factory(p1_id: int, p1_sha256: str) -> Analysis:
+        assert p1_sha256 == hashlib.sha256(p1.output_json.encode("utf-8")).hexdigest()
+        return Analysis(
+            accession_number="a-1",
+            ticker="AAA",
+            stage="P1_TRACE",
+            model="m",
+            prompt_version="p+s",
+            output_json=_attempt_trace(p1_id=p1_id, p1_sha256=p1_sha256),
+            created_at="t",
+        )
+
+    p1_id, trace_id, p1_sha256 = repo.insert_p1_with_trace(p1, trace_factory)
+
+    assert repo.get_analysis(p1_id).output_json == p1.output_json
+    assert repo.get_analysis(trace_id).stage == "P1_TRACE"
+    assert p1_sha256 == hashlib.sha256(p1.output_json.encode("utf-8")).hexdigest()
+    linked = repo.latest_linked_p1_attempt("a-1")
+    assert linked is not None
+    assert (linked[0].id, linked[1].id) == (p1_id, trace_id)
+
+
+def test_latest_malformed_or_unlinked_trace_never_falls_back_to_an_old_p1(repo):
+    p1 = Analysis(
+        accession_number="a-1",
+        ticker="AAA",
+        stage="P1",
+        model="m",
+        prompt_version="p",
+        output_json="{}",
+        created_at="t",
+    )
+
+    def trace_factory(p1_id: int, p1_sha256: str) -> Analysis:
+        return Analysis(
+            accession_number="a-1",
+            ticker="AAA",
+            stage="P1_TRACE",
+            model="m",
+            prompt_version="p+s",
+            output_json=_attempt_trace(p1_id=p1_id, p1_sha256=p1_sha256),
+            created_at="t",
+        )
+
+    repo.insert_p1_with_trace(p1, trace_factory)
+    assert repo.latest_linked_p1_attempt("a-1") is not None
+    repo.insert_analysis(Analysis(
+        accession_number="a-1",
+        ticker="AAA",
+        stage="P1_TRACE",
+        model="m",
+        prompt_version="p+s",
+        output_json='{"schema_version":"harness.v2","p1_analysis_id":999}',
+        created_at="t2",
+    ))
+
+    assert repo.latest_linked_p1_attempt("a-1") is None
+
+
+def test_p1_and_trace_insert_rolls_back_when_second_insert_fails(repo):
+    p1 = Analysis(
+        accession_number="a-1",
+        ticker="AAA",
+        stage="P1",
+        model="m",
+        prompt_version="p",
+        output_json="{}",
+        created_at="t",
+    )
+
+    def broken_factory(p1_id: int, p1_sha256: str) -> Analysis:
+        return Analysis.model_construct(
+            accession_number="a-1",
+            ticker="AAA",
+            stage="P1_TRACE",
+            model=None,
+            prompt_version="p+s",
+            output_json=_attempt_trace(p1_id=p1_id, p1_sha256=p1_sha256),
+            created_at="t",
+        )
+
+    with pytest.raises(sqlite3.IntegrityError, match="analyses.model"):
+        repo.insert_p1_with_trace(p1, broken_factory)
+
+    assert repo.list_analyses("a-1") == []
+
+
+def test_attempt_finalization_is_atomic_across_checks_trace_and_filing(repo):
+    repo.upsert_company(Company(cik="1", ticker="AAA", added_at="t"))
+    repo.upsert_filing(Filing(
+        accession_number="a-1",
+        cik="1",
+        form_type="10-Q",
+        filed_at="2025-01-01",
+    ))
+    p1 = Analysis(
+        accession_number="a-1",
+        ticker="AAA",
+        stage="P1",
+        model="m",
+        prompt_version="p",
+        output_json="{}",
+        created_at="t",
+    )
+
+    def trace_factory(p1_id: int, p1_sha256: str) -> Analysis:
+        return Analysis(
+            accession_number="a-1",
+            ticker="AAA",
+            stage="P1_TRACE",
+            model="m",
+            prompt_version="p+s",
+            output_json=_attempt_trace(p1_id=p1_id, p1_sha256=p1_sha256),
+            created_at="t",
+        )
+
+    p1_id, trace_id, p1_sha256 = repo.insert_p1_with_trace(p1, trace_factory)
+    initial_trace = repo.get_analysis(trace_id).output_json
+    valid = VerificationResult(
+        analysis_id=p1_id,
+        check_id="V1",
+        verdict="pass",
+        severity="blocking",
+        created_at="t2",
+    )
+    invalid = VerificationResult.model_construct(
+        analysis_id=p1_id,
+        check_id=None,
+        verdict="pass",
+        severity="blocking",
+        detail=None,
+        created_at="t2",
+    )
+    finalized = _attempt_trace(
+        p1_id=p1_id,
+        p1_sha256=p1_sha256,
+        publication_outcome="published",
+        verification_verdict="PASS",
+        terminal_reason="verified",
+        trace_analysis_id=trace_id,
+    )
+
     with pytest.raises(sqlite3.IntegrityError, match="verification_results.check_id"):
-        repo.replace_verification_results(7, [valid_new, invalid_new])
-    stored = repo.list_verification_results(7)
-    assert len(stored) == 1 and stored[0].check_id == "V1" and stored[0].detail == "old report"
+        repo.finalize_p1_attempt(
+            p1_id,
+            trace_id,
+            verification_results=[valid, invalid],
+            finalized_trace_json=finalized,
+            filing_status="verified",
+            processed_at="t2",
+        )
+
+    assert repo.list_verification_results(p1_id) == []
+    assert repo.get_analysis(trace_id).output_json == initial_trace
+    stored_filing = repo.get_filing("a-1")
+    assert stored_filing.status == "fetched"
+    assert stored_filing.processed_at is None
+
+    repo.finalize_p1_attempt(
+        p1_id,
+        trace_id,
+        verification_results=[valid],
+        finalized_trace_json=finalized,
+        filing_status="verified",
+        processed_at="t2",
+    )
+    assert [row.check_id for row in repo.list_verification_results(p1_id)] == ["V1"]
+    assert repo.get_analysis(trace_id).output_json == finalized
+    stored_filing = repo.get_filing("a-1")
+    assert stored_filing.status == "verified"
+    assert stored_filing.processed_at == "t2"
 
 
 def test_settings_roundtrip(repo):

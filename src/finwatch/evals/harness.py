@@ -17,11 +17,13 @@ from finwatch.evals.golden import GoldenCase, load_case_html, load_manifest, loa
 from finwatch.llm.router import FakeLLMClient, LLMClient
 from finwatch.llm.stages import P1Extractor, StageError
 from finwatch.metrics.envelope import MetricsBundle
-from finwatch.pipeline.orchestrator import assemble_verify_bundle
+from finwatch.pipeline.orchestrator import (
+    assemble_verify_bundle,
+    finalize_attempt,
+)
 from finwatch.presentation.canonical import build_filing_entry
 from finwatch.presentation.projection import load_filing_projection
 from finwatch.verify.checks import run_all
-from finwatch.verify.orchestrator import persist_report
 
 _SCREAM = frozenset({"critical", "high"})
 
@@ -127,8 +129,10 @@ def score_case(case: GoldenCase, llm: LLMClient, html: str, *, now: str = "eval"
     }
 
     try:
-        p1, analysis_id, resp = P1Extractor(llm, repo, now_fn=lambda: now).run(
-            filing_meta=filing_meta, sections=sections)
+        result = P1Extractor(llm, repo, now_fn=lambda: now).run(
+            filing_meta=filing_meta, sections=sections
+        )
+        p1, analysis_id, resp = result.output, result.analysis_id, result.response
     except StageError:
         # unparseable output: JSON invalid; a critical case with no output is a miss
         false_alarm = False
@@ -152,9 +156,16 @@ def score_case(case: GoldenCase, llm: LLMClient, html: str, *, now: str = "eval"
     }
     bundle = assemble_verify_bundle(p1, MetricsBundle(), section_texts)
     verification = run_all(bundle)
-    persist_report(repo, analysis_id, verification, created_at=now)
-    if verification.verdict != "FAIL":
-        repo.set_filing_status(case.accession, "verified", processed_at=now)
+    finalize_attempt(
+        repo,
+        trace=result.trace,
+        trace_analysis_id=result.trace_analysis_id,
+        p1_analysis_id=analysis_id,
+        p1=p1,
+        sections=sections,
+        report=verification,
+        processed_at=now,
+    )
     filing = repo.get_filing(case.accession)
     assert filing is not None
     launch_entry = build_filing_entry(repo, load_filing_projection(repo, filing))

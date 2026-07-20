@@ -6,8 +6,6 @@ import hashlib
 import json
 
 from finwatch.db.repositories import LOCAL_USER_ID, Company, Computation, Repo
-from finwatch.llm.harness import HarnessTrace
-from finwatch.llm.schemas import P1Output
 from finwatch.metrics.catalog import STARTER_METRIC_LABELS, STARTER_METRICS
 from finwatch.metrics.envelope import MetricResult
 from finwatch.pipeline.progress import PIPELINE_STAGES, STAGE_LABELS
@@ -212,7 +210,7 @@ class PresentationService:
         entry = build_filing_entry(self.repo, view)
         company = view.company
         verification = None
-        p1_analysis = self.repo.latest_analysis(accession, "P1")
+        p1_analysis = view.p1_analysis
         if p1_analysis and p1_analysis.id is not None:
             checks = self.repo.list_verification_results(p1_analysis.id)
             if checks:
@@ -259,21 +257,16 @@ class PresentationService:
                 )
             )
         research = None
-        trace_row = self.repo.latest_analysis(accession, "P1_TRACE")
-        if trace_row is not None:
-            try:
-                trace = HarnessTrace.model_validate_json(trace_row.output_json)
-            except Exception:  # noqa: BLE001 - corrupt audit metadata is not display data
-                trace = None
-            if trace is not None:
-                research = ResearchTraceView(
-                    outcome=trace.outcome,
-                    terminal_reason=trace.terminal_reason,
-                    tool_call_count=len(trace.tool_calls),
-                    tool_names=list(dict.fromkeys(row.tool for row in trace.tool_calls)),
-                    repair_used=trace.repair_used,
-                    dropped_findings=[row.model_dump() for row in trace.dropped_findings],
-                )
+        trace = view.trace
+        if trace is not None and trace.publication_outcome is not None:
+            research = ResearchTraceView(
+                outcome=trace.publication_outcome,
+                terminal_reason=trace.terminal_reason or "verification_incomplete",
+                tool_call_count=len(trace.tool_calls),
+                tool_names=list(dict.fromkeys(row.tool for row in trace.tool_calls)),
+                repair_used=trace.repair_used,
+                dropped_findings=[row.model_dump() for row in trace.dropped_findings],
+            )
         return FilingDetailView(
             filing=entry,
             verified_numbers=(
@@ -283,40 +276,59 @@ class PresentationService:
             withheld_reason=entry.withheld_reason,
             pipeline=pipeline,
             research=research,
-            certificate_url=(f"/api/filings/{accession}/certificate" if research else None),
+            certificate_url=(
+                f"/api/filings/{accession}/certificate"
+                if research and filing.status in {"verified", "analyzed"}
+                else None
+            ),
         )
 
     def certificate(self, accession: str) -> CertificateView | None:
         filing = self.repo.get_filing(accession)
         if not filing or self.repo.get_user_company(self.user_id, filing.cik) is None:
             return None
-        trace_row = self.repo.latest_analysis(accession, "P1_TRACE")
-        if trace_row is None:
+        if filing.status not in {"verified", "analyzed"}:
             return None
-        try:
-            trace = HarnessTrace.model_validate_json(trace_row.output_json)
-        except Exception:  # noqa: BLE001
+        view = load_filing_projection(self.repo, filing)
+        trace = view.trace
+        trace_row = view.trace_analysis
+        p1_row = view.p1_analysis
+        if (
+            trace is None
+            or trace_row is None
+            or trace_row.id is None
+            or p1_row is None
+            or p1_row.id is None
+            or trace.publication_outcome is None
+            or trace.terminal_reason is None
+            or trace.trace_analysis_id != trace_row.id
+            or trace.p1_analysis_id != p1_row.id
+            or trace.p1_output_sha256 is None
+        ):
             return None
-        p1_row = self.repo.latest_analysis(accession, "P1")
-        p1 = None
-        if p1_row is not None:
-            try:
-                p1 = P1Output.model_validate_json(p1_row.output_json)
-            except Exception:  # noqa: BLE001
-                p1 = None
-        evidence: list[dict] = []
-        if p1 is not None:
-            for finding in p1.findings:
-                for row in finding.evidence:
-                    section = self.repo.get_filing_section(accession, row.section_key)
-                    evidence.append({
-                        "finding_id": finding.finding_id,
-                        "section_key": row.section_key,
-                        "char_start": row.char_start,
-                        "char_end": row.char_end,
-                        "section_sha256": section.text_sha256 if section else None,
-                    })
-        company = self.repo.get_company(filing.cik)
+        if filing.status == "verified" and (
+            trace.publication_outcome == "withheld"
+            or trace.verification_verdict not in {"PASS", "PASS_WITH_WARNINGS"}
+        ):
+            return None
+        if filing.status == "analyzed" and (
+            trace.publication_outcome != "withheld"
+            or trace.verification_verdict != "FAIL"
+        ):
+            return None
+        publication = trace.publication_snapshot
+        classification = publication.get("classification")
+        evidence = publication.get("evidence", [])
+        if not isinstance(evidence, list):
+            return None
+        withheld = trace.publication_outcome == "withheld"
+        if withheld and (
+            trace.published_finding_ids
+            or classification is not None
+            or evidence
+            or any(row.arguments for row in trace.tool_calls)
+        ):
+            return None
         metrics = [{
             "metric_id": metric.metric,
             "status": metric.status.value,
@@ -327,35 +339,40 @@ class PresentationService:
             "direction_basis": metric.direction_basis,
             "inputs": [row.model_dump(mode="json") for row in metric.inputs_used],
         } for metric in trace.metric_results]
-        verification = []
-        if p1_row is not None and p1_row.id is not None:
+        try:
             verification = [
-                VerificationCheckView(
-                    check_id=row.check_id, verdict=row.verdict.upper(),
-                    severity=row.severity,
-                )
-                for row in self.repo.list_verification_results(p1_row.id)
+                VerificationCheckView.model_validate(row)
+                for row in trace.verification_snapshot
             ]
+        except Exception:  # noqa: BLE001 - malformed frozen state has no certificate
+            return None
+        tool_calls = [
+            (
+                {
+                    "call_id": row.call_id,
+                    "tool": row.tool,
+                    "result_sha256": row.result_sha256,
+                }
+                if withheld
+                else row.model_dump(mode="json")
+            )
+            for row in trace.tool_calls
+        ]
         payload = {
-            "schema_version": "certificate.v1",
-            "filing": {
-                "accession": accession,
-                "ticker": company.ticker if company else filing.cik,
-                "form": filing.form_type,
-                "filed": _date(filing.filed_at),
-                "source_sha256": filing.raw_sha256,
-            },
-            "outcome": trace.outcome,
+            "schema_version": "certificate.v2",
+            "p1_analysis_id": trace.p1_analysis_id,
+            "trace_analysis_id": trace.trace_analysis_id,
+            "p1_output_sha256": trace.p1_output_sha256,
+            "filing": trace.filing_snapshot,
+            "outcome": trace.publication_outcome,
             "terminal_reason": trace.terminal_reason,
             "published_finding_ids": trace.published_finding_ids,
             "dropped_findings": [row.model_dump() for row in trace.dropped_findings],
-            "classification": (
-                p1.classification.overall_severity if p1 is not None else None
-            ),
+            "classification": classification,
             "evidence": evidence,
             "metrics": metrics,
             "verification": [row.model_dump() for row in verification],
-            "tool_calls": [row.model_dump(mode="json") for row in trace.tool_calls],
+            "tool_calls": tool_calls,
             "agenda": [row.model_dump(mode="json") for row in trace.agenda],
             "models": {
                 "generator": trace.generator_model, "skeptic": trace.skeptic_model,
@@ -366,14 +383,21 @@ class PresentationService:
             },
             "budgets": {
                 "generator_turns": trace.generator_turns,
+                "generator_tool_calls": trace.generator_tool_calls,
                 "skeptic_turns": trace.skeptic_turns,
+                "skeptic_tool_calls": trace.skeptic_tool_calls,
                 "tool_budget": trace.tool_budget,
                 "tool_calls_used": len(trace.tool_calls),
                 "repair_used": trace.repair_used,
             },
         }
         digest = hashlib.sha256(
-            json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+            json.dumps(
+                payload,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            ).encode("utf-8")
         ).hexdigest()
         return CertificateView(certificate_sha256=digest, **payload)
 
