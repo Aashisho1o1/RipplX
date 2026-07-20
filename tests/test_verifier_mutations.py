@@ -31,7 +31,7 @@ def make_store(assets=1000.0, liab=600.0, equity=400.0) -> FactStore:
 
 
 def make_bundle(rendered=None, snippet="$1,234.5 million",
-                char=(16, 32)) -> VerifyBundle:
+                char=(16, 32), authored="Revenue changed year over year") -> VerifyBundle:
     metrics = MetricsBundle()
     metrics.results["revenue_growth"] = MetricResult(
         metric="revenue_growth", status=MetricStatus.COMPUTED, value=0.12,
@@ -40,6 +40,7 @@ def make_bundle(rendered=None, snippet="$1,234.5 million",
                             "$1,234.5 million of net revenue.")
     return VerifyBundle(
         rendered_text=rendered,
+        authored_text=authored,
         metrics=metrics,
         fact_store_values=[1_234.5e6, 87.0e6],
         evidence_claims=[EvidenceClaim(
@@ -82,7 +83,10 @@ def test_mutation_c_altered_snippet_fails_v4():
 
 
 def test_mutation_e_price_target_language_fails_v5():
-    b = make_bundle(rendered="Revenue grew 0.12; we see a price target of $50.")
+    b = make_bundle(
+        rendered="Revenue grew 0.12; we see a price target of $50.",
+        authored="We see a price target",
+    )
     r = run_all(b, make_store(), SectorInfo(SectorClass.GENERAL, False))
     assert "V5" in failing_ids(r)
 
@@ -108,8 +112,13 @@ def test_model_reported_incomplete_extraction_is_nonblocking(
     "authored",
     [
         "Revenue increased a dozen basis points",
+        "Revenue moved by 25 bps",
+        "Margins moved ½ a point",
         "Revenue changed by a fraction",
         "Investors should avoid the shares",
+        "The price target increased",
+        "We estimate a fair value for the shares",
+        "Guaranteed upside",
         "Exit the position",
         "Reduce exposure to the shares",
         "Stay away from the stock",
@@ -120,6 +129,11 @@ def test_authored_quantity_or_advice_bypass_fails_v5(authored: str):
     b.authored_text = authored
     r = run_all(b, make_store(), SectorInfo(SectorClass.GENERAL, False))
     assert "V5" in failing_ids(r)
+
+
+def test_verify_bundle_requires_an_explicit_authored_subset():
+    with pytest.raises(ValueError):
+        VerifyBundle(rendered_text="Exact filing quote: $50", metrics=MetricsBundle())
 
 
 def test_bank_income_ordering_is_skipped_not_failed():

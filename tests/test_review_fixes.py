@@ -29,8 +29,8 @@ def test_f8_leading_minus_is_negative_but_ranges_are_not():
 def test_f8_v1_flags_a_sign_reversed_number():
     m = MetricsBundle()
     m.results["x"] = _mr("x", value=5.0)                        # candidate +5
-    bundle = VerifyBundle(rendered_text="Loss was -5%.", metrics=m, disclaimer_text=DISCLAIMER,
-                          trade_action=None)
+    bundle = VerifyBundle(rendered_text="Loss was -5%.", authored_text="", metrics=m,
+                          disclaimer_text=DISCLAIMER, trade_action=None)
     v1 = next(c for c in run_all(bundle).results if c.check_id == "V1")
     assert v1.verdict == "fail"                                # -5 does not match +5
 
@@ -44,6 +44,7 @@ def test_v1_understands_unicode_minus_and_scientific_notation():
     metrics = MetricsBundle(results={"x": _mr("x", value=1.0)})
     report = run_all(VerifyBundle(
         rendered_text="Exposure was 1e9.",
+        authored_text="",
         metrics=metrics,
         disclaimer_text=DISCLAIMER,
     ))
@@ -54,6 +55,7 @@ def test_v1_exact_integer_does_not_use_blanket_relative_tolerance():
     metrics = MetricsBundle(results={"x": _mr("x", value=1_000_000_000.0)})
     report = run_all(VerifyBundle(
         rendered_text="Exposure was $1,000,400,000.",
+        authored_text="",
         metrics=metrics,
         disclaimer_text=DISCLAIMER,
     ))
@@ -62,8 +64,10 @@ def test_v1_exact_integer_does_not_use_blanket_relative_tolerance():
 
 # ---- F9: V5 price-target regex covers the "$N target" form -------------------
 def _v5(text):
-    return check_v5_hygiene(VerifyBundle(rendered_text=text, metrics=MetricsBundle(),
-                                         disclaimer_text=DISCLAIMER, trade_action=None))
+    return check_v5_hygiene(VerifyBundle(
+        rendered_text=text, authored_text=text, metrics=MetricsBundle(),
+        disclaimer_text=DISCLAIMER, trade_action=None,
+    ))
 
 
 def test_f9_dollar_target_form_is_caught_without_false_positive():
@@ -196,8 +200,10 @@ def test_review_v2_nci_imbalance_does_not_block_the_filing():
     v2 = data_quality_report(store, sector_from_sic("7372"), form_type="10-K")
     assert {r.check_id for r in v2} >= {"V2a"}
     assert all(not (r.verdict == "fail" and r.severity == "blocking") for r in v2)
-    llm_gate = run_all(VerifyBundle(rendered_text="", metrics=MetricsBundle(),
-                                    disclaimer_text=DISCLAIMER, trade_action=None))
+    llm_gate = run_all(VerifyBundle(
+        rendered_text="", authored_text="", metrics=MetricsBundle(),
+        disclaimer_text=DISCLAIMER, trade_action=None,
+    ))
     combined = list(llm_gate.results) + list(v2)
     assert not any(c.verdict == "fail" and c.severity == "blocking" for c in combined)
 
@@ -280,8 +286,8 @@ def test_yoy_annual_pair_requires_one_year_spacing():
 
 # ---- V1 scale-branch gating: a coarse suffixed number cannot cross-scale-match ----
 def _v1(text, m):
-    bundle = VerifyBundle(rendered_text=text, metrics=m, disclaimer_text=DISCLAIMER,
-                          trade_action=None)
+    bundle = VerifyBundle(rendered_text=text, authored_text="", metrics=m,
+                          disclaimer_text=DISCLAIMER, trade_action=None)
     return next(c for c in run_all(bundle).results if c.check_id == "V1").verdict
 
 

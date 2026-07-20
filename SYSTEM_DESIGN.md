@@ -111,9 +111,11 @@ Ticker
                                               │
 canonical section catalog + MetricBundle ─────┘
   │
+  ├─► precompute current/prior changed ranges (independent of model tool order)
+  │
   └─► Generator JSON actions ─► allowlisted deterministic tools
         ─► draft ─► compiler ─► one shared repair ─► finance Skeptic
-        ─► final compiler/per-finding prune ─► P1 + P1_TRACE
+        ─► final compiler/per-finding prune ─► atomic linked P1 + harness.v2 trace
 
 surviving P1 + exact metric snapshot + stored section text
   │
@@ -123,7 +125,7 @@ surviving P1 + exact metric snapshot + stored section text
   └─► V2 accounting identities (separate warnings only)
           │
           ▼
-persisted verification rows + filing terminal status
+atomic verification rows + frozen final trace + filing terminal status
           │
           ▼
 projection publication gate (verified + V1/V4/V5 pass + no blocking failure)
@@ -139,7 +141,7 @@ canonical.build_filing_entry()
 PresentationService BriefView/FilingDetailView
           ├─► FastAPI JSON ─► React
           ├─► render_brief_markdown() ─► Markdown
-          └─► owner-scoped stable verification certificate
+          └─► owner-scoped frozen certificate.v2
 ```
 
 No user-visible content path reads P2, P3, signal logs, dormant claim graphs, extended metrics, or
@@ -159,7 +161,9 @@ download → parse → metrics → extract → verify
 `pipeline/run.newest_filing_to_analyze()` filters to 10-K/10-Q/8-K, optionally narrows to one form
 family, selects one newest filing, and returns no work when that filing is already `verified` or
 terminally `analyzed`. It never falls through to older history within the selected scope. A failed
-filing is eligible for at most two persisted attempts at the active parse/metrics/extract stage.
+filing is eligible for at most two persisted attempts, calculated across all canonical stages
+beginning with `download`; missing URLs and fetch failures consume attempts, preventing one broken
+newest issuer from starving the portfolio.
 
 `process_filing()` always passes `resume=False`: every retry downloads and rebuilds the whole attempt.
 There is no production API/CLI for accession selection, historical replay, partial-stage rerun, or
@@ -167,10 +171,16 @@ offline reverify. The internal orchestrator retains some reusable-artifact suppo
 the launch runner does not expose it.
 
 `llm/harness.py` gives one extraction-stage invocation eight Generator turns, six Generator tool
-requests, one preflight, one shared repair, and two Skeptic tool requests. Duplicate calls consume
-budget but reuse cached results. Only trusted catalogs enter the initial prompt; filing text is
-retrieved as bounded tool data. Each model action is strict JSON and output is capped at 2,000
-tokens. These bounds are distinct from the two persisted full-attempt bound above.
+requests, one preflight, one shared repair, and two Skeptic tool requests. Generator and Skeptic
+use independent attempt-wide counters; duplicate calls consume budget but reuse cached results,
+and advertised budgets never become negative. A denied seventh Generator tool receives at most one
+submit-only nudge and is not executed or traced. Only trusted catalogs enter the initial prompt;
+filing text is retrieved as bounded tool data. Changed ranges are precomputed before the first
+model action, so `get_changes` only controls model visibility. Once a compiler-passing baseline
+exists, optional Skeptic/repair action or budget breakdown restores it and applies only validated
+finding-local objections; provider failure remains fail-closed. Each model action is strict JSON
+and output is capped at 2,000 tokens. These bounds are distinct from the two persisted full-attempt
+bound above.
 
 ---
 
@@ -194,8 +204,9 @@ tokens. These bounds are distinct from the two persisted full-attempt bound abov
    share count increased/decreased/flat, and net debt / (operating income + D&A) is explicitly a
    proxy rather than reported EBITDA. Normalized facts and inputs preserve SEC `decimals`.
    Directional metrics expose current-minus-prior delta and the sum of both raw rounding slacks;
-   unknown decimals means unknown direction, never zero slack. User-facing surfaces say “computed
-   as of.”
+   subtraction and slack addition use decimal arithmetic before conversion to the existing float
+   DTO. Unknown, overflowing, or float-underflowing finite decimals mean unknown direction, never
+   zero slack. User-facing surfaces say “computed as of.”
 
 4. **Point-in-time contract** — companyfacts entries without a provable filing date or filed after
    the filing's `as_of` are excluded before normalization. Current annual legs older than 550 days
@@ -203,14 +214,19 @@ tokens. These bounds are distinct from the two persisted full-attempt bound abov
    malformed source dates also fail closed. Repository historical metric selection orders by
    greatest eligible `as_of`, then greatest row ID for a same-date rerun.
 
-5. **Publication-check contract** — the launch `VerifyBundle` contains P1 qualitative headlines,
-   exact evidence snippets, starter metrics, stored section text, a null trade action, and the
-   disclaimer. V1/V4/V5 are blocking publication checks. V2 is a separate non-blocking source-data
-   audit. V3 is `skipped_not_applicable` because no decision exists.
+5. **Publication-check contract** — the launch `VerifyBundle` contains a required, explicit
+   authored-headline subset, exact evidence snippets, starter metrics, stored section text, a null
+   trade action, and the disclaimer. The compiler, V5, and final DTO verifier consume one shared
+   authored-text policy; exact SEC quotations are never scanned as authored prose. V1/V4/V5 are
+   blocking publication checks. V2 is a separate non-blocking source-data audit. V3 is
+   `skipped_not_applicable` because no decision exists.
 
-6. **Persisted gate contract** — `presentation.projection.load_filing_projection()` may deserialize
-   P1 only when filing status is `verified`, persisted V1/V4/V5 rows all pass, and no blocking result
-   fails. Otherwise P1 is absent and the filing is marked withheld/manual review.
+6. **Persisted gate contract** — each P1 is atomically paired with one strict `harness.v2` trace
+   containing its analysis ID and exact serialized-output hash. Verification rows, the frozen final
+   trace snapshot, filing status, and processed time finalize in one transaction. Presentation loads
+   the latest valid finalized v2 trace first and may deserialize only its linked P1 when filing
+   status and frozen/live integrity gates agree. Pending, malformed, mismatched, unlinked, or v1
+   traces fail closed.
 
 7. **Compiler/prune contract** — `verify.compiler.compile_draft()` classifies errors as run-level or
    finding-local. After one repair it drops only locally invalid findings, recomputes severity, and
@@ -230,10 +246,14 @@ tokens. These bounds are distinct from the two persisted full-attempt bound abov
    and production credential discovery recognizes `OPENAI_API_KEY` / `OPENROUTER_API_KEY` plus the
    process-memory browser key. Model bake-off flexibility is developer tooling, not runtime provider routing.
 
-11. **Certificate contract** — `P1_TRACE` stores validated tool hashes, agenda states, dropped codes,
-   budgets, models/prompts, and the exact metric envelopes used by that run. The owner-scoped
-   certificate is a stable hash over that snapshot; it never reconstructs provenance from later
-   metric rows.
+11. **Certificate contract** — completed `verified` and completed-withheld `analyzed` attempts may
+   expose `certificate.v2`; failed or pending attempts may not. Every hashed field comes from the
+   finalized frozen trace, including filing identity/source hash, linked P1/trace IDs and P1 hash,
+   safe verification rows, publishable evidence/classification, metric envelopes, tool hashes,
+   agenda, budgets, models, prompts, outcome, and terminal reason. Withheld snapshots are redacted
+   before persistence: no published IDs, classification, evidence, headline/quote prose,
+   verification details, or tool arguments. Canonical UTF-8 JSON uses sorted keys, compact
+   separators, and `ensure_ascii=False`, so later row mutations cannot change certificate bytes.
 
 12. **Ticker-only contract** — public holding create/update schemas accept identity only. Shares,
     cost basis, targets, horizons, and theses are neither collected nor returned. Dormant DB columns
@@ -271,17 +291,18 @@ The deployment model is one process/container, one SQLite file, and one in-proce
 - `create_app()` synchronously installs or verifies the exact file-backed schema once. Requests and
   jobs call `connect()`, never schema installation. Demo databases are separate.
 - Operational connections enable foreign keys, WAL, and a 5-second busy timeout.
-- Schema v5 has `users`, private `user_companies`, and private `user_preferences`. A reserved local
+- Schema v6 has `users`, private `user_companies`, and private `user_preferences`. A reserved local
   user preserves auth-free CLI/local behavior. Issuer identity, filings, facts, analyses, metrics,
   and verification remain shared public-data artifacts.
 - XBRL replacement, filing-section/FTS replacement, computation batches, and verification-report
-  replacement are atomic and roll back on failure.
+  replacement are atomic and roll back on failure. P1/trace insertion and final attempt
+  verification/status publication are also transactional.
 - POSIX DB files are `0600`; newly created data directories are `0700`.
 - Jobs are owner-tagged process-memory state and disappear on restart. There is no durable queue,
   leasing, distributed worker, or multi-instance consistency claim.
 
-There is no migration ladder. Schema v5 rejects an older database with a backup-and-reset message;
-Git history is the compatibility archive.
+There is no migration ladder. Schema v6 rejects an older database with a backup-and-reset message;
+v1 traces and certificates are not adapted, and Git history is the compatibility archive.
 
 ---
 

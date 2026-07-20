@@ -9,6 +9,7 @@ The launch pipeline calls ``compute_starter`` — exactly the six shipped metric
 from __future__ import annotations
 
 import math
+from decimal import Decimal, DecimalException
 from datetime import date
 from typing import Optional, Sequence
 
@@ -53,22 +54,41 @@ def xbrl_rounding_slack(decimals: str | None) -> float | None:
         return 0.0
     try:
         exponent = int(value)
-        slack = 0.5 * (10.0 ** (-exponent))
-    except (TypeError, ValueError, OverflowError):
+        exact_slack = Decimal("0.5").scaleb(-exponent)
+        slack = float(exact_slack)
+    except (DecimalException, TypeError, ValueError, OverflowError):
         return None
-    return slack if math.isfinite(slack) else None
+    if not exact_slack.is_finite() or not math.isfinite(slack):
+        return None
+    if exact_slack != 0 and slack == 0.0:
+        return None
+    return slack
+
+
+def _finite_float(value: Decimal) -> float | None:
+    try:
+        result = float(value)
+    except (ValueError, OverflowError):
+        return None
+    if not math.isfinite(result) or (value != 0 and result == 0.0):
+        return None
+    return result
 
 
 def _direction_fields(current: ResolvedFact, prior: ResolvedFact) -> dict:
     current_slack = xbrl_rounding_slack(current.fact.decimals)
     prior_slack = xbrl_rounding_slack(prior.fact.decimals)
+    delta = _finite_float(
+        Decimal(str(current.fact.value)) - Decimal(str(prior.fact.value))
+    )
+    combined_slack = (
+        _finite_float(Decimal(str(current_slack)) + Decimal(str(prior_slack)))
+        if current_slack is not None and prior_slack is not None
+        else None
+    )
     return {
-        "direction_delta": current.fact.value - prior.fact.value,
-        "direction_slack": (
-            current_slack + prior_slack
-            if current_slack is not None and prior_slack is not None
-            else None
-        ),
+        "direction_delta": delta,
+        "direction_slack": combined_slack,
         "direction_basis": "current_minus_prior",
     }
 
@@ -169,7 +189,7 @@ def _contiguous_quarters(rows: Sequence[ResolvedFact]) -> bool:
 
 # ---------------------------------------------------------------- metrics --
 def revenue_growth(store: FactStore, sector: SectorInfo, as_of: str) -> MetricResult:
-    V = "revenue_growth.v4"
+    V = "revenue_growth.v5"
     _, as_of_error = _parse_as_of(as_of)
     if as_of_error:
         return _unavailable("revenue_growth", V, as_of, [as_of_error])
@@ -216,7 +236,7 @@ def revenue_growth(store: FactStore, sector: SectorInfo, as_of: str) -> MetricRe
 
 
 def _trend_metric(name: str, concept: str, store: FactStore, as_of: str) -> MetricResult:
-    V = f"{name}.v3"
+    V = f"{name}.v4"
     _, as_of_error = _parse_as_of(as_of)
     if as_of_error:
         return _unavailable(name, V, as_of, [as_of_error])
@@ -317,7 +337,7 @@ def liquidity_basics(store: FactStore, sector: SectorInfo, as_of: str) -> Metric
 
 
 def share_count_change(store: FactStore, sector: SectorInfo, as_of: str) -> MetricResult:
-    V = "share_count_change.v3"
+    V = "share_count_change.v4"
     _, as_of_error = _parse_as_of(as_of)
     if as_of_error:
         return _unavailable("share_count_change", V, as_of, [as_of_error])

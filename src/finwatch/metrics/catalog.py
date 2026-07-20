@@ -13,13 +13,6 @@ class MetricId(StrEnum):
 
 STARTER_METRICS = tuple(metric.value for metric in MetricId)
 
-DIRECTIONAL_METRICS = frozenset({
-    MetricId.REVENUE_GROWTH,
-    MetricId.NET_INCOME_TREND,
-    MetricId.CFO_TREND,
-    MetricId.SHARE_COUNT_CHANGE,
-})
-
 STARTER_METRIC_LABELS = {
     "revenue_growth": "Revenue growth",
     "net_income_trend": "Net income trend",

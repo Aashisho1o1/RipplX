@@ -6,23 +6,16 @@ caller can spend one repair or prune only the affected finding.
 """
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass, field
 
 from pydantic import BaseModel, ConfigDict
 
-from finwatch.core.text_policy import contains_authored_quantity, contains_trade_instruction
-from finwatch.core.types import FORBIDDEN_VOCABULARY
+from finwatch.core.text_policy import authored_text_violations
 from finwatch.llm.schemas import Classification, Finding, P1Output
 from finwatch.metrics.envelope import MetricsBundle
 from finwatch.preprocess.forms import base_form, is_amendment
 
 _STRICT = ConfigDict(extra="forbid")
-_PRICE_TARGET = re.compile(
-    r"(price\s+target|target\s+price|will\s+(reach|hit)|"
-    r"\$\d+(\.\d+)?\s*(PT\b|target\b|price\s+target))",
-    re.IGNORECASE,
-)
 _CRITICAL_8K_SECTION_FLAGS = {
     "item_1_03": "item_1_03_bankruptcy",
     "item_2_04": "item_2_04_acceleration",
@@ -100,14 +93,10 @@ def _finding_issues(
     issues: list[CompilerIssue] = []
     fid = finding.finding_id
     headline = finding.headline
-    lowered = headline.lower()
-    if contains_authored_quantity(headline):
+    violations = authored_text_violations(headline)
+    if "quantity" in violations:
         issues.append(CompilerIssue(code="AUTHORED_NUMBER", finding_id=fid))
-    if (
-        contains_trade_instruction(headline)
-        or _PRICE_TARGET.search(headline)
-        or any(word in lowered for word in FORBIDDEN_VOCABULARY)
-    ):
+    if any(violation != "quantity" for violation in violations):
         issues.append(CompilerIssue(code="UNSAFE_LANGUAGE", finding_id=fid))
     if require_change_basis and not finding.critical_flag and not _overlaps_change(
         finding, change_ranges

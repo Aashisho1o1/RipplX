@@ -164,7 +164,7 @@ def test_noncontiguous_quarters_are_never_summed_as_ttm():
     result = revenue_growth(FactStore(facts), GENERAL, AS_OF)
 
     assert result.status == MetricStatus.COMPUTED
-    assert result.formula_version == "revenue_growth.v4"
+    assert result.formula_version == "revenue_growth.v5"
     assert "ttm_revenue" not in result.components
 
 
@@ -248,7 +248,7 @@ def test_share_count_v2_rejects_future_source_and_malformed_as_of():
     future = share_count_change(store, GENERAL, AS_OF)
     malformed_as_of = share_count_change(store, GENERAL, "not-a-date")
 
-    assert future.formula_version == "share_count_change.v3"
+    assert future.formula_version == "share_count_change.v4"
     assert future.status == MetricStatus.UNAVAILABLE
     assert "future-dated" in " ".join(future.unavailable_missing)
     assert len(future.inputs_used) == 2

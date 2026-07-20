@@ -8,6 +8,19 @@ import { PosturePill } from "../components/PosturePill";
 import { useResource } from "../hooks/useResource";
 import type { FilingDetail } from "../types";
 
+export function researchOutcomeLabel(outcome: NonNullable<FilingDetail["research"]>["outcome"]): string {
+  switch (outcome) {
+    case "published": return "Published";
+    case "partial": return "Published with some findings dropped";
+    case "metrics_only": return "Metrics only — no qualitative findings published";
+    case "withheld": return "Withheld — no qualitative findings published";
+    default: {
+      const exhaustive: never = outcome;
+      return exhaustive;
+    }
+  }
+}
+
 export function FilingPage() {
   const { accession = "" } = useParams();
   const location = useLocation();
@@ -50,7 +63,7 @@ export function FilingPage() {
       {detail.research && <details className="research-audit">
         <summary>Research tools used: {detail.research.tool_call_count}</summary>
         <div className="research-audit-body">
-          <p><strong>Outcome:</strong> {detail.research.outcome.replaceAll("_", " ")} · <strong>Repair:</strong> {detail.research.repair_used ? "used" : "not needed"}</p>
+          <p><strong>Outcome:</strong> {researchOutcomeLabel(detail.research.outcome)} · <strong>Repair:</strong> {detail.research.repair_used ? "used" : "not needed"}</p>
           {detail.research.tool_names.length > 0 && <p className="mono faint">{detail.research.tool_names.join(" · ")}</p>}
           {detail.research.dropped_findings.length > 0 && <div><strong>Dropped findings: {detail.research.dropped_findings.length}</strong>{detail.research.dropped_findings.map(row => <p className="mono faint" key={row.finding_id}>{row.finding_id}: {row.error_codes.join(", ")}</p>)}</div>}
           {detail.certificate_url && <a className="button ghost" href={`${detail.certificate_url}?download=true`}>Download verification certificate</a>}

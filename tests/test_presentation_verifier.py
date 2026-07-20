@@ -79,7 +79,10 @@ def test_exact_quote_with_number_passes():
         "Exposure reached 1e9",
         "Buy the shares",
         "The target price is higher",
+        "We estimate a fair value for the shares",
         "Guaranteed upside",
+        "Margins moved ½ a point",
+        "Margins moved by 25 bps",
         *_QUANTITY_OR_ADVICE_BYPASSES,
     ],
 )
@@ -91,22 +94,33 @@ def test_authored_numeric_or_advice_headline_fails(headline: str):
 
 
 @pytest.mark.parametrize("headline", _QUANTITY_OR_ADVICE_BYPASSES)
-def test_p1_schema_rejects_quantity_and_advice_bypasses(headline: str):
-    with pytest.raises(ValueError):
-        Finding(
-            headline=headline,
-            severity="medium",
-            evidence=[
-                FindingEvidence(
-                    accession_number=_ACCESSION,
-                    form_type="10-Q",
-                    section_key="mdna",
-                    char_start=0,
-                    char_end=1,
-                    snippet="x",
-                )
-            ],
-        )
+def test_p1_schema_leaves_headline_policy_to_the_per_finding_compiler(headline: str):
+    finding = Finding(
+        finding_id="f1",
+        headline=headline,
+        severity="medium",
+        evidence=[
+            FindingEvidence(
+                accession_number=_ACCESSION,
+                form_type="10-Q",
+                section_key="mdna",
+                char_start=0,
+                char_end=1,
+                snippet="x",
+            )
+        ],
+    )
+    assert finding.headline == headline
+
+
+@pytest.mark.parametrize(
+    "headline",
+    ["Honeymoon demand normalized", "Obviously different controls were disclosed"],
+)
+def test_final_dto_allows_forbidden_substrings_that_are_not_tokens(headline: str):
+    entry, sections = _fixture()
+    finding = entry.findings[0].model_copy(update={"headline": headline})
+    assert verify_filing_entry(entry.model_copy(update={"findings": [finding]}), sections) == []
 
 
 def test_wrong_exact_offset_fails():

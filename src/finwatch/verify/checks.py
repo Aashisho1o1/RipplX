@@ -12,8 +12,8 @@ from typing import Any, Optional
 
 from pydantic import BaseModel, Field
 
-from finwatch.core.text_policy import contains_authored_quantity, contains_trade_instruction
-from finwatch.core.types import DISCLAIMER, FORBIDDEN_VOCABULARY, SectorInfo
+from finwatch.core.text_policy import authored_text_violations
+from finwatch.core.types import DISCLAIMER, SectorInfo
 from finwatch.metrics.envelope import MetricsBundle
 from finwatch.xbrl.normalize import FactStore
 
@@ -38,9 +38,9 @@ class EvidenceClaim(BaseModel):
 class VerifyBundle(BaseModel):
     rendered_text: str
     metrics: MetricsBundle
-    # V5 scans only stochastic/authored prose when this is supplied. Exact SEC
+    # V5 scans only stochastic/authored prose. Exact SEC
     # quotations may legitimately contain trade/valuation words and are not advice.
-    authored_text: Optional[str] = None
+    authored_text: str
     fact_store_values: list[float] = Field(default_factory=list)  # numeric XBRL leaves
     evidence_claims: list[EvidenceClaim] = Field(default_factory=list)
     section_texts: dict[str, str] = Field(default_factory=dict)   # f"{accn}:{section_key}"
@@ -358,37 +358,18 @@ def check_v4_citations(bundle: VerifyBundle) -> list[CheckResult]:
 
 
 # ===================================================== V5 — schema/hygiene ==
-_PRICE_TARGET = re.compile(
-    r"(price\s+target|target\s+price|will\s+(reach|hit)|"
-    r"\$\d+(\.\d+)?\s*(PT\b|target\b|price\s+target))", re.IGNORECASE)
-_AUTHORED_VALUATION = re.compile(
-    r"\b(?:our|we\s+(?:assign|estimate|believe|calculate))\s+"
-    r"(?:a\s+)?(?:fair|intrinsic)\s+value\b",
-    re.IGNORECASE,
-)
-
-
 def check_v5_hygiene(bundle: VerifyBundle) -> list[CheckResult]:
     out: list[CheckResult] = []
-    authored = bundle.authored_text if bundle.authored_text is not None else bundle.rendered_text
-    text_l = authored.lower()
-    for w in FORBIDDEN_VOCABULARY:
-        if w in text_l:
-            out.append(CheckResult(check_id="V5", verdict="fail",
-                                   severity="blocking",
-                                   detail=f"forbidden vocabulary: '{w}'"))
-    if _PRICE_TARGET.search(authored):
+    details = {
+        "quantity": "authored quantity",
+        "trade_instruction": "trade recommendation",
+        "price_target": "price-target language",
+        "first_person_valuation": "authored valuation language",
+        "forbidden_vocabulary": "forbidden vocabulary",
+    }
+    for violation in authored_text_violations(bundle.authored_text):
         out.append(CheckResult(check_id="V5", verdict="fail",
-                               severity="blocking", detail="price-target language"))
-    if bundle.authored_text is not None and contains_authored_quantity(authored):
-        out.append(CheckResult(check_id="V5", verdict="fail",
-                               severity="blocking", detail="authored quantity"))
-    if contains_trade_instruction(authored):
-        out.append(CheckResult(check_id="V5", verdict="fail",
-                               severity="blocking", detail="trade recommendation"))
-    if _AUTHORED_VALUATION.search(authored):
-        out.append(CheckResult(check_id="V5", verdict="fail",
-                               severity="blocking", detail="authored valuation language"))
+                               severity="blocking", detail=details[violation]))
     if bundle.trade_action is not None:
         out.append(CheckResult(check_id="V5", verdict="fail",
                                severity="blocking",

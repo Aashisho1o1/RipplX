@@ -66,7 +66,7 @@ def build_orchestrator(
 # verification completed but withheld output for manual review, so it is terminal too.
 _TERMINAL_STATUS = frozenset({"verified", "analyzed"})
 _ANALYZABLE_FORMS = frozenset({"10-K", "10-Q", "8-K"})
-_MAX_EXTRACT_ATTEMPTS = 2
+_MAX_PIPELINE_ATTEMPTS = 2
 
 
 def newest_filing_to_analyze(
@@ -80,7 +80,8 @@ def newest_filing_to_analyze(
     Unsupported SEC forms are excluded before per-CIK newest selection. A terminal or
     exhausted newest filing suppresses only that issuer; it never exposes the issuer's older
     history, but it also cannot starve another tracked issuer's eligible newest filing. A
-    failed filing receives at most one full retry (two persisted extraction attempts total).
+    failed filing receives at most one full retry (two persisted pipeline attempts total,
+    counted from download).
     """
     selected_form = base_form(form_type) if form_type else None
     if selected_form is not None and selected_form not in _ANALYZABLE_FORMS:
@@ -105,12 +106,12 @@ def newest_filing_to_analyze(
         attempts = max(
             (
                 row.attempts
-                for stage in ("parse", "metrics", "extract")
+                for stage in ("download", "parse", "metrics", "extract", "verify")
                 if (row := repo.get_filing_stage(filing.accession_number, stage)) is not None
             ),
             default=0,
         )
-        if attempts >= _MAX_EXTRACT_ATTEMPTS:
+        if attempts >= _MAX_PIPELINE_ATTEMPTS:
             return None
         return filing
 
@@ -162,12 +163,12 @@ def process_filing(
     if company is not None:
         ticker = company.ticker
     reporter = StageReporter(repo, filing.accession_number, now_fn=now_fn, callback=on_stage)
+    reporter.running("download", {"form": base_form(filing.form_type)})
     if not filing.primary_doc_url:
         reporter.failed("download", "no primary-document URL indexed")
         repo.set_filing_status(filing.accession_number, "failed", processed_at=now_fn())
         return ProcessResult(filing.accession_number, ticker, False,
                              error="no primary-document URL indexed")
-    reporter.running("download", {"form": base_form(filing.form_type)})
     try:
         html = fetch_html(filing.primary_doc_url)
         reporter.completed(
@@ -202,11 +203,11 @@ def process_filing(
         )
         if running is not None:
             reporter.failed(running.stage, exc)
-        repo.set_filing_status(filing.accession_number, "failed", processed_at=now_fn())
+        current = repo.get_filing(filing.accession_number)
+        if current is None or current.status not in {"verified", "analyzed", "failed"}:
+            repo.set_filing_status(filing.accession_number, "failed", processed_at=now_fn())
         return ProcessResult(filing.accession_number, ticker, False,
                              error="analysis pipeline failed")
-    status = "analyzed" if fa.withheld else "verified"
-    repo.set_filing_status(filing.accession_number, status, processed_at=now_fn())
     return ProcessResult(filing.accession_number, fa.ticker, True,
                          verdict=fa.verification.verdict, withheld=fa.withheld)
 

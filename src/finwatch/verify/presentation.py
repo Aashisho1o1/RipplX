@@ -3,19 +3,11 @@
 from __future__ import annotations
 
 import hashlib
-import re
 from urllib.parse import urlsplit
 
-from finwatch.core.text_policy import contains_authored_quantity, contains_trade_instruction
-from finwatch.core.types import FORBIDDEN_VOCABULARY
+from finwatch.core.text_policy import authored_text_violations
 from finwatch.db.repositories import FilingSection
 from finwatch.presentation.models import FilingDigestEntry
-
-_PRICE_TARGET = re.compile(
-    r"(price\s+target|target\s+price|will\s+(reach|hit)|"
-    r"\$\d+(\.\d+)?\s*(PT\b|target\b|price\s+target))",
-    re.IGNORECASE,
-)
 
 
 def verify_filing_entry(
@@ -41,13 +33,8 @@ def verify_filing_entry(
         headline = finding.headline.strip()
         if not headline:
             errors.append(f"{finding.finding_id}: empty headline")
-        if contains_authored_quantity(headline):
-            errors.append(f"{finding.finding_id}: authored headline contains a number")
-        lowered = headline.lower()
-        if any(word in lowered for word in FORBIDDEN_VOCABULARY):
-            errors.append(f"{finding.finding_id}: forbidden vocabulary")
-        if contains_trade_instruction(headline) or _PRICE_TARGET.search(headline):
-            errors.append(f"{finding.finding_id}: trade or price-target language")
+        for violation in authored_text_violations(headline):
+            errors.append(f"{finding.finding_id}: authored text {violation}")
         if not finding.evidence:
             errors.append(f"{finding.finding_id}: no direct evidence")
 

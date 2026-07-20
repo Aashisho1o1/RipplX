@@ -51,7 +51,7 @@ class FindingEvidence(BaseModel):
 
     The model supplies only ``section_key`` and the verbatim ``snippet`` (plus the
     echoed accession/form, validated against trusted metadata). ``char_start`` and
-    ``char_end`` are SERVER-DERIVED: ``llm/stages.py`` anchors the snippet in its
+    ``char_end`` are SERVER-DERIVED: ``verify/compiler.py`` anchors the snippet in its
     canonical section (exact, unique substring) and computes the offsets; any offsets
     the model returns are ignored and overwritten. Because LLMs cannot reliably count
     characters, trusting model offsets withheld correct quotations — so the persisted

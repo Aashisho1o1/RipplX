@@ -89,10 +89,3 @@ class StageReporter:
             error=detail,
             diagnostics=diagnostics,
         )
-
-
-def stages_from(stage: str) -> tuple[str, ...]:
-    try:
-        return PIPELINE_STAGES[PIPELINE_STAGES.index(stage) :]
-    except ValueError as exc:
-        raise ValueError(f"unknown pipeline stage: {stage}") from exc

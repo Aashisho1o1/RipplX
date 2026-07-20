@@ -58,7 +58,10 @@ def _seed(repo, *, owned=1, url="https://www.sec.gov/x.htm"):
                               filed_at="2024-08-01", primary_doc_url=url))
 
 
-def _seed_other(repo, *, status="fetched", filed_at="2024-08-02"):
+def _seed_other(
+    repo, *, status="fetched", filed_at="2024-08-02",
+    url="https://www.sec.gov/aapl.htm",
+):
     cik = "0000320193"
     accession = "0000320193-24-000081"
     repo.upsert_company(Company(cik=cik, ticker="AAPL", name="Apple", sic_code="3571",
@@ -70,7 +73,7 @@ def _seed_other(repo, *, status="fetched", filed_at="2024-08-02"):
         cik=cik,
         form_type="10-Q",
         filed_at=filed_at,
-        primary_doc_url="https://www.sec.gov/aapl.htm",
+        primary_doc_url=url,
         status=status,
     ))
     return cik, accession
@@ -157,7 +160,7 @@ def test_non_verbatim_evidence_snippet_is_withheld():
     assert result[0].ok and not result[0].withheld  # finding-local failure; metrics still publish
     assert "Fabricated claim" not in render_digest(repo, since="2024-01-01").markdown
     trace = json.loads(repo.latest_analysis(ACCN, "P1_TRACE").output_json)
-    assert trace["outcome"] == "metrics_only"
+    assert trace["publication_outcome"] == "metrics_only"
     assert trace["dropped_findings"][0]["error_codes"] == ["QUOTE_NOT_EXACT"]
 
 
@@ -257,6 +260,36 @@ def test_exhausted_global_newest_does_not_starve_another_tracked_cik():
 
     assert selected is not None and selected.accession_number == ACCN
     assert newest_filing_to_analyze(repo, other_cik) is None
+
+
+@pytest.mark.parametrize("failure", ["missing_url", "fetch_exception"])
+def test_two_failed_download_attempts_allow_another_issuer_to_run(failure):
+    repo = Repo(init_db(":memory:"))
+    _seed(repo)  # older eligible issuer
+    other_cik, other_accession = _seed_other(
+        repo,
+        url=None if failure == "missing_url" else "https://www.sec.gov/aapl.htm",
+    )
+    fetch_calls = 0
+
+    def fetch(_url):
+        nonlocal fetch_calls
+        fetch_calls += 1
+        raise RuntimeError("offline test failure")
+
+    for attempt in range(2):
+        result = process_latest(
+            repo, _orch(repo), fetch_html=fetch,
+            now_fn=lambda attempt=attempt: f"t{attempt}",
+        )
+        assert len(result) == 1 and not result[0].ok
+        assert result[0].accession == other_accession
+
+    download = repo.get_filing_stage(other_accession, "download")
+    assert download is not None and download.attempts == 2
+    assert fetch_calls == (0 if failure == "missing_url" else 2)
+    assert newest_filing_to_analyze(repo, other_cik) is None
+    assert newest_filing_to_analyze(repo).accession_number == ACCN
 
 
 def test_portfolio_selector_ignores_untracked_issuer_filings():

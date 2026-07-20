@@ -142,9 +142,11 @@ tools, a finance Skeptic may add only finding-local objections, and the compiler
   It never falls through to an older filing.
 - Every production retry is a fresh full attempt: download, parse, metrics, extract, verify. No
   parse-only/extract-only user control and no mixing of artifacts from different attempts.
-- A failed newest filing gets at most two persisted attempts at the active parse/metrics/extract
-  stage. One harness attempt has eight Generator turns, six Generator tool requests, one shared
-  repair, and two Skeptic tool requests; every action is strict JSON and every loop is bounded.
+- A failed newest filing gets at most two persisted full-pipeline attempts, counted from
+  `download`; missing URLs and fetch failures consume attempts so one issuer cannot starve the
+  portfolio. One harness attempt has eight Generator turns, six Generator tool requests, one
+  shared repair, and two Skeptic tool requests; every action is strict JSON and every loop is
+  bounded.
 - The in-process job runner has one worker. Jobs are ephemeral across process restarts; this is an
   accepted alpha limitation, not a durable-queue claim.
 
@@ -195,10 +197,11 @@ selects an accession or falls through to older history within that form.
 ## 6. SQLite and stored data
 
 Authoritative DDL is the one fresh schema in `src/finwatch/db/schema.sql`; there is no migration
-ladder. Schema v5 stores public users, private user-company membership, and one private period
-preference per user. A reserved local user preserves CLI/local behavior. Issuers, filings, SEC facts,
-analyses, computations, and verification remain shared public-data artifacts. Older schema versions
-fail closed with a backup-and-reset message.
+ladder. Schema v6 is a clean backup-and-reset boundary for attempt-linked `harness.v2` traces and
+`certificate.v2`; no v1 compatibility fallback exists. It stores public users, private user-company
+membership, and one private period preference per user. A reserved local user preserves CLI/local
+behavior. Issuers, filings, SEC facts, analyses, computations, and verification remain shared
+public-data artifacts. Older schema versions fail closed with a backup-and-reset message.
 
 For the web app, schema install/verification runs synchronously once during `create_app`; request and
 background-job connections use `connect()` and never install schema. Operational connections enable foreign keys,
@@ -281,13 +284,18 @@ corresponding critical, section-backed finding; prompt/evaluation rules cover se
 going-concern, auditor, control, and material-cyber cases. No evidence means no finding. Echoed
 accession, ticker, and form must match trusted filing metadata before persistence.
 
-The initial P1 prompt contains only trusted filing/section/metric catalogs. The Generator retrieves
-bounded evidence progressively through `search_sections`, `get_changes`, `get_metric`,
-`get_accounting_checks`, and one `check_draft` preflight; duplicate calls are cached but still spend
-budget. Every turn receives the agenda, validated observations, compiler errors, and remaining
-budget. A second model pass is a one-directional finance Skeptic: it may call the four read tools and
-add typed objections to a specific finding, but never author, approve, or promote a finding. Output
-is capped at 2,000 tokens per call.
+The initial P1 prompt contains only trusted filing/section/metric catalogs. Current-versus-prior
+change ranges are precomputed before the model acts, so compiler validity never depends on whether
+the model called `get_changes`. The Generator retrieves bounded evidence progressively through
+`search_sections`, `get_changes`, `get_metric`, `get_accounting_checks`, and one `check_draft`
+preflight; duplicate calls are cached but still spend budget. Generator and Skeptic turns/tools use
+independent attempt-wide counters, and every advertised remaining budget is nonnegative. Every turn
+receives the agenda, validated observations, compiler errors, and remaining budget. A second model
+pass is a one-directional finance Skeptic: it may call the four read tools and add typed objections
+to a specific finding, but never author, approve, or promote a finding. Once a compiler-passing
+baseline exists, optional Skeptic/repair protocol or budget failure preserves clean findings and
+drops only findings carrying validated objections; provider failure remains a whole-run failure.
+Output is capped at 2,000 tokens per call.
 
 Production accepts one `FINWATCH_MODEL` using the `openai/` or `openrouter/` prefix, with an optional
 `FINWATCH_SKEPTIC_MODEL` on the same provider (otherwise it reuses the Generator), and the matching
@@ -304,9 +312,10 @@ never be logged, persisted, placed in cookies/browser storage, or returned.
 
 The verifier is deterministic and never edits content to make a check pass.
 
-- **V1 numeric provenance:** P1-authored text cannot introduce a number. Numeric filing content is
-  allowed only inside a declared exact evidence span; displayed metric numbers come from persisted
-  starter computations.
+- **V1 numeric provenance:** the shared authored-text policy rejects quantities, trade instructions,
+  price targets, first-person valuation, and forbidden vocabulary from P1-authored headlines.
+  Numeric filing content remains allowed inside declared exact evidence spans; displayed metric
+  numbers come from persisted starter computations.
 - **V4 citation integrity:** accession, section, bounds, exact substring, and stored source text are
   checked.
 - **V5 schema and hygiene:** strict P1 schema, disclaimer, no trade instructions/price targets, and
@@ -316,10 +325,11 @@ The verifier is deterministic and never edits content to make a check pass.
 - **V3:** not applicable because no P3 decision exists in launch.
 
 Before the legacy publication checks, `verify/compiler.py` deterministically anchors evidence,
-rejects unsafe/authored-number headlines, enforces changed-span support where applicable, and checks
-structured metric direction. After the shared repair, findings with local error codes are pruned and
-classification is recomputed; no survivors means a routine metrics-only publication. Dropping a
-required critical finding fails `CRITICAL_COVERAGE` and withholds the filing.
+applies the same authored-headline policy used by V5 and final DTO verification, enforces precomputed
+changed-span support where applicable, and checks structured metric direction. After the shared
+repair, findings with local error codes are pruned and classification is recomputed; no survivors
+means a routine metrics-only publication. Dropping a required critical finding fails
+`CRITICAL_COVERAGE` and withholds the filing.
 
 Publication additionally requires a `verified` filing status, persisted passing V1/V4/V5 rows, and
 no blocking failure. `presentation/canonical.py` then constructs the exact `FilingDigestEntry` used
@@ -329,10 +339,16 @@ section SHA-256, rechecks exact offsets/quotes, rejects duplicate/ambiguous evid
 candidate; identity, persisted-gate, or final-DTO failures withhold the filing. Browser projections
 and `/api/jobs` expose only fixed safe messages; persisted raw stage details are never projected.
 
-The final P1 stays in stage `P1`; the validated harness trace and exact metric snapshot stay in
-`P1_TRACE`. `GET /api/filings/{accession}/certificate` returns an owner-scoped, stable-hash audit
-certificate. The filing UI shows only the tool count, compact trace, dropped codes, and download;
-raw model output and provider exceptions never cross the API boundary.
+The final P1 stays in stage `P1`; its strict `harness.v2` trace stays in `P1_TRACE`. P1 and trace are
+inserted atomically, linked by analysis ID and the SHA-256 of the exact serialized P1 bytes, then
+verification rows, the frozen final trace snapshot, filing status, and processed time are finalized
+in one transaction. Presentation resolves P1 only through the latest valid finalized v2 trace.
+`GET /api/filings/{accession}/certificate` returns an owner-scoped `certificate.v2` built solely
+from that immutable attempt snapshot. Verified and completed-withheld (`analyzed`) attempts receive
+certificates; withheld certificates remove classification, evidence, published IDs, prose, tool
+arguments, and verification details before hashing. Pending, failed, malformed, mismatched, or v1
+attempts have no certificate. The filing UI shows only the tool count, compact trace, dropped codes,
+and conditional download; raw model output and provider exceptions never cross the API boundary.
 
 ---
 

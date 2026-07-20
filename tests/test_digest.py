@@ -20,6 +20,7 @@ from finwatch.db import (
 from finwatch.demo import DEMO_SINCE, build_demo_db
 from finwatch.digest import render_digest
 from finwatch.digest.render import render_brief_markdown
+from finwatch.llm.harness import AgendaItem, HarnessTrace
 from finwatch.presentation.models import (
     BriefPeriodView,
     BriefView,
@@ -71,7 +72,7 @@ def test_demo_findings_are_evidence_backed_with_edgar_links():
 def test_demo_verified_numbers_table_is_formula_stamped_and_checked():
     md = _demo_markdown().markdown
     assert "### MSFT" in md
-    assert "Revenue growth" in md and "revenue_growth.v4" in md
+    assert "Revenue growth" in md and "revenue_growth.v5" in md
     assert "| ✓ |" in md                                  # verifier check mark
     # a holding with no XBRL facts degrades to one honest line, not six "unavailable" rows
     assert "DPLS:** no verified financials yet" in md
@@ -207,8 +208,48 @@ def test_render_digest_serializes_the_same_brief_used_by_the_browser_api():
     ]
 
 
-def _mark_verified(repo: Repo, analysis_id: int, accession: str) -> None:
-    repo.insert_verification_results([
+def _insert_verified_attempt(repo: Repo, p1: Analysis, accession: str) -> int:
+    def trace_factory(p1_id: int, p1_sha256: str) -> Analysis:
+        trace = HarnessTrace(
+            p1_analysis_id=p1_id,
+            p1_output_sha256=p1_sha256,
+            research_outcome="metrics_only",
+            research_terminal_reason="verified",
+            filing_snapshot={
+                "accession": accession,
+                "ticker": p1.ticker,
+                "form": repo.get_filing(accession).form_type,
+                "filed_at": repo.get_filing(accession).filed_at,
+                "source_sha256": None,
+            },
+            generator_model="m",
+            skeptic_model="m",
+            generator_prompt_version="v",
+            skeptic_prompt_version="v",
+            generator_turns=1,
+            generator_tool_calls=0,
+            skeptic_turns=0,
+            skeptic_tool_calls=0,
+            tool_budget=8,
+            repair_used=False,
+            agenda=[
+                AgendaItem(name="FORM_SCOPE", status="discharged"),
+                AgendaItem(name="CRITICAL_COVERAGE", status="discharged"),
+                AgendaItem(name="SKEPTIC_REVIEW", status="not_applicable"),
+            ],
+        )
+        return Analysis(
+            accession_number=accession,
+            ticker=p1.ticker,
+            stage="P1_TRACE",
+            model="m",
+            prompt_version="v",
+            output_json=trace.model_dump_json(),
+            created_at="t",
+        )
+
+    analysis_id, trace_id, p1_sha256 = repo.insert_p1_with_trace(p1, trace_factory)
+    rows = [
         VerificationResult(
             analysis_id=analysis_id,
             check_id=check_id,
@@ -217,8 +258,29 @@ def _mark_verified(repo: Repo, analysis_id: int, accession: str) -> None:
             created_at="t",
         )
         for check_id in ("V1", "V4", "V5")
-    ])
-    repo.set_filing_status(accession, "verified", processed_at="t")
+    ]
+    linked_trace = HarnessTrace.model_validate_json(repo.get_analysis(trace_id).output_json)
+    finalized = linked_trace.model_copy(update={
+        "trace_analysis_id": trace_id,
+        "publication_outcome": "metrics_only",
+        "terminal_reason": "verified",
+        "verification_verdict": "PASS",
+        "verification_snapshot": [
+            {"check_id": row.check_id, "verdict": "PASS", "severity": row.severity}
+            for row in rows
+        ],
+        "publication_snapshot": {"classification": "routine", "evidence": []},
+    })
+    repo.finalize_p1_attempt(
+        analysis_id,
+        trace_id,
+        verification_results=rows,
+        finalized_trace_json=finalized.model_dump_json(),
+        filing_status="verified",
+        processed_at="t",
+    )
+    assert p1_sha256 == finalized.p1_output_sha256
+    return analysis_id
 
 
 def _seed_min(repo, *, severity="routine"):
@@ -230,9 +292,10 @@ def _seed_min(repo, *, severity="routine"):
     p1 = {"accession_number": "a-1", "ticker": "ZZZ", "form_type": "10-Q",
           "classification": {"overall_severity": severity},
           "findings": [], "extraction_confidence": "high", "gaps": []}
-    aid = repo.insert_analysis(Analysis(accession_number="a-1", ticker="ZZZ", stage="P1",
-                                        model="m", prompt_version="v", output_json=json.dumps(p1),
-                                        created_at="t"))
+    aid = _insert_verified_attempt(repo, Analysis(
+        accession_number="a-1", ticker="ZZZ", stage="P1",
+        model="m", prompt_version="v", output_json=json.dumps(p1), created_at="t"
+    ), "a-1")
     p2 = {"accession_number": "a-1", "records_affected": [{
         "ticker": "ZZZ", "owned": True, "impact_class": "direct", "channels": {},
         "guidance_direction": "none_stated", "liquidity_read": "stable",
@@ -242,7 +305,6 @@ def _seed_min(repo, *, severity="routine"):
     repo.insert_analysis(Analysis(accession_number="a-1", ticker="ZZZ", stage="P2",
                                   model="m", prompt_version="v", output_json=json.dumps(p2),
                                   created_at="t"))
-    _mark_verified(repo, aid, "a-1")
     return aid
 
 
@@ -268,10 +330,10 @@ def test_routine_filing_lands_in_boring_not_dropped():
     p1 = {"accession_number": accession, "ticker": "QQQ", "form_type": "8-K",
           "classification": {"overall_severity": "routine"},
           "findings": [], "extraction_confidence": "high", "gaps": []}
-    aid = repo.insert_analysis(Analysis(
+    _insert_verified_attempt(repo, Analysis(
         accession_number=accession, ticker="QQQ", stage="P1", model="m",
         prompt_version="v", output_json=json.dumps(p1), created_at="t"
-    ))
+    ), accession)
     p2 = {"accession_number": accession, "records_affected": [{
         "ticker": "QQQ", "owned": False, "impact_class": "no_impact", "channels": {},
         "guidance_direction": "none_stated", "liquidity_read": "unclear",
@@ -280,7 +342,6 @@ def test_routine_filing_lands_in_boring_not_dropped():
         "claims": [], "portfolio_level_notes": None}
     repo.insert_analysis(Analysis(accession_number=accession, ticker="QQQ", stage="P2", model="m",
                                   prompt_version="v", output_json=json.dumps(p2), created_at="t"))
-    _mark_verified(repo, aid, accession)
     md = render_digest(repo, since="2024-01-01").markdown
     assert "1 routine filing(s) with no material findings (QQQ 8-K)" in md
 

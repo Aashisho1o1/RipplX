@@ -30,11 +30,11 @@ def test_service_computes_and_persists_verbatim():
     comps = {c.tool: c for c in repo.list_computations("CAT")}
     revenue_row = comps["revenue_growth"]
     assert revenue_row.status == "unavailable"
-    assert revenue_row.formula_version == "revenue_growth.v4"
+    assert revenue_row.formula_version == "revenue_growth.v5"
     assert revenue_row.as_of == "2025-05-01"
     # result_json round-trips the MetricResult
     assert json.loads(revenue_row.result_json)["value"] == bundle.get("revenue_growth").value
-    assert comps["share_count_change"].formula_version == "share_count_change.v3"
+    assert comps["share_count_change"].formula_version == "share_count_change.v4"
 
 
 def test_service_marks_stale_msft_like_annual_sources_unavailable_with_provenance():

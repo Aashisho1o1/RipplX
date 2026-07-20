@@ -37,6 +37,9 @@ quotations. Structured direction claims are compiled against current-minus-prior
 SEC-decimals rounding slack. The browser and Markdown digest use the same canonical presentation
 model. Finding-local failures drop only that finding; surviving findings and metrics publish.
 Provider/malformed-action breakdown and filing-scope/critical-coverage failures withhold the run.
+After a compiler-passing baseline exists, an optional Skeptic or repair protocol/budget failure
+preserves unobjected findings and deterministically drops only findings carrying validated
+objections. Change-span validity is precomputed and never depends on model tool-call order.
 
 The model still makes the qualitative selection, headline, and importance judgment. Verification
 proves that its displayed evidence is exact and that displayed numbers come from allowed sources;
@@ -196,7 +199,8 @@ returned by the API, pruned when the session expires, and lost when the process 
 requests intentionally ignore shared `OPENAI_API_KEY` / `OPENROUTER_API_KEY` environment values;
 those remain available to local and CLI workflows.
 
-Schema v5 is a clean prototype break, not a migration. Before upgrading an existing Railway volume,
+Schema v6 is a clean prototype break, not a migration. It introduces attempt-linked `harness.v2`
+and frozen `certificate.v2` semantics without carrying a v1 compatibility path. Before upgrading an existing Railway volume,
 back up `/data`, stop the old deployment, recreate the database/volume, and deploy. Old schemas fail
 with an explicit backup-and-reset error. `.env` files are excluded from both Git and the Docker build
 context; keep a local copy mode-restricted (for example `chmod 600 .env`).
@@ -229,12 +233,20 @@ authoritative command list.
 - Starter metrics are deterministic Python computations over point-in-time SEC XBRL facts.
 - Annual metric sources older than 550 days and instant/share sources older than 200 days fail
   closed as unavailable. Non-finite, future, missing-date, and malformed facts are rejected.
+- Direction deltas and rounding slacks are combined with decimal arithmetic; unrepresentable finite
+  SEC decimal exponents remain unknown rather than becoming false zero uncertainty.
 - Findings are capped at three and must be qualitative; numbers belong in exact evidence.
+- One shared authored-headline policy gates quantities, trade instructions, price targets,
+  first-person valuation, and forbidden vocabulary in the compiler, V5, and final DTO check.
 - The deterministic compiler never edits failed content into compliance. After one shared repair,
   finding-local errors are pruned with typed reason codes. Whole-run withholding is reserved for
   provider/action breakdown or filing-scope/critical-coverage failure.
-- Each analyzed filing exposes a compact tool count/trace and an owner-scoped verification
-  certificate download. Raw model output, secrets, and provider exceptions are not exposed.
+- Retries are counted from `download`, including missing primary-document URLs and fetch failures;
+  after two failed attempts that issuer no longer blocks another tracked issuer's eligible filing.
+- Each completed verified or completed-withheld filing exposes a compact finalized tool trace and
+  an owner-scoped attempt-bound `certificate.v2`. Withheld certificates are redacted before hashing;
+  pending, failed, malformed, mismatched, and v1 attempts expose no certificate. Raw model output,
+  secrets, and provider exceptions are not exposed.
 - React renders filing/model text as escaped text; the launch UI does not render raw filing HTML.
 - SQLite and the `/data` volume are plaintext unless the operator supplies filesystem or volume
   encryption. They contain account emails, private ticker membership/preferences, SEC data,
