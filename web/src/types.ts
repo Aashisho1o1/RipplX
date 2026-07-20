@@ -13,6 +13,27 @@ export interface Verification { verdict: "PASS" | "PASS_WITH_WARNINGS" | "FAIL";
 export interface PipelineStage { stage: string; label: string; status: string; attempts: number; error: string | null; diagnostics: Record<string, unknown> }
 export interface DroppedFinding { finding_id: string; error_codes: string[] }
 export interface ResearchTrace { outcome: "published" | "partial" | "metrics_only" | "withheld"; terminal_reason: string; tool_call_count: number; tool_names: string[]; repair_used: boolean; dropped_findings: DroppedFinding[] }
+export interface Certificate {
+  schema_version: string;
+  certificate_sha256: string;
+  p1_analysis_id: number;
+  trace_analysis_id: number;
+  p1_output_sha256: string;
+  filing: Record<string, unknown>;
+  outcome: string;
+  terminal_reason: string;
+  published_finding_ids: string[];
+  dropped_findings: DroppedFinding[];
+  classification: string | null;
+  evidence: Record<string, unknown>[];
+  metrics: Record<string, unknown>[];
+  verification: { check_id: string; verdict: string; severity: string; detail: string | null }[];
+  tool_calls: Record<string, unknown>[];
+  agenda: Record<string, unknown>[];
+  models: Record<string, unknown>;
+  prompts: Record<string, unknown>;
+  budgets: Record<string, unknown>;
+}
 export interface FilingDetail { filing: FilingDigestEntry; verified_numbers: IssuerMetrics | null; verification: Verification | null; withheld_reason: string | null; pipeline: PipelineStage[]; research: ResearchTrace | null; certificate_url: string | null; disclaimer: string }
 export interface TrackedCompany { ticker: string; cik: string; last_filing: string | null; compressed_verified_read: string | null }
 export interface Companies { companies: TrackedCompany[] }

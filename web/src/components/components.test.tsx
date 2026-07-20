@@ -63,7 +63,8 @@ describe("trust vocabulary", () => {
       }] }],
     }} /></MemoryRouter>);
 
-    expect(screen.getByText("Findings withheld — could not be verified.")).toBeInTheDocument();
+    expect(screen.getByText("Held back by the publication gate")).toBeInTheDocument();
+    expect(screen.getByText(/did not clear verification/)).toBeInTheDocument();
     expect(screen.queryByText("Unverified headline")).not.toBeInTheDocument();
     expect(screen.queryByText("Unverified evidence")).not.toBeInTheDocument();
   });

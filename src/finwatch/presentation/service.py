@@ -246,6 +246,19 @@ class PresentationService:
         for stage in PIPELINE_STAGES:
             stored = stored_stages.get(stage)
             raw_error = stored.error if stored else None
+            diagnostics = {}
+            if stage == "parse" and stored:
+                try:
+                    persisted = json.loads(stored.diagnostics_json)
+                except (TypeError, ValueError):
+                    persisted = {}
+                sections_found = (
+                    persisted.get("sections_found") if isinstance(persisted, dict) else None
+                )
+                if isinstance(sections_found, list) and all(
+                    isinstance(section, str) for section in sections_found
+                ):
+                    diagnostics = {"sections_found": sections_found}
             pipeline.append(
                 PipelineStageView(
                     stage=stage,
@@ -253,7 +266,7 @@ class PresentationService:
                     status=stored.status if stored else inferred[stage],
                     attempts=stored.attempts if stored else 0,
                     error="Stage failed; details are withheld." if raw_error else None,
-                    diagnostics={},
+                    diagnostics=diagnostics,
                 )
             )
         research = None

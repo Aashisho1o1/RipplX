@@ -78,6 +78,10 @@ def test_pipeline_end_to_end_passes_and_persists():
     assert progress["verify"].status == "completed"
 
     repo.track_company(CIK, at="t")
+    detail = PresentationService(repo).filing(ACCN)
+    assert detail is not None
+    parse_stage = next(stage for stage in detail.pipeline if stage.stage == "parse")
+    assert "mdna" in parse_stage.diagnostics["sections_found"]
     certificate = PresentationService(repo).certificate(ACCN)
     assert certificate is not None
     assert PresentationService(repo, user_id="untracked-user").certificate(ACCN) is None

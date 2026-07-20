@@ -7,7 +7,7 @@ export function FilingItemCard({ filing, withholdFindings = false }: { filing: F
   const demo = new URLSearchParams(location.search).get("demo") === "1";
   const withheld = withholdFindings || filing.withheld || Boolean(filing.withheld_reason);
   return <article className="filing-card">
-    <div className="filing-heading"><div className="filing-identity"><span className="ticker-avatar">{filing.ticker.slice(0, 2)}</span><div><Link className="filing-link" to={`/filings/${filing.accession}${demo ? "?demo=1" : ""}`}><strong>{filing.ticker}</strong><span aria-hidden="true">↗</span></Link><span className="mono muted">Filed {filing.filed}</span></div></div><span className="form-badge">{filing.form}</span></div>
-    {withheld ? <p className="notice">{filing.withheld_reason ?? "Findings withheld — could not be verified."}</p> : filing.findings.length ? <FindingList findings={filing.findings} /> : <p className="empty-line">No evidence-backed changes were selected.</p>}
+    <div className="filing-heading"><div className="filing-identity"><Link className="filing-link" to={`/filings/${filing.accession}${demo ? "?demo=1" : ""}`}><strong>{filing.ticker}</strong><span aria-hidden="true">→</span></Link><span className="form-badge">{filing.form}</span><span className="mono muted">Filed {filing.filed}</span></div></div>
+    {withheld ? <div className="withheld-copy compact"><strong>Held back by the publication gate</strong><p>{filing.withheld_reason ?? "No model-authored finding is shown because this filing did not clear verification."}</p></div> : filing.findings.length ? <FindingList findings={filing.findings} /> : <p className="empty-line">No evidence-backed changes were selected.</p>}
   </article>;
 }

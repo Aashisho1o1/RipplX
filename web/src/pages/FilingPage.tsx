@@ -4,16 +4,34 @@ import { api } from "../api/client";
 import { DisclaimerFooter } from "../components/DisclaimerFooter";
 import { FindingList, trustedSecUrl } from "../components/FindingList";
 import { MetricTable } from "../components/MetricTable";
-import { PosturePill } from "../components/PosturePill";
+import { ProvenancePanel } from "../components/ProvenancePanel";
 import { useResource } from "../hooks/useResource";
 import type { FilingDetail } from "../types";
 
+export const TERMINAL_REASON_LABEL: Record<string, string> = {
+  verified: "All checks passed",
+  skeptic_blocked: "A reviewer objection was left unresolved",
+  skeptic_incomplete: "The reviewer pass did not complete",
+  budget_exhausted: "The research budget was exhausted",
+  malformed_action_breakdown: "The model broke the response protocol",
+  compile_failed: "A run-level check failed",
+  provider_failed: "The model provider was unavailable",
+  verification_failed: "A deterministic publication check failed",
+  verification_incomplete: "Verification did not complete",
+};
+
+export function terminalReasonLabel(reason: string): string {
+  if (TERMINAL_REASON_LABEL[reason]) return TERMINAL_REASON_LABEL[reason];
+  const fallback = reason.replaceAll("_", " ").trim();
+  return fallback ? fallback.replace(/^./, first => first.toUpperCase()) : "Outcome unavailable";
+}
+
 export function researchOutcomeLabel(outcome: NonNullable<FilingDetail["research"]>["outcome"]): string {
   switch (outcome) {
-    case "published": return "Published";
-    case "partial": return "Published with some findings dropped";
-    case "metrics_only": return "Metrics only — no qualitative findings published";
-    case "withheld": return "Withheld — no qualitative findings published";
+    case "published": return "Published with deterministic evidence checks";
+    case "partial": return "Published with unsupported findings removed";
+    case "metrics_only": return "Metrics published; no qualitative finding passed the gate";
+    case "withheld": return "Analysis held back; no qualitative content was published";
     default: {
       const exhaustive: never = outcome;
       return exhaustive;
@@ -37,43 +55,40 @@ export function FilingPage() {
 
   const detail = resource.data;
   const filing = detail.filing;
-  const audit = detail.verification;
+  const research = detail.research;
   const withheldReason = detail.withheld_reason ?? filing.withheld_reason ?? (filing.withheld ? "Findings withheld — could not be verified." : null);
+  const withheld = Boolean(withheldReason) || filing.withheld || research?.outcome === "withheld";
   const filingUrl = trustedSecUrl(filing.edgar_url);
+  const reasonLabel = research ? terminalReasonLabel(research.terminal_reason) : "Analysis has not completed";
   const sectionValue = detail.pipeline.find(stage => stage.stage === "parse")?.diagnostics.sections_found;
   const parsedSections = Array.isArray(sectionValue) ? sectionValue.map(String) : [];
 
-  return <main className="page">
-    <button className="button ghost back-button" onClick={() => navigate(-1)}>← Back to brief</button>
+  return <main className="page filing-page">
+    <button className="button ghost back-button" onClick={() => navigate(-1)}>← Back</button>
     <header className="filing-detail-hero section">
-      <div className="filing-detail-title"><span className="ticker-avatar large">{filing.ticker.slice(0, 2)}</span><div><p className="page-eyebrow">Filing evidence</p><h1 className="page-title">{filing.ticker} <span>· {filing.form}</span></h1><p className="page-subtitle">Filed {filing.filed} · Accession {filing.accession}</p></div></div>
-      {filingUrl && <a className="button" href={filingUrl} target="_blank" rel="noopener noreferrer">Open SEC filing <span aria-hidden="true">↗</span></a>}
+      <div><p className="page-eyebrow">Filing evidence</p><h1 className="page-title">{filing.ticker} <span>· {filing.form}</span></h1><p className="filing-meta">Filed {filing.filed}<span aria-hidden="true">·</span><code>{filing.accession}</code></p></div>
+      {filingUrl && <a className="sec-link" href={filingUrl} target="_blank" rel="noopener noreferrer">Open SEC filing <span aria-hidden="true">↗</span></a>}
     </header>
-    {filing.withheld && <div className="notice">⚠ Withheld — could not be verified</div>}
-    {withheldReason && <div className="notice">{withheldReason}</div>}
 
-    {!demo && <section className="surface section pipeline-surface">
-      <div className="surface-header"><div><span className="section-kicker">Trust pipeline</span><h2>Publication checks</h2></div><span className="surface-meta">Five-stage audit trail</span></div>
-      <div className="pipeline-list">{detail.pipeline.map((stage, index) =>
-        <div className={`pipeline-stage ${stage.status}`} title={stage.error ?? undefined} key={stage.stage}>
-          <span className="pipeline-index">0{index + 1}</span><span className="pipeline-state" aria-hidden="true">{stage.status === "completed" ? "✓" : stage.status === "failed" ? "!" : "·"}</span><span><strong>{stage.label}</strong><small>{stage.error ?? stage.status}</small></span>
-        </div>
-      )}</div>
-      {parsedSections.length > 0 && <p className="mono faint">Sections: {parsedSections.join(", ")}</p>}
-      {detail.research && <details className="research-audit">
-        <summary>Research tools used: {detail.research.tool_call_count}</summary>
-        <div className="research-audit-body">
-          <p><strong>Outcome:</strong> {researchOutcomeLabel(detail.research.outcome)} · <strong>Repair:</strong> {detail.research.repair_used ? "used" : "not needed"}</p>
-          {detail.research.tool_names.length > 0 && <p className="mono faint">{detail.research.tool_names.join(" · ")}</p>}
-          {detail.research.dropped_findings.length > 0 && <div><strong>Dropped findings: {detail.research.dropped_findings.length}</strong>{detail.research.dropped_findings.map(row => <p className="mono faint" key={row.finding_id}>{row.finding_id}: {row.error_codes.join(", ")}</p>)}</div>}
-          {detail.certificate_url && <a className="button ghost" href={`${detail.certificate_url}?download=true`}>Download verification certificate</a>}
-        </div>
-      </details>}
+    {research && <section className={`outcome-banner ${research.outcome}`} aria-label="Publication outcome">
+      <span className="outcome-glyph" aria-hidden="true">{research.outcome === "published" ? "✓" : "!"}</span>
+      <div><p>{researchOutcomeLabel(research.outcome)}</p><small>{reasonLabel}</small></div>
     </section>}
+    {!research && withheldReason && <section className="outcome-banner withheld"><span className="outcome-glyph" aria-hidden="true">!</span><div><p>Analysis held back</p><small>{withheldReason}</small></div></section>}
 
-    <section className="surface section"><div className="surface-header"><div><span className="section-kicker">Qualitative layer</span><h2>What changed</h2></div><span className="verified-label"><i /> Evidence verified</span></div><p className="metric-caption">The model selects significance; deterministic checks prove each displayed quotation is exact. The checks do not determine whether the interpretation is important to you.</p>{withheldReason ? <p className="empty-line">Findings are withheld until deterministic verification passes.</p> : filing.findings.length ? <FindingList findings={filing.findings} /> : <p className="empty-line">No evidence-backed changes were selected.</p>}</section>
-    <section className="surface section"><div className="surface-header"><div><span className="section-kicker">Deterministic layer</span><h2>Verified numbers</h2></div><Link className="button" to={`/companies/${filing.ticker}${demo ? "?demo=1" : ""}`}>Full company view <span aria-hidden="true">→</span></Link></div>{detail.verified_numbers?.empty ? <p className="empty-line">{detail.verified_numbers.empty}</p> : detail.verified_numbers ? <MetricTable rows={detail.verified_numbers.rows} /> : <p className="empty-line">No verified financials yet (XBRL facts insufficient or not yet ingested).</p>}</section>
-    {!demo && <section className="section audit"><div className="surface-header"><div><span className="section-kicker">Verification audit</span><h2>Gate verdict</h2></div>{audit && <PosturePill posture={audit.verdict === "FAIL" ? "critical_review" : audit.verdict === "PASS_WITH_WARNINGS" ? "risk_review" : "monitor"} />}</div>{audit ? <div className="channels">{audit.checks.map(check => <span className="channel" key={check.check_id}>{check.check_id}: {check.verdict}</span>)}</div> : <p className="empty-line">No verification result yet.</p>}</section>}
+    <section className="section reading-section" aria-labelledby="changes-heading">
+      <header className="reading-heading"><div><p className="section-kicker">AI-selected interpretation</p><h2 id="changes-heading">What changed</h2></div>{!withheld && filing.findings.length > 0 && <span className="verified-label"><i aria-hidden="true" /> Exact evidence checked</span>}</header>
+      <p className="metric-caption">The model selects significance. Deterministic checks prove that every displayed quotation matches the filing; they do not decide what is important to you.</p>
+      {withheld ? <div className="withheld-copy"><strong>No model-authored finding is shown.</strong><p>{withheldReason ?? "This attempt did not clear the publication gate."}</p></div> : filing.findings.length ? <FindingList findings={filing.findings} /> : <p className="empty-line">No evidence-backed changes were selected. This is a legitimate routine result.</p>}
+    </section>
+
+    <section className="section reading-section" aria-labelledby="numbers-heading">
+      <header className="reading-heading"><div><p className="section-kicker">Deterministic SEC XBRL</p><h2 id="numbers-heading">Verified numbers</h2></div><Link className="text-link" to={`/companies/${filing.ticker}${demo ? "?demo=1" : ""}`}>Company view <span aria-hidden="true">→</span></Link></header>
+      {detail.verified_numbers?.empty ? <p className="empty-line">{detail.verified_numbers.empty}</p> : detail.verified_numbers ? <MetricTable rows={detail.verified_numbers.rows} showComputedMark={!withheld} /> : <p className="empty-line">No verified financials yet. Required XBRL facts may be unavailable or not yet ingested.</p>}
+    </section>
+
+    {parsedSections.length > 0 && <p className="parsed-sections"><span>Parsed sections</span><code>{parsedSections.join(" · ")}</code></p>}
+    {!demo && <ProvenancePanel research={research} certificateUrl={detail.certificate_url} pipeline={detail.pipeline} terminalReasonLabel={reasonLabel} />}
     <DisclaimerFooter text={detail.disclaimer} />
   </main>;
 }

@@ -2,7 +2,7 @@ import { cleanup, render, screen } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { FilingDetail, ResearchTrace } from "../types";
-import { FilingPage, researchOutcomeLabel } from "./FilingPage";
+import { FilingPage, researchOutcomeLabel, terminalReasonLabel } from "./FilingPage";
 
 const finding = {
   finding_id: "f1",
@@ -15,7 +15,7 @@ const finding = {
     char_start: 0,
     char_end: 17,
     quote: "Liquidity changed",
-    section_sha256: "abc",
+    section_sha256: "abc123456789def",
     edgar_url: "https://www.sec.gov/Archives/a-1.htm",
   }],
 };
@@ -38,7 +38,7 @@ function detail(
     verified_numbers: null,
     verification: { verdict: "PASS", checks: [] },
     withheld_reason: null,
-    pipeline: [],
+    pipeline: [{ stage: "parse", label: "Parse filing", status: "completed", attempts: 2, error: null, diagnostics: { sections_found: ["mdna"] } }],
     research: {
       outcome,
       terminal_reason: "verified",
@@ -70,37 +70,40 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe("filing research audit", () => {
-  it("maps every publication outcome to explicit user language", () => {
-    expect(researchOutcomeLabel("published")).toBe("Published");
-    expect(researchOutcomeLabel("partial")).toBe(
-      "Published with some findings dropped",
-    );
-    expect(researchOutcomeLabel("metrics_only")).toBe(
-      "Metrics only — no qualitative findings published",
-    );
-    expect(researchOutcomeLabel("withheld")).toBe(
-      "Withheld — no qualitative findings published",
-    );
+describe("filing trust surface", () => {
+  it("maps all publication outcomes and terminal reasons to plain language", () => {
+    expect(researchOutcomeLabel("published")).toMatch(/Published with deterministic/);
+    expect(researchOutcomeLabel("partial")).toMatch(/unsupported findings removed/);
+    expect(researchOutcomeLabel("metrics_only")).toMatch(/Metrics published/);
+    expect(researchOutcomeLabel("withheld")).toMatch(/held back/);
+    expect(terminalReasonLabel("provider_failed")).toBe("The model provider was unavailable");
+    expect(terminalReasonLabel("new_safe_reason")).toBe("New safe reason");
   });
 
-  it("shows a partial result, its dropped code, and its certificate", async () => {
+  it.each([
+    ["published", "Published with deterministic evidence checks"],
+    ["partial", "Published with unsupported findings removed"],
+    ["metrics_only", "Metrics published; no qualitative finding passed the gate"],
+    ["withheld", "Analysis held back; no qualitative content was published"],
+  ] as const)("renders the %s outcome", async (outcome, label) => {
+    renderDetail(detail(outcome));
+    expect(await screen.findByText(label)).toBeInTheDocument();
+  });
+
+  it("shows terminal reason, retry attempts, drop codes, and human explanations", async () => {
     const value = detail("partial");
-    value.research!.dropped_findings = [{
-      finding_id: "f2",
-      error_codes: ["QUOTE_NOT_EXACT"],
-    }];
+    value.research!.terminal_reason = "skeptic_blocked";
+    value.research!.dropped_findings = [{ finding_id: "f2", error_codes: ["QUOTE_NOT_EXACT", "FUTURE_CODE"] }];
     renderDetail(value);
 
-    const outcome = await screen.findByText("Outcome:");
-    expect(outcome.parentElement).toHaveTextContent("Published with some findings dropped");
-    expect(screen.getByText(/f2: QUOTE_NOT_EXACT/)).toBeInTheDocument();
+    expect(await screen.findAllByText("A reviewer objection was left unresolved")).not.toHaveLength(0);
+    expect(screen.getByText("attempt 2 of 2")).toBeInTheDocument();
+    expect(screen.getByText("QUOTE_NOT_EXACT")).toHaveAttribute("title", "The quotation did not match the filing exactly.");
+    expect(screen.getByText("FUTURE_CODE")).not.toHaveAttribute("title");
     expect(screen.getByText(finding.headline)).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Download verification certificate" }))
-      .toHaveAttribute("href", "/api/filings/a-1/certificate?download=true");
   });
 
-  it("never renders withheld findings and only offers a certificate when provided", async () => {
+  it("never renders withheld findings or an affirmative evidence badge", async () => {
     renderDetail(detail("withheld", {
       filing: {
         ...detail("withheld").filing,
@@ -108,15 +111,10 @@ describe("filing research audit", () => {
         findings: [{ ...finding, headline: "Unverified finding must stay hidden" }],
       },
       withheld_reason: "LLM-derived analysis withheld.",
-      certificate_url: null,
     }));
 
-    const outcome = await screen.findByText("Outcome:");
-    expect(outcome.parentElement).toHaveTextContent(
-      "Withheld — no qualitative findings published",
-    );
+    expect(await screen.findByText(/Analysis held back; no qualitative content/)).toBeInTheDocument();
     expect(screen.queryByText("Unverified finding must stay hidden")).not.toBeInTheDocument();
-    expect(screen.queryByRole("link", { name: "Download verification certificate" }))
-      .not.toBeInTheDocument();
+    expect(screen.queryByText("Exact evidence checked")).not.toBeInTheDocument();
   });
 });
