@@ -187,6 +187,33 @@ def test_f10_v2_runs_with_annual_and_alignment_gates():
     assert imbalanced["V2a"].verdict == "warn" and imbalanced["V2a"].severity == "warning"
 
 
+def test_v2_data_quality_results_are_never_marked_blocking():
+    from finwatch.core.types import sector_from_sic
+    from finwatch.verify.orchestrator import data_quality_report
+    from finwatch.xbrl.normalize import FactStore
+
+    aligned = data_quality_report(
+        FactStore.from_companyfacts(
+            _bs("2023-12-31", "2023-12-31", "2023-12-31", 100, 60, 40)
+        ),
+        sector_from_sic("7372"),
+        form_type="10-K",
+    )
+    assert all(result.severity != "blocking" for result in aligned)
+    v2a = next(result for result in aligned if result.check_id == "V2a")
+    assert v2a.verdict == "pass" and v2a.severity == "info"
+
+    imbalanced = data_quality_report(
+        FactStore.from_companyfacts(
+            _bs("2023-12-31", "2023-12-31", "2023-12-31", 100, 60, 50)
+        ),
+        sector_from_sic("7372"),
+        form_type="10-K",
+    )
+    v2a = next(result for result in imbalanced if result.check_id == "V2a")
+    assert v2a.verdict == "warn" and v2a.severity == "warning"
+
+
 def test_review_v2_nci_imbalance_does_not_block_the_filing():
     # A healthy consolidated issuer with noncontrolling interest (A = L + parent-equity +
     # NCI) breaks the parent-only A=L+E identity, but must NOT withhold — data-quality warning.

@@ -418,7 +418,7 @@ def test_transient_verify_failure_retries_one_fresh_complete_attempt(monkeypatch
     assert newest_filing_to_analyze(repo).accession_number == ACCN
     # digest flags it, does not present it as clean
     md = render_digest(repo, since="2024-01-01").markdown
-    assert "withheld — could not be verified" in md
+    assert "could not be analyzed — the pipeline did not complete" in md
 
     p1_calls = len(llm.calls)
     updated_html = TENQ.replace(
@@ -478,7 +478,7 @@ def test_failed_filing_stops_after_one_full_retry_and_third_click_is_free():
     assert metrics is not None and metrics.attempts == 2
     assert repo.get_filing_stage(ACCN, "extract") is None
     assert repo.get_filing(ACCN).status == "failed"
-    assert "withheld — could not be verified" in render_digest(
+    assert "could not be analyzed — the pipeline did not complete" in render_digest(
         repo, since="2024-01-01"
     ).markdown
 

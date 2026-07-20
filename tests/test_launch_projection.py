@@ -2,12 +2,16 @@ import json
 
 import pytest
 
-from finwatch.db import Repo
+from finwatch.db import Filing, Repo
 from finwatch.db.repositories import VerificationResult
 from finwatch.demo import DEMO_SINCE, build_demo_db
 from finwatch.llm.schemas import P1Output
 from finwatch.presentation.canonical import build_filing_entry
-from finwatch.presentation.projection import load_filing_projection
+from finwatch.presentation.projection import (
+    GATE_WITHHELD_REASON,
+    PIPELINE_FAILED_REASON,
+    load_filing_projection,
+)
 from finwatch.presentation.service import PresentationService
 
 _DPLS = "0001683168-24-004848"
@@ -17,6 +21,32 @@ def _entry(repo: Repo):
     filing = repo.get_filing(_DPLS)
     assert filing is not None
     return build_filing_entry(repo, load_filing_projection(repo, filing))
+
+
+def test_pipeline_failure_is_not_reported_as_a_gate_refusal():
+    conn = build_demo_db()
+    try:
+        repo = Repo(conn)
+        accession = "0000320193-26-000099"
+        repo.upsert_filing(
+            Filing(
+                accession_number=accession,
+                cik="0000320193",
+                form_type="8-K",
+                filed_at="2026-05-01",
+                status="failed",
+            )
+        )
+        filing = repo.get_filing(accession)
+        assert filing is not None
+        entry = build_filing_entry(repo, load_filing_projection(repo, filing))
+        assert entry.withheld is True
+        assert entry.withheld_kind == "pipeline_failed"
+        assert entry.outcome == "pipeline_failed"
+        assert entry.withheld_reason == PIPELINE_FAILED_REASON
+        assert entry.withheld_reason != GATE_WITHHELD_REASON
+    finally:
+        conn.close()
 
 
 def test_launch_projection_requires_direct_evidence_for_every_finding():

@@ -17,7 +17,7 @@ export function FindingList({ findings }: { findings: Finding[] }) {
       const citationUrl = trustedSecUrl(evidence.edgar_url);
       return <div className="evidence" key={evidence.claim_id}>
         <blockquote className="quote">{evidence.quote}</blockquote>
-        <p className="citation-line"><span className="citation-meta">{evidence.section_key} · chars {evidence.char_start}–{evidence.char_end} · <span title={evidence.section_sha256}>{evidence.section_sha256.slice(0, 12)}…</span></span>{citationUrl ? <a className="citation" href={citationUrl} target="_blank" rel="noopener noreferrer">Open exact SEC source ↗</a> : <span className="citation faint">SEC citation unavailable</span>}</p>
+        <p className="citation-line"><span className="citation-meta">{evidence.section_key} · chars {evidence.char_start}–{evidence.char_end} · <span title={evidence.section_sha256}>{evidence.section_sha256.slice(0, 12)}…</span></span>{citationUrl ? <a className="citation" href={citationUrl} target="_blank" rel="noopener noreferrer">View filing on EDGAR ↗</a> : <span className="citation faint">SEC citation unavailable</span>}</p>
       </div>;
     })}</div>
   </article>)}</div>;

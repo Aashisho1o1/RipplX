@@ -19,19 +19,18 @@ export function AnalysisPanel({
     return <div className="analysis-empty">
       <div className="panel-icon" aria-hidden="true">R</div>
       <h3>Connect your analysis model</h3>
-      <p>RipplX needs a model name and provider key to read filing text. Tracking, SEC syncing, verified metrics, and the sample brief still work without one.</p>
+      <p>RipplX needs a model name and provider key to read filing text. Tracking, SEC syncing, and verified XBRL numbers work without one — and the bundled sample brief shows the full evidence path with no key at all.</p>
       <div className="actions stacked-mobile">
         <button className="button primary" onClick={onConfigure}>Configure analysis</button>
-        {onDemo && <button className="button" onClick={onDemo}>Explore the sample brief</button>}
+        {onDemo && <button className="button" onClick={onDemo}>Open the sample brief</button>}
       </div>
     </div>;
   }
 
-  const selectedLabel = formType === "latest" ? "latest filing" : `latest ${formType}`;
+  const selectedLabel = formType === "latest" ? "newest filing" : `newest ${formType}`;
   return <div className="analysis-panel">
     <div className="analysis-intro">
-      <span className="status-dot" aria-hidden="true" />
-      <div><strong>Evidence-first analysis</strong><p>One filing per run. Exact SEC quotations and deterministic checks gate every published finding.</p></div>
+      <div><strong>Evidence-first analysis</strong><p>RipplX analyzes only the newest filing in the family you choose — it never falls back to older filings. Exact SEC quotations and deterministic checks gate every published finding.</p></div>
     </div>
     <FilingTypePicker value={formType} onChange={setFormType} />
     <div className="analysis-submit">

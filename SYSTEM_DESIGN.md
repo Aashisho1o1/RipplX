@@ -277,7 +277,8 @@ bound above.
 | Run-level failure leaks no LLM bytes | persisted projection gate + withheld DTO |
 | Browser and Markdown agree | both consume the same `BriefView` |
 | Trade/price language is absent | P1 prompt/schema, V5, final DTO verifier |
-| Uncertainty is explicit | universal metric states + boring/withheld presentation states |
+| Uncertainty is explicit | universal metric states (plus a presentation-only `withheld` row state) + reviewed/withheld filing presentation states |
+| Gate outcome is visible to the user | filing-detail verification band over persisted V1/V4/V5 + V2 rows |
 
 Verification establishes these mechanical invariants. It cannot establish whether the LLM chose the
 three most economically important facts; evaluation and user feedback measure that product question.

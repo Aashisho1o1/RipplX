@@ -20,6 +20,14 @@ def verify_filing_entry(
         errors.append("withheld entry contains findings")
     if len(entry.findings) > 3:
         errors.append("more than three findings")
+    if entry.withheld != (entry.withheld_kind is not None):
+        errors.append("withheld flag disagrees with the withheld kind")
+    if entry.withheld != (entry.outcome in {"withheld_gate", "pipeline_failed"}):
+        errors.append("withheld flag disagrees with the published outcome")
+    if entry.findings and entry.outcome != "published":
+        errors.append("findings present under a non-published outcome")
+    if entry.outcome == "published" and not entry.findings:
+        errors.append("published outcome without findings")
 
     parsed_url = urlsplit(entry.edgar_url)
     if parsed_url.scheme != "https" or parsed_url.hostname not in {"sec.gov", "www.sec.gov"}:

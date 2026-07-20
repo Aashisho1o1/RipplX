@@ -8,11 +8,17 @@ from pydantic import BaseModel, Field
 
 from finwatch.core.types import DISCLAIMER
 
-Posture = Literal[
-    "critical_review", "risk_review", "monitor", "positive_support", "insufficient_data"
-]
 Severity = Literal["CRITICAL", "HIGH", "MEDIUM", "LOW"]
-MetricState = Literal["computed", "unavailable", "not_applicable"]
+MetricState = Literal["computed", "unavailable", "not_applicable", "withheld"]
+WithheldKind = Literal["gate", "pipeline_failed"]
+FilingOutcome = Literal[
+    "published",
+    "no_findings",
+    "findings_dropped",
+    "withheld_gate",
+    "pipeline_failed",
+    "not_analyzed",
+]
 
 
 class EvidenceView(BaseModel):
@@ -42,6 +48,9 @@ class FilingDigestEntry(BaseModel):
     findings: list[FindingView] = Field(default_factory=list, max_length=3)
     withheld: bool = False
     withheld_reason: str | None = None
+    withheld_kind: WithheldKind | None = None
+    outcome: FilingOutcome = "not_analyzed"
+    dropped_finding_count: int = Field(default=0, ge=0)
 
 
 class MetricRowView(BaseModel):
@@ -58,25 +67,31 @@ class IssuerMetricsView(BaseModel):
     ticker: str
     rows: list[MetricRowView] = Field(default_factory=list)
     empty: str | None = None
+    summary: str = ""
 
 
 class BriefPeriodView(BaseModel):
-    covered: str
+    covered_label: str
     filings_in_window: int
     analyzed_filings: int
+    published_filings: int = 0
+    withheld_filings: int = 0
+    filings_tracked_total: int = 0
+    outside_window: str | None = None
 
 
 class BriefView(BaseModel):
     period: BriefPeriodView
     tracked_tickers: list[str] = Field(default_factory=list)
     answer: str
-    answer_posture: Posture | None = None
     filings: list[FilingDigestEntry] = Field(default_factory=list)
+    gate_removed_filings: list[FilingDigestEntry] = Field(default_factory=list)
     verified_numbers: list[IssuerMetricsView] = Field(default_factory=list)
     open_questions: list[str] = Field(default_factory=list)
-    boring_filings: str | None = None
+    reviewed_filings: list[FilingDigestEntry] = Field(default_factory=list)
     withheld_filings: list[FilingDigestEntry] = Field(default_factory=list)
     tracked_but_unanalyzed: bool = False
+    filings_synced: int = 0
     disclaimer: str = DISCLAIMER
     sample_data: bool = False
 
@@ -147,12 +162,13 @@ class FilingDetailView(BaseModel):
     research: ResearchTraceView | None = None
     certificate_url: str | None = None
     disclaimer: str = DISCLAIMER
+    sample_data: bool = False
 
 
 class CompanyRowView(BaseModel):
     ticker: str
     cik: str
-    last_filing: str | None = None
+    newest_supported_filing: str | None = None
     compressed_verified_read: str | None = None
 
 
@@ -165,4 +181,5 @@ class MetricsView(BaseModel):
     as_of: str
     rows: list[MetricRowView] = Field(default_factory=list)
     empty: str | None = None
+    summary: str = ""
     before_first_filing: bool = False

@@ -1,0 +1,9 @@
+export function OnboardingChecklist({ trackedCount, filingsSynced, analysisConfigured, onSync, onAnalyze }: { trackedCount: number; filingsSynced: number; analysisConfigured: boolean; onSync: () => void; onAnalyze: () => void }) {
+  const steps = [
+    { key: "track", done: trackedCount > 0, label: "Track a ticker", detail: `${trackedCount} ${trackedCount === 1 ? "company" : "companies"} tracked` },
+    { key: "sync", done: filingsSynced > 0, label: "Sync filings from SEC EDGAR", detail: filingsSynced ? `${filingsSynced} supported filing${filingsSynced === 1 ? "" : "s"} downloaded` : "No filings downloaded yet, so there is nothing to analyze" },
+    { key: "model", done: analysisConfigured, label: "Connect an analysis model", detail: analysisConfigured ? "Model and provider key configured" : "Only AI-selected changes need a model; verified numbers never do" },
+  ];
+  const next = steps.find(step => !step.done);
+  return <section className="onboarding"><div className="onboarding-copy"><p className="section-kicker">Set up</p><h2>Three steps to your first verified brief.</h2></div><ol className="onboarding-steps">{steps.map((step, index) => <li className={`onboarding-step${step.done ? " done" : ""}${step.key === next?.key ? " next" : ""}`} key={step.key}><span className="onboarding-mark" aria-hidden="true">{step.done ? "✓" : String(index + 1).padStart(2, "0")}</span><div><strong>{step.label}</strong><p>{step.detail}</p></div><span className="sr-only">{step.done ? "step complete" : "step not complete"}</span></li>)}</ol><div className="onboarding-actions">{next?.key === "sync" && <button className="button primary" onClick={onSync}>Sync filings from SEC</button>}{next?.key === "model" && <a className="button primary" href="/settings">Connect an analysis model</a>}{!next && <button className="button primary" onClick={onAnalyze}>Analyze the newest filing</button>}</div></section>;
+}

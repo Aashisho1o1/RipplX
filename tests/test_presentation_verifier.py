@@ -61,6 +61,7 @@ def _fixture() -> tuple[FilingDigestEntry, dict[str, FilingSection]]:
                 evidence=[evidence],
             )
         ],
+        outcome="published",
     )
     return entry, {"mdna": section}
 
@@ -68,6 +69,34 @@ def _fixture() -> tuple[FilingDigestEntry, dict[str, FilingSection]]:
 def test_exact_quote_with_number_passes():
     entry, sections = _fixture()
     assert verify_filing_entry(entry, sections) == []
+
+
+def test_findings_under_a_non_published_outcome_fail():
+    entry, sections = _fixture()
+    assert any(
+        "non-published outcome" in error
+        for error in verify_filing_entry(
+            entry.model_copy(update={"outcome": "no_findings"}), sections
+        )
+    )
+    assert "published outcome without findings" in verify_filing_entry(
+        entry.model_copy(update={"findings": []}), sections
+    )
+
+
+def test_withheld_flag_must_agree_with_kind_and_outcome():
+    entry, sections = _fixture()
+    errors = verify_filing_entry(
+        entry.model_copy(
+            update={"withheld": True, "outcome": "withheld_gate", "findings": []}
+        ),
+        sections,
+    )
+    assert any("withheld kind" in error for error in errors)
+    errors = verify_filing_entry(
+        entry.model_copy(update={"withheld_kind": "pipeline_failed"}), sections
+    )
+    assert any("withheld kind" in error for error in errors)
 
 
 @pytest.mark.parametrize(

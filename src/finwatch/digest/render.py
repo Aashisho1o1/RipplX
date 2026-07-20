@@ -13,12 +13,13 @@ from dataclasses import dataclass, field
 from finwatch.db.repositories import Repo
 from finwatch.metrics.catalog import STARTER_METRIC_LABELS, STARTER_METRICS
 from finwatch.metrics.envelope import MetricResult, MetricsBundle
-from finwatch.presentation.formatting import format_metric_value
+from finwatch.presentation.formatting import format_metric_value, plural_count
 from finwatch.presentation.models import (
     BriefView,
     FilingDigestEntry,
     IssuerMetricsView,
 )
+from finwatch.presentation.projection import GATE_WITHHELD_REASON, PIPELINE_FAILED_REASON
 
 
 @dataclass
@@ -52,33 +53,58 @@ def _code_cell(value: str) -> str:
 
 def _header(brief: BriefView) -> list[str]:
     tracked = ", ".join(brief.tracked_tickers) or "none"
-    return [
+    lines = [
         "# finwatch digest",
         "",
         f"> {_markdown_text(brief.answer)}",
         "",
-        f"- **Period covered:** {_markdown_text(brief.period.covered)}",
+        f"- **Reading window:** {_markdown_text(brief.period.covered_label)}",
         f"- **Holdings tracked:** {_markdown_text(tracked)}",
         (
-            f"- **Filings in window:** {brief.period.filings_in_window} "
-            f"· **Analyzed:** {brief.period.analyzed_filings}"
+            f"- **Filings in window:** {brief.period.filings_in_window} of "
+            f"{brief.period.filings_tracked_total} tracked "
+            f"· **Analysis on file:** {brief.period.analyzed_filings} "
+            f"· **Published:** {brief.period.published_filings} "
+            f"· **Withheld:** {brief.period.withheld_filings}"
         ),
-        "",
     ]
+    if brief.period.outside_window:
+        lines.append(f"- **Outside the window:** {_markdown_text(brief.period.outside_window)}")
+    lines.append("")
+    return lines
 
 
 def _withheld_section(entries: list[FilingDigestEntry]) -> list[str]:
+    gate = [entry for entry in entries if entry.withheld_kind != "pipeline_failed"]
+    failed = [entry for entry in entries if entry.withheld_kind == "pipeline_failed"]
+    out: list[str] = []
+    for title, rows, fallback in (
+        ("Withheld analyses", gate, GATE_WITHHELD_REASON),
+        ("Filings that could not be analyzed", failed, PIPELINE_FAILED_REASON),
+    ):
+        if not rows:
+            continue
+        out.extend([f"## {title}", ""])
+        for entry in rows:
+            out.append(
+                f"- [{_markdown_text(entry.ticker)} — {_markdown_text(entry.form)} filed "
+                f"{_markdown_text(entry.filed)}]({entry.edgar_url}) — "
+                f"{_markdown_text(entry.withheld_reason or fallback)}"
+            )
+        out.append("")
+    return out
+
+
+def _gate_removed_section(entries: list[FilingDigestEntry]) -> list[str]:
     if not entries:
         return []
-    out = ["## Withheld analyses", ""]
+    out = ["## Proposed changes removed by the evidence gate", ""]
     for entry in entries:
-        reason = entry.withheld_reason or (
-            "LLM-derived analysis withheld because deterministic verification did not pass."
-        )
         out.append(
             f"- [{_markdown_text(entry.ticker)} — {_markdown_text(entry.form)} filed "
             f"{_markdown_text(entry.filed)}]({entry.edgar_url}) — "
-            f"{_markdown_text(reason)}"
+            f"{plural_count(entry.dropped_finding_count, 'proposed change')} failed a "
+            "deterministic evidence check; verified numbers are unaffected."
         )
     out.append("")
     return out
@@ -135,6 +161,9 @@ def _verified_numbers_section(issuers: list[IssuerMetricsView]) -> list[str]:
         out.extend(
             [
                 f"### {_markdown_text(issuer.ticker)}",
+                "",
+                f"_{_markdown_text(issuer.summary)}_",
+                "",
                 "| Metric | Value | Computed as of | Formula | ✓ |",
                 "|---|---|---|---|---|",
             ]
@@ -162,10 +191,18 @@ def _open_questions_section(questions: list[str]) -> list[str]:
     return out
 
 
-def _boring_section(summary: str | None) -> list[str]:
-    if not summary:
+def _reviewed_section(entries: list[FilingDigestEntry]) -> list[str]:
+    if not entries:
         return []
-    return ["## Boring filings", "", _markdown_text(summary), ""]
+    out = ["## Reviewed — nothing material", ""]
+    for entry in entries:
+        out.append(
+            f"- [{_markdown_text(entry.ticker)} — {_markdown_text(entry.form)} filed "
+            f"{_markdown_text(entry.filed)}]({entry.edgar_url}) — reviewed; "
+            "no finding cleared the evidence gate."
+        )
+    out.append("")
+    return out
 
 
 def render_brief_markdown(brief: BriefView) -> str:
@@ -174,13 +211,19 @@ def render_brief_markdown(brief: BriefView) -> str:
     lines.extend(_header(brief))
     lines.extend(_withheld_section(brief.withheld_filings))
     lines.extend(_findings_section(brief.filings))
+    lines.extend(_gate_removed_section(brief.gate_removed_filings))
     lines.extend(_verified_numbers_section(brief.verified_numbers))
     lines.extend(_open_questions_section(brief.open_questions))
-    lines.extend(_boring_section(brief.boring_filings))
+    lines.extend(_reviewed_section(brief.reviewed_filings))
     if brief.tracked_but_unanalyzed:
         lines.extend(
             [
-                "_Tracked companies have no analyzed filings yet. Sync and run analysis to begin._",
+                (
+                    "_Tracked companies have no synced filings yet. Sync filings first._"
+                    if brief.filings_synced == 0
+                    else "_Tracked companies have synced filings but no analyzed filing "
+                    "yet. Run analysis to begin._"
+                ),
                 "",
             ]
         )

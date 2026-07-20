@@ -51,10 +51,10 @@ def test_demo_runs_fast_and_covers_every_section():
     assert len(result.accessions) == 5
     for header in (
         "# finwatch digest",
-            "## AI-selected changes (evidence verified)",
+        "## AI-selected changes (evidence verified)",
         "## Verified numbers",
         "## Open questions",
-        "## Boring filings",
+        "## Reviewed — nothing material",
     ):
         assert header in md, header
     # verification came out clean — no filing routed to manual review
@@ -74,13 +74,16 @@ def test_demo_verified_numbers_table_is_formula_stamped_and_checked():
     assert "### MSFT" in md
     assert "Revenue growth" in md and "revenue_growth.v5" in md
     assert "| ✓ |" in md                                  # verifier check mark
-    # a holding with no XBRL facts degrades to one honest line, not six "unavailable" rows
-    assert "DPLS:** no verified financials yet" in md
+    # unavailable computations remain visible and are summarized honestly
+    assert "### DPLS" in md
+    assert "6 unavailable of 6 starter metrics" in md
+    assert "of 6 starter metrics" in md
 
 
-def test_demo_boring_and_disclaimer():
+def test_demo_reviewed_and_disclaimer():
     md = _demo_markdown().markdown
-    assert "2 routine filing(s) with no material findings" in md
+    assert "## Reviewed — nothing material" in md
+    assert "AAPL — 8-K filed 2026-04-30" in md
     assert "Not individualized investment advice." in md
 
 
@@ -110,13 +113,13 @@ def test_markdown_is_a_pure_serialization_of_the_canonical_brief():
     url = "https://www.sec.gov/Archives/example.htm"
     brief = BriefView(
         period=BriefPeriodView(
-            covered="2024-01-01 → 2024-06-30",
+            covered_label="1 Jan 2024 → 30 Jun 2024",
             filings_in_window=2,
             analyzed_filings=2,
+            filings_tracked_total=3,
         ),
         tracked_tickers=["ZZZ", "YYY"],
         answer="One evidence-backed change needs attention.",
-        answer_posture="risk_review",
         filings=[
             FilingDigestEntry(
                 accession="a-1",
@@ -124,6 +127,7 @@ def test_markdown_is_a_pure_serialization_of_the_canonical_brief():
                 form="8-K",
                 filed="2024-06-15",
                 edgar_url=url,
+                outcome="published",
                 findings=[
                     FindingView(
                         finding_id="finding-1",
@@ -162,10 +166,16 @@ def test_markdown_is_a_pure_serialization_of_the_canonical_brief():
                         effective_as_of="2024-06-15",
                     )
                 ],
+                summary="1 computed of 6 starter metrics",
             )
         ],
         open_questions=["ZZZ: confirm successor auditor"],
-        boring_filings="1 routine filing with no material findings (YYY 10-Q).",
+        reviewed_filings=[
+            FilingDigestEntry(
+                accession="a-2", ticker="YYY", form="10-Q",
+                filed="2024-05-02", edgar_url=url, outcome="no_findings"
+            )
+        ],
     )
 
     markdown = render_brief_markdown(brief)
@@ -178,7 +188,7 @@ def test_markdown_is_a_pure_serialization_of_the_canonical_brief():
         "Revenue growth",
         "2024-06-15",
         "ZZZ: confirm successor auditor",
-        brief.boring_filings,
+        "## Reviewed — nothing material",
         brief.disclaimer,
     ):
         assert expected in markdown
@@ -343,7 +353,8 @@ def test_routine_filing_lands_in_boring_not_dropped():
     repo.insert_analysis(Analysis(accession_number=accession, ticker="QQQ", stage="P2", model="m",
                                   prompt_version="v", output_json=json.dumps(p2), created_at="t"))
     md = render_digest(repo, since="2024-01-01").markdown
-    assert "1 routine filing(s) with no material findings (QQQ 8-K)" in md
+    assert "## Reviewed — nothing material" in md
+    assert "QQQ — 8-K filed 2024-06-10" in md
 
 
 def test_empty_db_renders_gracefully():

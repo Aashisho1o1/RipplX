@@ -11,5 +11,6 @@ export default defineConfig({
     environment: "jsdom",
     environmentOptions: { jsdom: { url: "https://alpha.example" } },
     setupFiles: "./src/test/setup.ts",
+    css: true,
   },
 });

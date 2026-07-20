@@ -469,6 +469,10 @@ def create_app(
     def principal_for(request: Request) -> RequestPrincipal:
         return request.state.principal
 
+    def sample_scope(principal: RequestPrincipal, demo: bool) -> str:
+        """Project the bundled public sample with its reserved local-user watchlist."""
+        return LOCAL_USER_ID if demo else principal.user_id
+
     def settings_payload(
         repo: Repo,
         principal: RequestPrincipal,
@@ -613,7 +617,6 @@ def create_app(
     @app.get("/api/brief")
     def brief(request: Request, demo: bool = False):
         principal = principal_for(request)
-        demo = demo and not remote  # demo dataset is a local-only convenience (LOW-6)
         with repo_context(demo) as repo:
             if demo:
                 since_value = DEMO_SINCE
@@ -626,7 +629,9 @@ def create_app(
                     remote=remote,
                 )
                 since_value = _since_for_period(settings.period)
-            return PresentationService(repo, user_id=principal.user_id).brief(
+            return PresentationService(
+                repo, user_id=sample_scope(principal, demo)
+            ).brief(
                 since=since_value,
                 sample_data=demo,
             )
@@ -638,9 +643,10 @@ def create_app(
         demo: bool = False,
     ):
         principal = principal_for(request)
-        demo = demo and not remote
         with repo_context(demo) as repo:
-            result = PresentationService(repo, user_id=principal.user_id).filing(accession)
+            result = PresentationService(
+                repo, user_id=sample_scope(principal, demo)
+            ).filing(accession, sample_data=demo)
             if result is None:
                 raise ApiProblem(404, "filing_not_found", "Filing not found.")
             return result
@@ -653,9 +659,10 @@ def create_app(
         demo: bool = False,
     ):
         principal = principal_for(request)
-        demo = demo and not remote
         with repo_context(demo) as repo:
-            result = PresentationService(repo, user_id=principal.user_id).certificate(accession)
+            result = PresentationService(
+                repo, user_id=sample_scope(principal, demo)
+            ).certificate(accession)
             if result is None:
                 raise ApiProblem(404, "certificate_not_found", "Certificate not found.")
             if not download:
@@ -759,10 +766,11 @@ def create_app(
         demo: bool = False,
     ):
         principal = principal_for(request)
-        demo = demo and not remote
         selected_date = as_of.isoformat() if as_of else date.today().isoformat()
         with repo_context(demo) as repo:
-            result = PresentationService(repo, user_id=principal.user_id).metrics(
+            result = PresentationService(
+                repo, user_id=sample_scope(principal, demo)
+            ).metrics(
                 ticker, as_of=selected_date
             )
             if result is None:
@@ -882,6 +890,7 @@ def create_app(
                 newest_filing_to_analyze,
                 process_filing,
             )
+            from finwatch.preprocess.forms import ANALYZABLE_FORMS, base_form
 
             connection = operational_connection()
             repo = DatabaseRepo(connection)
@@ -939,16 +948,29 @@ def create_app(
                         else None
                     )
                 if filing is None:
-                    filing_scope = form_type or "supported"
+                    scope_ciks = [cik] if cik is not None else sorted(tracked_ciks)
+                    synced = [
+                        candidate
+                        for scope_cik in scope_ciks
+                        for candidate in repo.list_filings(scope_cik)
+                        if base_form(candidate.form_type) in ANALYZABLE_FORMS
+                    ]
+                    selected_form = base_form(form_type) if form_type else None
+                    if not synced:
+                        reason = "no_filings_synced"
+                    elif selected_form is not None and not any(
+                        base_form(candidate.form_type) == selected_form
+                        for candidate in synced
+                    ):
+                        reason = "form_not_synced"
+                    else:
+                        reason = "newest_already_analyzed"
                     registry.add_item(
                         job_id,
                         JobItem(
                             key=ticker.upper() if ticker else "portfolio",
                             state="completed",
-                            message=(
-                                f"The newest {filing_scope} filing is already complete, "
-                                "or no matching filing is available."
-                            ),
+                            reason=reason,
                         ),
                     )
                 else:

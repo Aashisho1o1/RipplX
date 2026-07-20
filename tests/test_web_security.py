@@ -13,7 +13,7 @@ import pytest
 pytest.importorskip("fastapi")
 from fastapi.testclient import TestClient  # noqa: E402
 
-from finwatch.db import Repo, connect  # noqa: E402
+from finwatch.db import Company, Repo, connect  # noqa: E402
 from finwatch.demo import build_demo_db  # noqa: E402
 from finwatch.web.app import REQUEST_BODY_LIMIT_BYTES, create_app
 from finwatch.web.auth import CSRF_COOKIE_NAME, SESSION_COOKIE_NAME
@@ -200,14 +200,48 @@ def test_remote_host_allowlist_applies_before_api_use(tmp_path, monkeypatch):
     assert response.status_code == 400
 
 
-def test_demo_parameter_is_ignored_in_remote_mode(tmp_path, monkeypatch):
-    # LOW-6: the bundled demo dataset is a local-only convenience; ?demo=true must not
-    # serve sample data on a hosted deployment.
+def test_remote_demo_uses_isolated_bundled_sample_data(tmp_path, monkeypatch):
     app, sender = _remote_app(tmp_path, monkeypatch)
     client, _verified = _login(app, sender)
     response = client.get("/api/brief?demo=true")
     assert response.status_code == 200
-    assert response.json()["sample_data"] is False
+    payload = response.json()
+    assert payload["sample_data"] is True
+    assert payload["tracked_tickers"] == ["AAPL", "DPLS", "MSFT", "TWKS"]
+    assert len(payload["filings"]) == 3
+    assert sum(len(filing["findings"]) for filing in payload["filings"]) == 4
+    assert payload["filings"][0]["findings"][0]["evidence"][0][
+        "edgar_url"
+    ].startswith("https://www.sec.gov/")
+
+    connection = connect(app.state.db_path)
+    try:
+        repo = Repo(connection)
+        user = repo.get_user_by_email("person@example.com")
+        assert user is not None
+        repo.upsert_company(
+            Company(
+                cik="0000009999",
+                ticker="QQQZ",
+                name="Private watchlist fixture",
+                added_at="2026-07-20T00:00:00Z",
+            )
+        )
+        repo.track_company(
+            "0000009999", user_id=user.id, at="2026-07-20T00:00:00Z"
+        )
+    finally:
+        connection.close()
+
+    assert client.get("/api/brief?demo=true").json()["tracked_tickers"] == [
+        "AAPL",
+        "DPLS",
+        "MSFT",
+        "TWKS",
+    ]
+    real_payload = client.get("/api/brief").json()
+    assert real_payload["sample_data"] is False
+    assert real_payload["tracked_tickers"] == ["QQQZ"]
 
 
 def _csrf(client: TestClient) -> dict[str, str]:
@@ -386,6 +420,7 @@ def test_job_api_never_returns_exception_or_progress_diagnostics(tmp_path):
             "verdict": None,
             "stage": "extract",
             "diagnostics": {},
+            "reason": None,
         }
     ]
 

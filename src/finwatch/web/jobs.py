@@ -25,9 +25,22 @@ _STAGE_LABELS = {
     "metrics": "Computing verified metrics",
     "verify": "Verifying evidence",
 }
+_JOB_REASONS = {
+    "no_filings_synced": "No SEC filings have been synced yet. Sync filings, then run analysis.",
+    "form_not_synced": (
+        "No filing of the selected type has been synced. "
+        "Sync filings or choose another filing type."
+    ),
+    "newest_already_analyzed": (
+        "The newest supported filing has already been analyzed. "
+        "There is nothing new to analyze right now."
+    ),
+}
 
 
-def _safe_message(kind: JobKind, *, state: str, stage: str | None) -> str:
+def _safe_message(
+    kind: JobKind, *, state: str, stage: str | None, reason: str | None = None
+) -> str:
     """Return only fixed text; provider and exception strings are never display data."""
     if stage in _STAGE_LABELS:
         label = _STAGE_LABELS[stage]
@@ -38,6 +51,8 @@ def _safe_message(kind: JobKind, *, state: str, stage: str | None) -> str:
             "skipped": f"{label} was not needed.",
             "failed": f"{label} could not be completed.",
         }.get(state, f"{label} could not be completed.")
+    if reason in _JOB_REASONS:
+        return _JOB_REASONS[reason]
     if kind == "sync":
         return (
             "Filings and verified metrics synced."
@@ -54,9 +69,10 @@ def _safe_message(kind: JobKind, *, state: str, stage: str | None) -> str:
 class JobItem(BaseModel):
     key: str
     state: str
-    message: str
+    message: str = ""
     verdict: str | None = None
     stage: str | None = None
+    reason: str | None = None
     diagnostics: dict = Field(default_factory=dict)
 
 
@@ -133,12 +149,16 @@ class JobRegistry:
         state = item.state if item.state in _SAFE_ITEM_STATES else "failed"
         stage = item.stage if item.stage in _STAGE_LABELS else None
         verdict = item.verdict if item.verdict in _SAFE_VERDICTS else None
+        reason = item.reason if item.reason in _JOB_REASONS else None
         return item.model_copy(
             update={
                 "state": state,
                 "stage": stage,
                 "verdict": verdict,
-                "message": _safe_message(kind, state=state, stage=stage),
+                "reason": reason,
+                "message": _safe_message(
+                    kind, state=state, stage=stage, reason=reason
+                ),
                 "diagnostics": {},
             },
             deep=True,

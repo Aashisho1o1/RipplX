@@ -62,7 +62,8 @@ def data_quality_report(
             out.append(CheckResult(check_id=r.check_id, verdict="warn", severity="warning",
                                    detail=r.detail))
         else:
-            out.append(r)
+            out.append(CheckResult(check_id=r.check_id, verdict=r.verdict,
+                                   severity="info", detail=r.detail))
     return out
 
 

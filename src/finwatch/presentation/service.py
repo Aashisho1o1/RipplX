@@ -4,14 +4,21 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
+from collections import Counter
+from datetime import date
 
-from finwatch.db.repositories import LOCAL_USER_ID, Company, Computation, Repo
+from finwatch.db.repositories import LOCAL_USER_ID, Company, Computation, Filing, Repo
 from finwatch.metrics.catalog import STARTER_METRIC_LABELS, STARTER_METRICS
 from finwatch.metrics.envelope import MetricResult
 from finwatch.pipeline.progress import PIPELINE_STAGES, STAGE_LABELS
-from finwatch.preprocess.forms import base_form
+from finwatch.preprocess.forms import ANALYZABLE_FORMS, base_form
 from finwatch.presentation.canonical import build_filing_entry
-from finwatch.presentation.formatting import format_metric_value
+from finwatch.presentation.formatting import (
+    compressed_metric_parts,
+    format_metric_value,
+    plural_count,
+)
 from finwatch.presentation.models import (
     BriefPeriodView,
     BriefView,
@@ -19,6 +26,7 @@ from finwatch.presentation.models import (
     CompaniesView,
     CompanyRowView,
     FilingDetailView,
+    FilingDigestEntry,
     IssuerMetricsView,
     MetricRowView,
     MetricsView,
@@ -27,11 +35,79 @@ from finwatch.presentation.models import (
     VerificationCheckView,
     VerificationView,
 )
-from finwatch.presentation.projection import FilingProjection, in_window, load_filing_projection
+from finwatch.presentation.projection import in_window, load_filing_projection
 
 
 def _date(value: str | None) -> str:
     return (value or "")[:10]
+
+
+_MONTHS = (
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+)
+_NO_METRIC_ROWS = "No SEC XBRL metric has been computed for this issuer yet."
+_WITHHELD_METRIC_LABEL = "Withheld — the stored result failed provenance re-validation"
+_METRIC_STATE_WORDS = {
+    "computed": "computed",
+    "unavailable": "unavailable",
+    "not_applicable": "not applicable",
+    "withheld": "withheld",
+}
+_DATA_QUALITY_CHECK = re.compile(r"V2[a-z]?")
+_DETAIL_DISALLOWED = re.compile(r"[^0-9A-Za-z Δ_.,;:/()+\-=%]")
+_DETAIL_MAX_CHARS = 200
+
+
+def _human_date(value: str | None) -> str:
+    raw = _date(value)
+    try:
+        parsed = date.fromisoformat(raw)
+    except ValueError:
+        return raw or "unknown date"
+    return f"{parsed.day} {_MONTHS[parsed.month - 1]} {parsed.year}"
+
+
+def _window_label(since: str | None, until: str | None) -> str:
+    start = _human_date(since) if since else "inception"
+    end = _human_date(until) if until else "today"
+    return f"{start} → {end}"
+
+
+def _metric_summary(rows: list[MetricRowView]) -> str:
+    counts = Counter(row.state for row in rows)
+    parts = [
+        f"{counts[state]} {word}"
+        for state, word in _METRIC_STATE_WORDS.items()
+        if counts[state]
+    ]
+    return f"{' · '.join(parts)} of {len(STARTER_METRICS)} starter metrics"
+
+
+def _check_detail(check_id: str, detail: str | None) -> str | None:
+    """Project sanitized deterministic V2 detail; gated-check details stay private."""
+    if not detail or not _DATA_QUALITY_CHECK.fullmatch(check_id):
+        return None
+    cleaned = " ".join(_DETAIL_DISALLOWED.sub(" ", detail).split())
+    return cleaned[:_DETAIL_MAX_CHARS] or None
+
+
+def _coverage_sentence(
+    gate_withheld: list[FilingDigestEntry],
+    pipeline_failed: list[FilingDigestEntry],
+) -> str:
+    """State incomplete coverage without conflating gate and pipeline failures."""
+    parts = []
+    if gate_withheld:
+        parts.append(
+            f"{plural_count(len(gate_withheld), 'filing')} withheld — could not be verified"
+        )
+    if pipeline_failed:
+        parts.append(
+            f"{plural_count(len(pipeline_failed), 'filing')} could not be analyzed — "
+            "the pipeline did not complete"
+        )
+    return f"Coverage is incomplete: {'; '.join(parts)}."
 
 
 class PresentationService:
@@ -39,55 +115,82 @@ class PresentationService:
         self.repo = repo
         self.user_id = user_id
 
-    def _views(self, since: str | None = None, until: str | None = None) -> list[FilingProjection]:
+    def _scoped_filings(
+        self, since: str | None = None, until: str | None = None
+    ) -> list[Filing]:
         tracked_ciks = set(self.repo.list_tracked_ciks(self.user_id))
         filings = [
             filing
             for filing in self.repo.list_filings()
             if filing.cik in tracked_ciks
-            and base_form(filing.form_type) in {"10-K", "10-Q", "8-K"}
+            and base_form(filing.form_type) in ANALYZABLE_FORMS
             and in_window(filing, since, until)
         ]
         filings.sort(key=lambda row: (row.filed_at, row.accession_number), reverse=True)
-        return [load_filing_projection(self.repo, filing) for filing in filings]
+        return filings
 
-    def _metric_rows(self, computations: list[Computation]) -> list[MetricRowView]:
-        by_name: dict[str, tuple[Computation, MetricResult]] = {}
+    def _validated_metric(self, row: Computation) -> MetricResult | None:
+        """Return a persisted metric only while its envelope proves provenance."""
+        try:
+            metric = MetricResult.model_validate_json(row.result_json)
+        except Exception:  # noqa: BLE001 - corrupt persisted metrics are withheld
+            return None
+        if (
+            metric.metric != row.tool
+            or metric.status.value != row.status
+            or metric.formula_version != row.formula_version
+            or metric.as_of != row.as_of
+        ):
+            return None
+        if metric.status.value == "computed" and (
+            not metric.inputs_used
+            or any(
+                source.value is None
+                or not source.taxonomy
+                or not source.tag
+                or not source.unit_ref
+                or not source.accession_number
+                or not (source.instant or source.period_end)
+                for source in metric.inputs_used
+            )
+        ):
+            return None
+        return metric
+
+    def _validated_metrics(
+        self, computations: list[Computation]
+    ) -> dict[str, tuple[Computation, MetricResult | None]]:
+        by_name: dict[str, tuple[Computation, MetricResult | None]] = {}
         for row in computations:
             if row.id is None or row.tool not in STARTER_METRICS:
                 continue
-            try:
-                metric = MetricResult.model_validate_json(row.result_json)
-            except Exception:  # noqa: BLE001 - corrupt persisted metrics are withheld
-                continue
-            if (
-                metric.metric != row.tool
-                or metric.status.value != row.status
-                or metric.formula_version != row.formula_version
-                or metric.as_of != row.as_of
-            ):
-                continue
-            if metric.status.value == "computed":
-                # A computation ID is not enough provenance by itself. Every
-                # rendered computed starter metric must retain typed SEC leaves.
-                if not metric.inputs_used or any(
-                    source.value is None
-                    or not source.taxonomy
-                    or not source.tag
-                    or not source.unit_ref
-                    or not source.accession_number
-                    or not (source.instant or source.period_end)
-                    for source in metric.inputs_used
-                ):
-                    continue
-            by_name[row.tool] = (row, metric)
+            by_name[row.tool] = (row, self._validated_metric(row))
+        return by_name
 
+    def _metric_rows(
+        self, validated: dict[str, tuple[Computation, MetricResult | None]]
+    ) -> list[MetricRowView]:
         result: list[MetricRowView] = []
         for name in STARTER_METRICS:
-            pair = by_name.get(name)
+            pair = validated.get(name)
             if pair is None:
                 continue
             computation, metric = pair
+            if metric is None:
+                result.append(
+                    MetricRowView(
+                        metric=STARTER_METRIC_LABELS.get(
+                            name, name.replace("_", " ").title()
+                        ),
+                        value="— withheld",
+                        formula=computation.formula_version,
+                        state="withheld",
+                        state_label=_WITHHELD_METRIC_LABEL,
+                        source_computation_id=computation.id,
+                        effective_as_of=computation.as_of,
+                    )
+                )
+                continue
             if metric.status.value == "computed":
                 value = format_metric_value(metric)
                 state_label = "Computed from SEC XBRL facts"
@@ -118,13 +221,13 @@ class PresentationService:
             if as_of
             else self.repo.latest_computations(company.ticker)
         )
-        rows = self._metric_rows(computations)
-        empty = (
-            None
-            if any(row.state == "computed" for row in rows)
-            else "no verified financials yet (XBRL facts insufficient or not yet ingested)."
+        rows = self._metric_rows(self._validated_metrics(computations))
+        return IssuerMetricsView(
+            ticker=company.ticker,
+            rows=rows,
+            empty=None if rows else _NO_METRIC_ROWS,
+            summary=_metric_summary(rows) if rows else "",
         )
-        return IssuerMetricsView(ticker=company.ticker, rows=rows, empty=empty)
 
     def brief(
         self,
@@ -134,16 +237,29 @@ class PresentationService:
         sample_data: bool = False,
     ) -> BriefView:
         tracked = self.repo.list_tracked_companies(self.user_id)
-        views = self._views(since, until)
+        scoped = self._scoped_filings(since, until)
+        all_scoped = self._scoped_filings()
+        views = [load_filing_projection(self.repo, filing) for filing in scoped]
         analyzed = [view for view in views if view.analysis_present]
         entries = [build_filing_entry(self.repo, view) for view in views]
-        published = [entry for entry in entries if entry.findings and not entry.withheld]
-        withheld = [entry for entry in entries if entry.withheld]
-        boring = [
-            entry
-            for view, entry in zip(views, entries, strict=True)
-            if view.analysis_present and not entry.withheld and not entry.findings
-        ]
+        published = [entry for entry in entries if entry.outcome == "published"]
+        gate_withheld = [entry for entry in entries if entry.outcome == "withheld_gate"]
+        pipeline_failed = [entry for entry in entries if entry.outcome == "pipeline_failed"]
+        withheld = gate_withheld + pipeline_failed
+        gate_removed = [entry for entry in entries if entry.outcome == "findings_dropped"]
+        reviewed = [entry for entry in entries if entry.outcome == "no_findings"]
+        cleared_gate = len(published) + len(gate_removed) + len(reviewed)
+
+        outside_window = None
+        if not scoped and all_scoped:
+            newest = all_scoped[0]
+            issuer = self.repo.get_company(newest.cik)
+            outside_window = (
+                f"{issuer.ticker if issuer else newest.cik} "
+                f"{base_form(newest.form_type)} filed {_human_date(newest.filed_at)} sits "
+                "outside this reading window. Widen the reading window in Settings "
+                "to include it."
+            )
 
         tracked_tickers = sorted(company.ticker for company in tracked)
         severe = any(
@@ -151,29 +267,33 @@ class PresentationService:
             for entry in published
         )
 
-        answer_posture = None
-        if withheld:
-            count = len(withheld)
-            answer = f"{count} filing{'s' if count != 1 else ''} withheld — could not be verified."
-            answer_posture = "risk_review"
-        elif severe:
+        if severe:
             answer = "A tracked company needs a critical review."
-            answer_posture = "critical_review"
         elif published:
-            answer = f"Important changes found in {len(published)} filing(s)."
-            answer_posture = "risk_review"
-        elif analyzed:
-            answer = f"Nothing important changed. {len(boring)} routine filings reviewed."
-            answer_posture = "monitor"
+            answer = f"Important changes found in {plural_count(len(published), 'filing')}."
+        elif gate_removed:
+            answer = (
+                f"Every proposed change in {plural_count(len(gate_removed), 'filing')} "
+                "failed the evidence gate. Verified numbers still published."
+            )
+        elif reviewed:
+            answer = (
+                "Nothing important changed. "
+                f"{plural_count(len(reviewed), 'routine filing')} reviewed."
+            )
+        elif gate_withheld or pipeline_failed:
+            answer = _coverage_sentence(gate_withheld, pipeline_failed)
+        elif outside_window:
+            answer = "No tracked filing falls inside your reading window."
         elif tracked:
             answer = "No material findings yet — sync filings or run analysis."
         else:
             answer = "Add a ticker to start your brief."
 
-        boring_line = None
-        if boring:
-            listing = ", ".join(f"{entry.ticker} {entry.form}" for entry in boring)
-            boring_line = f"{len(boring)} routine filing(s) with no material findings ({listing})."
+        if (gate_withheld or pipeline_failed) and (
+            severe or published or gate_removed or reviewed
+        ):
+            answer = f"{answer} {_coverage_sentence(gate_withheld, pipeline_failed)}"
 
         questions = [
             f"{view.ticker}: a deterministic data-quality check needs review."
@@ -182,27 +302,42 @@ class PresentationService:
         ]
         questions.extend(
             f"{entry.ticker}: automated verification withheld this filing."
-            for entry in withheld
+            for entry in gate_withheld
+        )
+        questions.extend(
+            f"{entry.ticker}: analysis did not complete, so this filing was never published."
+            for entry in pipeline_failed
+        )
+        questions.extend(
+            f"{entry.ticker}: every proposed change failed the evidence gate."
+            for entry in gate_removed
         )
         return BriefView(
             period=BriefPeriodView(
-                covered=f"{since or 'inception'} → {until or 'now'}",
+                covered_label=_window_label(since, until),
                 filings_in_window=len(views),
                 analyzed_filings=len(analyzed),
+                published_filings=cleared_gate,
+                withheld_filings=len(withheld),
+                filings_tracked_total=len(all_scoped),
+                outside_window=outside_window,
             ),
             tracked_tickers=tracked_tickers,
             answer=answer,
-            answer_posture=answer_posture,
             filings=published,
+            gate_removed_filings=gate_removed,
             verified_numbers=[self._issuer_metrics(c) for c in tracked],
             open_questions=questions,
-            boring_filings=boring_line,
+            reviewed_filings=reviewed,
             withheld_filings=withheld,
-            tracked_but_unanalyzed=bool(tracked and not analyzed),
+            tracked_but_unanalyzed=bool(tracked and not analyzed and not outside_window),
+            filings_synced=len(all_scoped),
             sample_data=sample_data,
         )
 
-    def filing(self, accession: str) -> FilingDetailView | None:
+    def filing(
+        self, accession: str, *, sample_data: bool = False
+    ) -> FilingDetailView | None:
         filing = self.repo.get_filing(accession)
         if not filing or self.repo.get_user_company(self.user_id, filing.cik) is None:
             return None
@@ -228,6 +363,7 @@ class PresentationService:
                             check_id=c.check_id,
                             verdict=c.verdict.upper(),
                             severity=c.severity,
+                            detail=_check_detail(c.check_id, c.detail),
                         )
                         for c in checks
                     ],
@@ -294,6 +430,7 @@ class PresentationService:
                 if research and filing.status in {"verified", "analyzed"}
                 else None
             ),
+            sample_data=sample_data,
         )
 
     def certificate(self, accession: str) -> CertificateView | None:
@@ -417,42 +554,33 @@ class PresentationService:
     def companies(self) -> CompaniesView:
         result = []
         for company in self.repo.list_tracked_companies(self.user_id):
-            filings = self.repo.list_filings(company.cik)
-            latest = filings[0] if filings else None
-            metrics = self._issuer_metrics(company)
-            computed = [row for row in metrics.rows if row.state == "computed"]
+            supported = [
+                filing
+                for filing in self.repo.list_filings(company.cik)
+                if base_form(filing.form_type) in ANALYZABLE_FORMS
+            ]
+            latest = supported[0] if supported else None
+            validated = self._validated_metrics(
+                self.repo.latest_computations(company.ticker)
+            )
+            rows = self._metric_rows(validated)
+            computed = [row for row in rows if row.state == "computed"]
             compressed = None
-            if computed:
-                revenue = next(
-                    (
-                        row.value.split(" YoY")[0]
-                        for row in computed
-                        if row.metric == "Revenue growth"
-                    ),
-                    None,
+            if rows:
+                parts = compressed_metric_parts(
+                    {
+                        name: metric
+                        for name, (_row, metric) in validated.items()
+                        if metric is not None
+                    }
                 )
-                leverage = next(
-                    (
-                        row.value.split(" ·")[0].removeprefix(
-                            "net debt / (operating income + D&A) proxy "
-                        )
-                        for row in computed
-                        if row.metric == STARTER_METRIC_LABELS["simple_leverage"]
-                    ),
-                    None,
-                )
-                parts = []
-                if revenue:
-                    parts.append(f"Rev {revenue}")
-                if leverage:
-                    parts.append(f"Leverage proxy {leverage}")
-                parts.append(f"✓{len(computed)}/{len(metrics.rows)}")
+                parts.append(f"✓{len(computed)}/{len(STARTER_METRICS)}")
                 compressed = " · ".join(parts)
             result.append(
                 CompanyRowView(
                     ticker=company.ticker,
                     cik=company.cik,
-                    last_filing=_date(latest.filed_at) if latest else None,
+                    newest_supported_filing=_date(latest.filed_at) if latest else None,
                     compressed_verified_read=compressed,
                 )
             )
@@ -462,16 +590,18 @@ class PresentationService:
         company = self.repo.get_company_by_ticker(ticker)
         if not company or self.repo.get_user_company(self.user_id, company.cik) is None:
             return None
-        rows = self._metric_rows(self.repo.computations_as_of(ticker.upper(), as_of))
+        rows = self._metric_rows(
+            self._validated_metrics(self.repo.computations_as_of(ticker.upper(), as_of))
+        )
         filings = self.repo.list_filings(company.cik)
         before_first = bool(filings and as_of < min(_date(f.filed_at) for f in filings))
         empty = (
             None
-            if any(row.state == "computed" for row in rows)
+            if rows
             else (
-                "No verified financials exist at this as-of date."
+                "No SEC XBRL metric existed at this as-of date."
                 if before_first
-                else "no verified financials yet (XBRL facts insufficient or not yet ingested)."
+                else _NO_METRIC_ROWS
             )
         )
         return MetricsView(
@@ -479,5 +609,6 @@ class PresentationService:
             as_of=as_of,
             rows=rows,
             empty=empty,
+            summary=_metric_summary(rows) if rows else "",
             before_first_filing=before_first,
         )

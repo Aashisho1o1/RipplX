@@ -2,7 +2,7 @@ import { cleanup, render, screen } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { FilingDetail, ResearchTrace } from "../types";
-import { FilingPage, researchOutcomeLabel, terminalReasonLabel } from "./FilingPage";
+import { FilingPage, outcomeHeadline, researchOutcomeLabel, terminalReasonLabel } from "./FilingPage";
 
 const finding = {
   finding_id: "f1",
@@ -34,6 +34,9 @@ function detail(
       findings: [finding],
       withheld: false,
       withheld_reason: null,
+      withheld_kind: null,
+      outcome: "published",
+      dropped_finding_count: 0,
     },
     verified_numbers: null,
     verification: { verdict: "PASS", checks: [] },
@@ -49,6 +52,7 @@ function detail(
     },
     certificate_url: "/api/filings/a-1/certificate",
     disclaimer: "Educational use only.",
+    sample_data: false,
     ...overrides,
   };
 }
@@ -103,11 +107,22 @@ describe("filing trust surface", () => {
     expect(screen.getByText(finding.headline)).toBeInTheDocument();
   });
 
+  it("renders partial publication as a verified per-finding outcome", async () => {
+    const value = detail("partial");
+    value.research!.dropped_findings = [{ finding_id: "f2", error_codes: ["DUPLICATE_EVIDENCE"] }];
+    renderDetail(value);
+    expect(await screen.findByText("1 finding published, 1 finding removed by the evidence gate")).toBeInTheDocument();
+    expect(screen.getByLabelText("Publication outcome").querySelector(".outcome-glyph")).toHaveTextContent("✓");
+    expect(outcomeHeadline("partial", 2, 1)).toBe("2 findings published, 1 finding removed by the evidence gate");
+  });
+
   it("never renders withheld findings or an affirmative evidence badge", async () => {
     renderDetail(detail("withheld", {
       filing: {
         ...detail("withheld").filing,
         withheld: true,
+        withheld_kind: "gate",
+        outcome: "withheld_gate",
         findings: [{ ...finding, headline: "Unverified finding must stay hidden" }],
       },
       withheld_reason: "LLM-derived analysis withheld.",

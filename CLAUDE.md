@@ -139,7 +139,10 @@ tools, a finance Skeptic may add only finding-local objections, and the compiler
 - Automatic analysis considers the newest supported 10-K/10-Q/8-K in scope. A user may narrow a
   run to one of those three form families; amendments remain in their base-form family.
 - If that newest filing is already `verified` or terminally `analyzed`/withheld, the run is a no-op.
-  It never falls through to an older filing.
+  It never falls through to an older filing. When a requested run has nothing to do, it reports
+  exactly one of three fixed reasons: no supported filing has been synced, no filing of the selected
+  form family has been synced, or the newest supported filing has already been analyzed. Job items
+  never carry caller-supplied display text.
 - Every production retry is a fresh full attempt: download, parse, metrics, extract, verify. No
   parse-only/extract-only user control and no mixing of artifacts from different attempts.
 - A failed newest filing gets at most two persisted full-pipeline attempts, counted from
@@ -169,6 +172,9 @@ back off on 429/403; cache immutable filings. Filing text and EDGAR metadata are
 - No live network or LLM calls in ordinary tests. Use recorded fixtures; mark optional smoke tests
   `@pytest.mark.live`.
 - Prompts are versioned data under `src/finwatch/prompts/*.md`; never inline them in Python.
+- Every `className` literal under `web/src` must resolve to a selector defined in
+  `web/src/styles/*.css`; `npm run check:classnames` enforces this in CI. Delete the class name or
+  define the rule — never leave an orphan.
 - Never weaken `prompts/foundation.md`: filing content is data, not instructions.
 - Preserve unrelated user changes in a dirty worktree. Bump the one fresh schema version and require
   backup/reset rather than building compatibility migrations.
@@ -182,6 +188,13 @@ back off on 429/403; cache immutable filings. Filing text and EDGAR metadata are
 The browser app is the launch surface. Hosted onboarding is public email-code login followed by a
 ticker; local mode remains auth-free. It does not ask for or return shares, cost basis, target
 weights, horizon, or thesis.
+The watchlist reports the newest supported 10-K/10-Q/8-K indexed for an issuer; it never reports an
+unsupported form and never claims a filing was read.
+
+The browser also serves a read-only sample brief at `?demo=1` in both local and hosted mode. It is
+built from bundled public SEC fixtures by the real pipeline with recorded model output, lives in a
+throwaway in-memory database created per request, and is always projected as the reserved local user
+so it can never read or mix with a participant's own data.
 
 Current CLI commands are `init`, `serve`, `add`, `analyze`, `ingest`, `process`, `metrics`,
 `digest`, `eval`, and `demo`. Treat the CLI as operator/developer tooling, not a second product.
@@ -262,9 +275,18 @@ full formula catalog remains tested research code but is not called, persisted, 
 launch metrics service. Price, valuation, and holding/portfolio inputs are absent.
 
 Presentation language stays narrower than the accounting facts: share-count changes are described
-only as increased, decreased, or flat—not inferred to be dilution or a buyback. `simple_leverage` is
-explicitly labeled as a net-debt / (operating income + D&A) proxy, never reported EBITDA. User-facing
-dates say “computed as of”; `effective_as_of` remains only an internal DTO field name.
+only as increased, decreased, or flat—not inferred to be dilution or a buyback—and only when the
+rounding-aware direction is proved. When `deterministic_direction` is unavailable the row states the
+signed change and says the direction is not certified within SEC rounding slack, so the table never
+asserts in certified wording what the compiler would drop as `METRIC_DIRECTION_UNAVAILABLE`.
+`simple_leverage` is explicitly labeled as a net-debt / (operating income + D&A) proxy, never
+reported EBITDA. User-facing dates say “computed as of”; `effective_as_of` remains only an internal
+DTO field name. The metric envelope itself remains three-valued. Presentation adds one further row
+state, `withheld`, for a persisted starter computation that fails presentation-time provenance
+re-validation; such a row is rendered from trusted database columns only, never from the payload
+that failed, and it still counts against the fixed six-metric denominator. Metric rows are never
+silently dropped, and a metric table is rendered whenever any starter row exists — an all-unavailable
+issuer must be distinguishable from an issuer that was never synced.
 
 ---
 
@@ -323,7 +345,9 @@ The verifier is deterministic and never edits content to make a check pass.
 - **V5 schema and hygiene:** strict P1 schema, disclaimer, no trade instructions/price targets, and
   forbidden vocabulary.
 - **V2 accounting identities:** non-blocking XBRL data-quality warnings only. They may populate open
-  questions; regenerating P1 cannot repair source accounting data.
+  questions and are labelled non-blocking wherever they are displayed; every non-failing V2 result
+  carries informational severity so no surface can present an accounting identity as a gate.
+  Regenerating P1 cannot repair source accounting data.
 - **V3:** not applicable because no P3 decision exists in launch.
 
 Before the legacy publication checks, `verify/compiler.py` deterministically anchors evidence,
@@ -349,8 +373,12 @@ in one transaction. Presentation resolves P1 only through the latest valid final
 from that immutable attempt snapshot. Verified and completed-withheld (`analyzed`) attempts receive
 certificates; withheld certificates remove classification, evidence, published IDs, prose, tool
 arguments, and verification details before hashing. Pending, failed, malformed, mismatched, or v1
-attempts have no certificate. The filing UI shows only the tool count, compact trace, dropped codes,
-and conditional download; raw model output and provider exceptions never cross the API boundary.
+attempts have no certificate. The filing UI shows the persisted verification roll-up — one row per
+persisted check with its check id, a fixed human label, and its verdict — alongside the tool count,
+compact trace, dropped codes, and conditional download. V1/V4/V5 are shown as the blocking
+publication gate; V2 is shown as explicitly non-blocking data quality and is the only check family
+whose persisted detail string is projected, because V1/V4/V5 details quote model-authored text. Raw
+model output, gated-check details, and provider exceptions never cross the API boundary.
 
 ---
 
@@ -359,16 +387,39 @@ and conditional download; raw model output and provider exceptions never cross t
 `PresentationService` is the sole database-to-user-content projection. React consumes its pydantic
 DTO through FastAPI. `digest/render.py` serializes that same `BriefView`; it does not independently
 reload analyses, claims, or computations. Filing/LLM text is rendered as escaped text, not raw HTML
-or caller-supplied Markdown.
+or caller-supplied Markdown. The brief carries no posture, tone, or sentiment field: `answer` is a
+plain sentence and the UI applies no severity-derived colour to it.
 
 The launch output is deliberately explicit:
 
 - “AI-selected changes (evidence verified)” separates model judgment from deterministic evidence
   validation;
-- exact quotations link to HTTPS SEC pages;
+- exact quotations are proved by the section key, offsets, and section hash shown beside them, and
+  link to the HTTPS SEC filing index page for that accession;
+- the brief states the reading window it applied in human dates, reports in-window filings against
+  the unfiltered tracked total, and names any tracked filing that passed the gate but falls outside
+  the window;
+- the filing page names each deterministic check that ran, its verdict, and whether it was blocking;
 - verified numbers show state, formula version, effective date, and computation provenance;
-- boring filings are a valid compact result;
+- the at-most-three finding cap and the fixed six-metric catalog are stated on the surfaces that
+  show them, and a `partial` publication is presented as the per-finding gate succeeding, never as a
+  failure;
+- routine filings are a valid result and publish as identified, linkable “Reviewed — nothing
+  material” entries, not as an unlinked summary sentence;
+- each `FilingDigestEntry` carries an explicit `outcome` (`published`, `no_findings`,
+  `findings_dropped`, `withheld_gate`, `pipeline_failed`, `not_analyzed`) and a
+  `dropped_finding_count`, so a run whose candidate findings were all pruned is never announced as
+  “nothing important changed”;
+- a pipeline failure (`withheld_kind = pipeline_failed`) is presented in its own bucket with fixed
+  copy and is never described as a gate refusal or a verification outcome;
+- brief period counts separate attempts with an analysis on file (`analyzed_filings`) from attempts
+  that cleared the gate (`published_filings`) and attempts held back (`withheld_filings`);
+- the brief reports how many supported filings have actually been synced, so an unsynced watchlist
+  and a synced-but-unanalyzed watchlist get different next steps in both the browser and
+  `digest/render.py`;
 - withheld filings never expose the failed LLM output.
+- interactive control boundaries and focus indicators are held to WCAG 1.4.11 / 2.4.11 (3:1) by
+  `web/src/styles/styles.test.ts`, while decorative hairlines stay deliberately faint.
 
 ---
 
@@ -388,8 +439,9 @@ Responses set CSP, frame denial, nosniff, no-referrer, API `no-store`, and HSTS 
 Request bodies are capped at 1 MiB for both declared-length and chunked streams. Server-side checks
 scope watchlists, briefs, filing/metric reads, preferences, mutations, and job polling to the current
 user; cross-user private resources return 404. Public SEC-derived artifacts remain shared. The single
-owner-tagged job registry strips diagnostics, allowlists verdicts/stages, and returns only fixed
-user-safe failure messages; unhandled API errors use a generic JSON contract. Decoded EDGAR responses
+owner-tagged job registry strips diagnostics, allowlists verdicts, stages, and a closed set of typed
+no-op reason codes, and returns only fixed user-safe failure messages; caller-supplied item text is
+always discarded; unhandled API errors use a generic JSON contract. Decoded EDGAR responses
 are capped at 64 MiB before cache writes. There is no durable queue, multi-instance coordination,
 team/role model, or persistent session registry.
 

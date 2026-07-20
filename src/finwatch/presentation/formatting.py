@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 from finwatch.metrics.envelope import MetricResult
 
 
@@ -47,33 +49,10 @@ def format_metric_value(result: MetricResult) -> str:
             parts.append(f"current ratio {_num(components['current_ratio'])}")
         return " · ".join(parts)
     if metric == "share_count_change":
-        # Prefer the deterministic, rounding-aware verdict: the publication gate
-        # (verify/compiler.py) judges direction against the SEC `decimals` rounding
-        # slack, and a second heuristic here could print "flat" for a move the gate
-        # proved was a decrease — then drop a model finding for asserting exactly what
-        # this line displays.
-        #
-        # It is only a preference, not a replacement. The SEC companyfacts API does not
-        # emit `decimals` at all (verified: zero occurrences across every cached issuer
-        # payload and every recorded fixture), so deterministic_direction is None for
-        # real filings today. Deferring to it exclusively deleted the direction clause
-        # for every issuer. Fall back to the displayed value so nothing is lost while
-        # the gate has no opinion.
-        proven = {
-            "up": "share count increased",
-            "down": "share count decreased",
-            "flat": "share count flat",
-        }.get(result.deterministic_direction or "")
-        if proven is None:
-            material_change = result.value if result.value is not None else 0.0
-            proven = (
-                "share count decreased"
-                if material_change <= -0.0005
-                else "share count increased"
-                if material_change >= 0.0005
-                else "share count flat"
-            )
-        return f"{_pct(result.value)} YoY ({proven})"
+        return (
+            f"{_pct(result.value)} YoY "
+            "(direction not certified within SEC rounding slack)"
+        )
     if metric == "simple_leverage":
         parts: list[str] = []
         if components.get("net_debt_to_ebitda") is not None:
@@ -85,3 +64,30 @@ def format_metric_value(result: MetricResult) -> str:
             parts.append(f"interest coverage {_num(components['interest_coverage'])}×")
         return " · ".join(parts) or "computed"
     return _num(result.value) if result.value is not None else "computed"
+
+
+def plural_count(value: int, noun: str) -> str:
+    """Render a count with an English plural."""
+    return f"{value} {noun}" if value == 1 else f"{value} {noun}s"
+
+
+def compressed_metric_parts(results: Mapping[str, MetricResult]) -> list[str]:
+    """Build company-row fragments from validated metric components."""
+
+    def _number(value: object) -> float | None:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return None
+        return float(value)
+
+    parts: list[str] = []
+    revenue = results.get("revenue_growth")
+    if revenue is not None and revenue.computed:
+        yoy = _number(revenue.components.get("yoy"))
+        if yoy is not None:
+            parts.append(f"Rev {_pct(yoy)}")
+    leverage = results.get("simple_leverage")
+    if leverage is not None and leverage.computed:
+        ratio = _number(leverage.components.get("net_debt_to_ebitda"))
+        if ratio is not None:
+            parts.append(f"Leverage proxy {_num(ratio)}×")
+    return parts

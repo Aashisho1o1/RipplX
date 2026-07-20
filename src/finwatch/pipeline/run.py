@@ -22,7 +22,7 @@ from finwatch.pipeline.orchestrator import (
     Orchestrator,
 )
 from finwatch.pipeline.progress import ProgressCallback, StageReporter
-from finwatch.preprocess.forms import base_form
+from finwatch.preprocess.forms import ANALYZABLE_FORMS, base_form
 from finwatch.preprocess.preprocessor import Preprocessor
 
 CompanyFactsProvider = Callable[[str], dict]
@@ -65,7 +65,6 @@ def build_orchestrator(
 # or retry-exhausted, then choose the newest remaining issuer candidate. ``analyzed`` means
 # verification completed but withheld output for manual review, so it is terminal too.
 _TERMINAL_STATUS = frozenset({"verified", "analyzed"})
-_ANALYZABLE_FORMS = frozenset({"10-K", "10-Q", "8-K"})
 _MAX_PIPELINE_ATTEMPTS = 2
 
 
@@ -84,14 +83,14 @@ def newest_filing_to_analyze(
     counted from download).
     """
     selected_form = base_form(form_type) if form_type else None
-    if selected_form is not None and selected_form not in _ANALYZABLE_FORMS:
+    if selected_form is not None and selected_form not in ANALYZABLE_FORMS:
         raise ValueError(f"unsupported filing form: {form_type}")
 
     def newest_for(issuer_cik: str) -> Filing | None:
         supported = [
             filing
             for filing in repo.list_filings(issuer_cik)
-            if base_form(filing.form_type) in _ANALYZABLE_FORMS
+            if base_form(filing.form_type) in ANALYZABLE_FORMS
             and (selected_form is None or base_form(filing.form_type) == selected_form)
         ]
         return (

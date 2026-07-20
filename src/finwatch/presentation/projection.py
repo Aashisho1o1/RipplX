@@ -9,6 +9,13 @@ from finwatch.llm.harness import HarnessTrace
 from finwatch.llm.schemas import P1Output
 
 _REQUIRED_PUBLICATION_CHECKS = frozenset({"V1", "V4", "V5"})
+GATE_WITHHELD_REASON = (
+    "LLM-derived analysis withheld because deterministic verification did not pass."
+)
+PIPELINE_FAILED_REASON = (
+    "Analysis did not complete for this filing, so nothing was published. "
+    "No deterministic verification result was recorded for this attempt."
+)
 
 
 @dataclass
@@ -19,6 +26,7 @@ class FilingProjection:
     analysis_present: bool
     llm_output_allowed: bool
     withheld: bool
+    withheld_kind: str | None = None
     withheld_reason: str | None = None
     data_quality: list[tuple[str, str]] = field(default_factory=list)
     p1_analysis: Analysis | None = None
@@ -95,12 +103,20 @@ def load_filing_projection(repo: Repo, filing: Filing) -> FilingProjection:
         except Exception:  # noqa: BLE001 - corrupt persisted output must fail closed
             llm_output_allowed = False
             p1 = None
-    withheld = filing.status in {"failed", "analyzed"} or bool(
-        analysis_present and not llm_output_allowed
+    pipeline_failed = filing.status == "failed"
+    withheld = (
+        pipeline_failed
+        or filing.status == "analyzed"
+        or bool(analysis_present and not llm_output_allowed)
+    )
+    withheld_kind = (
+        "pipeline_failed" if pipeline_failed else "gate" if withheld else None
     )
     withheld_reason = (
-        "LLM-derived analysis withheld because deterministic verification did not pass."
-        if withheld and analysis_present
+        PIPELINE_FAILED_REASON
+        if withheld_kind == "pipeline_failed"
+        else GATE_WITHHELD_REASON
+        if withheld_kind == "gate"
         else None
     )
     data_quality: list[tuple[str, str]] = []
@@ -115,6 +131,7 @@ def load_filing_projection(repo: Repo, filing: Filing) -> FilingProjection:
         analysis_present=analysis_present,
         llm_output_allowed=llm_output_allowed,
         withheld=withheld,
+        withheld_kind=withheld_kind,
         withheld_reason=withheld_reason,
         data_quality=data_quality,
         p1_analysis=p1a,

@@ -1,6 +1,8 @@
 """Form-type classification for the preprocessor."""
 from __future__ import annotations
 
+ANALYZABLE_FORMS = frozenset({"10-K", "10-Q", "8-K"})
+
 
 def is_amendment(form_type: str) -> bool:
     return form_type.strip().upper().endswith("/A")

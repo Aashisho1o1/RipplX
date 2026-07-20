@@ -8,7 +8,7 @@ import re
 from finwatch.db.repositories import Filing, FilingSection, Repo
 from finwatch.llm.schemas import FindingEvidence
 from finwatch.presentation.models import EvidenceView, FilingDigestEntry, FindingView
-from finwatch.presentation.projection import FilingProjection
+from finwatch.presentation.projection import PIPELINE_FAILED_REASON, FilingProjection
 from finwatch.verify.presentation import verify_filing_entry
 
 _ACCESSION = re.compile(r"^\d{10}-\d{2}-\d{6}$")
@@ -16,6 +16,11 @@ _SEVERITY_RANK = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3}
 _WITHHELD = (
     "LLM-derived analysis withheld because its displayed findings could not be verified exactly."
 )
+
+
+def _dropped_count(view: FilingProjection) -> int:
+    """Findings the harness/compiler already pruned for this exact attempt."""
+    return len(view.trace.dropped_findings) if view.trace is not None else 0
 
 def _date(value: str | None) -> str:
     return (value or "")[:10]
@@ -37,20 +42,32 @@ def _edgar_url(filing: Filing) -> tuple[str, bool]:
 
 def _base_entry(view: FilingProjection, *, withheld: bool | None = None) -> FilingDigestEntry:
     url, _ = _edgar_url(view.filing)
+    held = view.withheld if withheld is None else withheld
+    kind = (view.withheld_kind or "gate") if held else None
     return FilingDigestEntry(
         accession=view.filing.accession_number,
         ticker=view.ticker,
         form=view.filing.form_type,
         filed=_date(view.filing.filed_at),
         edgar_url=url,
-        withheld=view.withheld if withheld is None else withheld,
-        withheld_reason=view.withheld_reason,
+        withheld=held,
+        withheld_reason=view.withheld_reason if held else None,
+        withheld_kind=kind,
+        outcome=(
+            "not_analyzed"
+            if kind is None
+            else "pipeline_failed"
+            if kind == "pipeline_failed"
+            else "withheld_gate"
+        ),
+        dropped_finding_count=_dropped_count(view),
     )
 
 
 def _withhold(view: FilingProjection) -> FilingDigestEntry:
     entry = _base_entry(view, withheld=True)
-    return entry.model_copy(update={"findings": [], "withheld_reason": _WITHHELD})
+    reason = PIPELINE_FAILED_REASON if entry.withheld_kind == "pipeline_failed" else _WITHHELD
+    return entry.model_copy(update={"findings": [], "withheld_reason": reason})
 
 
 def _section_map(sections: list[FilingSection]) -> tuple[dict[str, FilingSection], set[str]]:
@@ -168,7 +185,16 @@ def build_filing_entry(repo: Repo, view: FilingProjection) -> FilingDigestEntry:
             continue
 
     findings.sort(key=lambda row: (_SEVERITY_RANK[row.severity], row.finding_id))
-    entry = entry.model_copy(update={"findings": findings[:3]})
+    dropped = entry.dropped_finding_count + (len(view.p1.findings) - len(findings))
+    entry = entry.model_copy(
+        update={
+            "findings": findings[:3],
+            "dropped_finding_count": dropped,
+            "outcome": (
+                "published" if findings else "findings_dropped" if dropped else "no_findings"
+            ),
+        }
+    )
     if verify_filing_entry(entry, sections):
         return _withhold(view)
     return entry

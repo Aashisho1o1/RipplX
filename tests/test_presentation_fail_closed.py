@@ -10,6 +10,7 @@ pytest.importorskip("fastapi")
 from fastapi.testclient import TestClient  # noqa: E402
 
 from finwatch.db import Analysis, Company, Filing, Repo, VerificationResult, init_db
+from finwatch.demo import build_demo_db
 from finwatch.digest import render_digest
 from finwatch.presentation import PresentationService
 from finwatch.web.app import create_app
@@ -107,3 +108,43 @@ def test_all_presenters_withhold_blocking_or_incompletely_verified_llm_output(
     assert "LLM-derived analysis withheld" in rendered
     for secret in SECRETS:
         assert secret not in rendered
+
+
+def test_only_deterministic_v2_details_cross_the_presentation_boundary(tmp_path):
+    db_path = tmp_path / "finwatch.db"
+    conn = build_demo_db(str(db_path))
+    try:
+        repo = Repo(conn)
+        analysis = repo.latest_analysis("0000950170-24-048288", "P1")
+        assert analysis is not None and analysis.id is not None
+        secret = "UNVERIFIED_AUTHORED_4471"
+        long_v2 = "A=100.0 L+E=<script>110.0\x00" + ("x" * 300)
+        conn.execute(
+            "UPDATE verification_results SET detail = ? "
+            "WHERE analysis_id = ? AND check_id = 'V1'",
+            (f"orphan number '{secret}' at pos 12", analysis.id),
+        )
+        conn.execute(
+            "UPDATE verification_results SET detail = ? "
+            "WHERE analysis_id = ? AND check_id = 'V2a'",
+            (long_v2, analysis.id),
+        )
+        conn.commit()
+        detail = PresentationService(repo).filing("0000950170-24-048288")
+        assert detail is not None and detail.verification is not None
+        by_id = {row.check_id: row for row in detail.verification.checks}
+        assert by_id["V1"].detail is None
+        assert secret not in detail.model_dump_json()
+        sanitized = by_id["V2a"].detail
+        assert sanitized is not None
+        assert "A=100.0" in sanitized and "L+E=" in sanitized
+        assert not any(char in sanitized for char in "<>\x00")
+        assert len(sanitized) <= 200
+    finally:
+        conn.close()
+
+    response = TestClient(
+        create_app(db_path=str(db_path), web_dist=tmp_path / "missing")
+    ).get("/api/filings/0000950170-24-048288")
+    assert response.status_code == 200
+    assert secret not in response.text

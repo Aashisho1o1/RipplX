@@ -5,6 +5,8 @@ import type { Certificate, PipelineStage, ResearchTrace } from "../types";
 export const DROP_CODE_LABEL: Record<string, string> = {
   QUOTE_NOT_EXACT: "The quotation did not match the filing exactly.",
   AMBIGUOUS_QUOTE: "The quotation appeared more than once in the section.",
+  DUPLICATE_EVIDENCE: "Another finding already cited exactly this evidence.",
+  EMPTY_HEADLINE: "The finding had no headline text.",
   NOT_A_CHANGED_SPAN: "The evidence was not in a changed passage.",
   AUTHORED_NUMBER: "The model-authored headline contained a number.",
   UNSAFE_LANGUAGE: "The headline contained advice or forbidden wording.",
@@ -81,7 +83,7 @@ export function ProvenancePanel({
     </header>
 
     {research && <div className="proof-summary">
-      <dl className="proof-facts primary-proof-facts">
+      <dl className="proof-facts">
         <div><dt>Outcome</dt><dd>{research.outcome.replaceAll("_", " ")}</dd></div>
         <div><dt>Terminal reason</dt><dd>{terminalReasonLabel}</dd></div>
         <div><dt>Research effort</dt><dd>{research.tool_call_count} tool {research.tool_call_count === 1 ? "call" : "calls"}</dd></div>
@@ -110,7 +112,7 @@ export function ProvenancePanel({
           <div><dt>Schema</dt><dd className="mono">{certificate.schema_version}</dd></div>
           <div><dt>Certificate SHA-256</dt><dd className="mono" title={certificate.certificate_sha256}>{shortHash(certificate.certificate_sha256)}</dd></div>
         </dl></section>
-        {certificate.verification.length > 0 && <section className="proof-block"><h3>Verification checks</h3><div className="check-list">{certificate.verification.map(check => <div className={`check-row ${check.verdict.toLowerCase()}`} key={check.check_id}><code>{check.check_id}</code><span>{check.verdict}</span><small>{check.severity}</small></div>)}</div></section>}
+        {certificate.verification.length > 0 && <section className="proof-block"><h3>Verification checks</h3><div className="check-list">{certificate.verification.map((check, index) => <div className={`check-row ${check.verdict.toLowerCase()}`} key={`${check.check_id}-${index}`}><code>{check.check_id}</code><span>{check.verdict}</span><small>{check.severity}</small></div>)}</div></section>}
         {certificate.evidence.length > 0 && <section className="proof-block"><h3>Evidence provenance</h3><div className="proof-table">{certificate.evidence.map((row, index) => {
           const section = recordValue(row, "section_key") ?? `Evidence ${index + 1}`;
           const start = recordValue(row, "char_start"); const end = recordValue(row, "char_end"); const hash = recordValue(row, "section_sha256");
