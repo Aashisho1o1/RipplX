@@ -812,3 +812,100 @@ def test_unchanged_resubmission_still_carries_its_objection():
     assert {"finding_id": "f2", "error_codes": ["MATERIALITY_OVERREACH"]} in trace[
         "dropped_findings"
     ]
+
+
+def test_normalize_tool_arguments_drops_stray_ids_and_aliases_singular_keys():
+    """DeepSeek-style tool calls (echoed accession + singular keys) become canonical.
+
+    Tool arguments are navigation, not verified output, so the harness accepts the
+    shapes real models emit instead of failing the whole run. Before this, a call like
+    {"section_keys":[...],"accession_number":...} raised malformed_action_breakdown.
+    """
+    from finwatch.llm.harness import _GENERATOR_ADAPTER, _normalize_tool_arguments
+
+    raw = {
+        "action": "tool", "tool": "search_sections",
+        "arguments": {
+            "accession_number": "0000000001-24-000001", "ticker": "TEST",
+            "form_type": "10-Q", "query": "going concern", "section_key": "mdna",
+        },
+    }
+    action = _GENERATOR_ADAPTER.validate_python(_normalize_tool_arguments(raw))
+    assert action.arguments.queries == ["going concern"]
+    assert action.arguments.section_keys == ["mdna"]
+
+
+def test_search_sections_without_queries_returns_section_head():
+    """A model that asks for a section by key (no query terms) still gets its text."""
+    from finwatch.llm.harness import SearchSectionsArgs
+
+    context = ToolContext(
+        filing_meta=META, sections=SECTIONS, prior_sections={},
+        metrics=MetricsBundle(), data_quality=[],
+    )
+    result = context.search_sections(SearchSectionsArgs(section_keys=["mdna"]))
+    assert result["results"], "expected the section head to be returned"
+    row = result["results"][0]
+    assert row["section_key"] == "mdna"
+    assert row["snippet"].startswith("Revenue increased")
+
+
+def test_generator_recovers_from_deepseek_shaped_tool_call():
+    """End to end: a normalizable tool call is executed, not counted as malformed."""
+    repo = Repo(init_db(":memory:"))
+    deepseek_call = json.dumps({
+        "action": "tool", "tool": "search_sections",
+        "arguments": {"accession_number": META["accession_number"],
+                      "section_keys": ["mdna"]},
+    })
+    llm = FakeLLMClient(responses=[
+        deepseek_call,
+        _submit(_draft(_finding("f1", "Revenue increased"))),
+    ])
+    skeptic = FakeLLMClient(responses=[_done()])
+    result = P1Extractor(llm, repo, skeptic_llm=skeptic).run(
+        filing_meta=META, sections=SECTIONS
+    )
+    assert [f.finding_id for f in result.output.findings] == ["f1"]
+    assert result.trace.research_terminal_reason == "verified"
+    assert result.trace.generator_tool_calls == 1
+
+
+def test_normalize_truncates_overlong_query_list_instead_of_failing():
+    """A model that supplies more than three queries is truncated, not rejected.
+
+    Observed live: DeepSeek emits six search phrases; the schema caps queries at three.
+    Truncating keeps the run alive; navigation breadth is not a trust guarantee.
+    """
+    from finwatch.llm.harness import _GENERATOR_ADAPTER, _normalize_tool_arguments
+
+    raw = {
+        "action": "tool", "tool": "search_sections",
+        "arguments": {"queries": ["a", "b", "c", "d", "e", "f"],
+                      "section_keys": ["mdna"]},
+    }
+    action = _GENERATOR_ADAPTER.validate_python(_normalize_tool_arguments(raw))
+    assert action.arguments.queries == ["a", "b", "c"]
+
+
+def test_validation_hint_names_the_broken_rule_without_echoing_model_text():
+    """A capable model that overshoots the snippet word cap is TOLD the rule.
+
+    Observed live: GLM 5.2 selected the correct finding but quoted a >50-word sentence.
+    The old blind "INVALID_ACTION" gave it nothing to fix; the hint now names the rule
+    while never echoing the rejected snippet back into the prompt.
+    """
+    from finwatch.llm.harness import _GENERATOR_ADAPTER, _safe_validation_hint
+
+    long_quote = "word " * 60
+    draft = _draft(_finding("f1", long_quote.strip()))
+    raw = {"action": "submit", "draft": draft}
+    try:
+        _GENERATOR_ADAPTER.validate_python(raw)
+        raise AssertionError("expected the over-long snippet to fail validation")
+    except Exception as exc:
+        hint = _safe_validation_hint(exc)
+
+    assert hint.startswith("INVALID_ACTION")
+    assert "50 words" in hint
+    assert "word word word" not in hint  # the rejected snippet is never echoed back

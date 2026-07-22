@@ -294,7 +294,7 @@ issuer must be distinguishable from an issuer that was never synced.
 
 `P1Output` is a strict pydantic contract (`extra="forbid"`): filing identity, severity, zero to
 three uniquely identified findings, extraction confidence, and nonblocking gaps. Each finding uses
-`f1`/`f2`/`f3`, a controlled severity/critical flag, and one to three exact quotations of at most 25
+`f1`/`f2`/`f3`, a controlled severity/critical flag, and one to three exact quotations of at most 50
 words. Optional `metric_id` and `direction` fields must appear together; the compiler compares them
 against the registry metric's rounding-aware delta. Offsets are server-derived relative to the
 named canonical section and must satisfy

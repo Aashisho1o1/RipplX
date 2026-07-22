@@ -52,7 +52,7 @@ def test_prompt_loader_splices_foundation_and_versions():
     assert "[FOUNDATION BLOCK]" not in text
     assert "R1. NUMBERS" in text            # foundation content spliced in
     assert "filing-research Generator" in text
-    assert version == "P1_extractor.v5+foundation.v2"
+    assert version == "P1_extractor.v6+foundation.v2"
     assert '"findings"' in text and '"critical_flag"' in text
     assert "the server derives them" in text  # offsets are server-anchored, not model-supplied
 
@@ -370,7 +370,7 @@ def test_p1_extractor_repairs_one_schema_invalid_response():
     repo = Repo(init_db(":memory:"))
 
     def respond(_system, user):
-        if '"last_error": "INVALID_ACTION"' in user:
+        if "INVALID_ACTION" in user:
             return json.dumps({"action": "submit", "draft": VALID_P1})
         return json.dumps({"action": "submit", "surprise": "invalid"})
 
@@ -384,12 +384,14 @@ def test_p1_extractor_repairs_one_schema_invalid_response():
 
 
 def test_schema_repair_prompt_does_not_leak_validation_error_text_to_model():
-    # Invalid model output is never echoed back; only a controlled error code is.
+    # The corrective hint carries our own schema rule text (a field path + message) so a
+    # capable model can self-correct, but NEVER the model's rejected input: the sentinel
+    # value the model tried to submit must not round-trip back through the prompt.
     repo = Repo(init_db(":memory:"))
     sentinel = "ZZZSENTINEL"
 
     def respond(_system, user):
-        if '"last_error": "INVALID_ACTION"' in user:
+        if "INVALID_ACTION" in user:
             return json.dumps({"action": "submit", "draft": VALID_P1})
         return json.dumps({"action": "submit", "draft": sentinel})
 
@@ -401,7 +403,7 @@ def test_schema_repair_prompt_does_not_leak_validation_error_text_to_model():
 
     assert len(llm.calls) == 2
     repair_user = llm.calls[1][1]
-    assert '"last_error": "INVALID_ACTION"' in repair_user
+    assert "INVALID_ACTION" in repair_user
     assert sentinel not in repair_user
 
 

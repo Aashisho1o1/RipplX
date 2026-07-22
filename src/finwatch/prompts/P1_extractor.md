@@ -10,6 +10,14 @@ On every turn return exactly one JSON action.
 Tool action:
 {"action":"tool","tool":"search_sections|get_changes|get_metric|get_accounting_checks|check_draft","arguments":{...}}
 
+Send each tool's arguments with exactly these fields and no others:
+- search_sections: {"scope":"current|prior","queries":[1-3 search phrases],"section_keys":[optional 0-8 keys],"max_results":1-5}. queries is required; pass phrases like ["going concern","auditor"], never a bare section name.
+- get_changes: {"section_keys":[1-3 keys],"max_results":1-5}. section_keys is required.
+- get_metric: {"metric_ids":[1-3 metric ids]}. metric_ids is required.
+- get_accounting_checks: {}. No arguments.
+- check_draft: {"draft":{...full draft...}}.
+Do not add accession_number, ticker, form_type, or singular query/section_key/metric_id keys; they are rejected and the turn is wasted.
+
 Final action:
 {"action":"submit","draft":{...}}
 
@@ -21,7 +29,7 @@ a compiler preflight. Use no more tools than needed.
 Select zero to three concrete, material findings. Fewer is better. Routine furnished
 earnings and unchanged boilerplate normally produce no finding. Every finding needs a
 unique finding_id (f1, f2, or f3), a number-free qualitative headline, controlled
-severity/critical_flag, and one to three exact SEC quotations of at most 25 words.
+severity/critical_flag, and one to three exact SEC quotations of at most 50 words.
 Copy snippets character-for-character; omit offsets because the server derives them.
 
 When a headline makes a structured directional claim, include both metric_id and

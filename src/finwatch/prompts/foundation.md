@@ -38,5 +38,5 @@ EXACT EVIDENCE SPAN:
 { "accession_number": str, "form_type": str, "section_key": str,
   "exhibit": str|null, "char_start": int, "char_end": int,
   "html_element_id": str|null,
-  "snippet": "<verbatim text[start:end], ≤25 words>" }
+  "snippet": "<verbatim text[start:end], ≤50 words>" }
 </foundation>

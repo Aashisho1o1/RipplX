@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
 from finwatch.db.repositories import Analysis, Repo
 from finwatch.llm.prompts import STAGE_P1, STAGE_SKEPTIC, load_prompt
@@ -35,7 +35,9 @@ _SKEPTIC_CODES = Literal[
 class SearchSectionsArgs(BaseModel):
     model_config = _STRICT
     scope: Literal["current", "prior"] = "current"
-    queries: list[str] = Field(min_length=1, max_length=3)
+    # Optional: with no queries the tool returns the head of each named section, so a
+    # model that just wants to read a section by key is served rather than rejected.
+    queries: list[str] = Field(default_factory=list, max_length=3)
     section_keys: list[str] = Field(default_factory=list, max_length=8)
     max_results: int = Field(default=5, ge=1, le=5)
 
@@ -107,6 +109,76 @@ GeneratorAction = Annotated[
     Field(union_mode="left_to_right"),
 ]
 _GENERATOR_ADAPTER = TypeAdapter(GeneratorAction)
+
+_ARG_STRAY_FIELDS = ("accession_number", "ticker", "form_type", "cik")
+_ARG_SINGULAR_ALIASES = (
+    ("query", "queries"),
+    ("section_key", "section_keys"),
+    ("metric_id", "metric_ids"),
+)
+# Per-tool list caps, matching the *Args schemas. A model that over-supplies (e.g. six
+# search queries) is truncated to the cap rather than failing the whole run.
+_ARG_LIST_CAPS = {
+    "search_sections": {"queries": 3, "section_keys": 8},
+    "get_changes": {"section_keys": 3},
+    "get_metric": {"metric_ids": 3},
+}
+
+
+def _safe_validation_hint(exc: Exception) -> str:
+    """Turn a schema failure into a controlled hint the model can act on.
+
+    Feeds back ONLY our own schema rule text (field path + message), never the model's
+    rejected input: ``include_input=False`` drops every echoed value, so untrusted model
+    output can never round-trip through the prompt. Literal-union discriminator noise
+    ("Input should be 'tool'") is dropped so the real violation — e.g. a 50-word snippet
+    cap — is what the model sees. This is what lets a capable model self-correct a
+    fixable mistake instead of dying with a blind ``INVALID_ACTION``.
+    """
+    if not isinstance(exc, ValidationError):
+        return "INVALID_ACTION"
+    parts: list[str] = []
+    for err in exc.errors(include_url=False, include_input=False):
+        loc = ".".join(
+            str(piece) for piece in err.get("loc", ()) if not str(piece).endswith("Action")
+        )
+        message = str(err.get("msg", "")).strip()
+        if not message:
+            continue
+        item = f"{loc}: {message}" if loc else message
+        if item not in parts:
+            parts.append(item)
+    useful = [item for item in parts if "Input should be" not in item] or parts
+    return "INVALID_ACTION: " + "; ".join(useful[:4]) if useful else "INVALID_ACTION"
+
+
+def _normalize_tool_arguments(raw: object) -> object:
+    """Map benign tool-argument variants onto the canonical schema before validation.
+
+    Tool arguments are navigation — which section, change, or metric to inspect — never
+    verified output, so accepting the shapes real models actually emit costs no trust
+    guarantee. Three variants are common across providers: echoing identifiers the
+    harness already knows (accession/ticker/form), using a singular key where the schema
+    wants a list, and over-supplying list items past the cap. We drop the first, alias
+    the second, and truncate the third; everything else still fails validation exactly as
+    before. Mutates and returns the same dict.
+    """
+    if not isinstance(raw, dict):
+        return raw
+    args = raw.get("arguments")
+    if not isinstance(args, dict):
+        return raw
+    for stray in _ARG_STRAY_FIELDS:
+        args.pop(stray, None)
+    for singular, plural in _ARG_SINGULAR_ALIASES:
+        if singular in args and plural not in args:
+            value = args.pop(singular)
+            args[plural] = value if isinstance(value, list) else [value]
+    for field_name, cap in _ARG_LIST_CAPS.get(raw.get("tool"), {}).items():
+        value = args.get(field_name)
+        if isinstance(value, list) and len(value) > cap:
+            args[field_name] = value[:cap]
+    return raw
 
 
 class SkepticObligation(BaseModel):
@@ -299,6 +371,31 @@ class ToolContext:
         source = self._section_rows(args.scope)
         keys = args.section_keys or list(source)
         results: list[dict] = []
+        if not any(query.strip() for query in args.queries):
+            # No query terms: return the head of each named section (a plain read).
+            for key in keys:
+                row = source.get(key)
+                text = row.get("text", "") if isinstance(row, dict) else ""
+                if not text:
+                    continue
+                right = min(len(text), 460)
+                accession = (
+                    self.filing_meta["accession_number"]
+                    if args.scope == "current"
+                    else row.get("accession_number")
+                )
+                results.append({
+                    "scope": args.scope,
+                    "accession_number": accession,
+                    "section_key": key,
+                    "char_start": 0,
+                    "char_end": right,
+                    "snippet": text[:right],
+                    "text_sha256": hashlib.sha256(text.encode()).hexdigest(),
+                })
+                if len(results) >= args.max_results:
+                    return {"results": results}
+            return {"results": results}
         for query in args.queries:
             needle = query.strip().lower()
             if not needle:
@@ -500,14 +597,14 @@ class FilingResearchHarness:
                 raw = self._call(
                     self.generator, usage, system=system, state=state, temperature=0.1
                 )
-                action = _GENERATOR_ADAPTER.validate_python(raw)
+                action = _GENERATOR_ADAPTER.validate_python(_normalize_tool_arguments(raw))
             except HarnessError:
                 raise
             except Exception as exc:
                 if submit_only:
                     break
                 invalid_actions += 1
-                state["last_error"] = "INVALID_ACTION"
+                state["last_error"] = _safe_validation_hint(exc)
                 if invalid_actions >= 2:
                     if optional_repair:
                         return _GeneratorLoopResult(
@@ -672,7 +769,7 @@ class FilingResearchHarness:
                 raw = self._call(
                     self.skeptic, usage, system=system, state=state, temperature=0.0
                 )
-                action = _SKEPTIC_ADAPTER.validate_python(raw)
+                action = _SKEPTIC_ADAPTER.validate_python(_normalize_tool_arguments(raw))
             except HarnessError:
                 raise
             except Exception:

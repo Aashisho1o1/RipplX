@@ -77,8 +77,13 @@ class FindingEvidence(BaseModel):
             raise ValueError("evidence offsets are server-derived: provide both or neither")
         if self.char_start is not None and self.char_end <= self.char_start:
             raise ValueError("evidence char_end must be greater than char_start")
-        if len(self.snippet.split()) > 25:
-            raise ValueError("evidence snippet must contain at most 25 words")
+        # Real SEC disclosure sentences (going-concern, non-reliance, officer changes)
+        # routinely run 30-45 words; a tighter cap forced models to either truncate an
+        # exact quote — making it inexact and unverifiable — or fail the whole run. A
+        # longer quote is still offset-anchored and exact-substring verified by V4, so
+        # length never weakens provenance. The 2000-char field cap still bounds size.
+        if len(self.snippet.split()) > 50:
+            raise ValueError("evidence snippet must contain at most 50 words")
         return self
 
 
