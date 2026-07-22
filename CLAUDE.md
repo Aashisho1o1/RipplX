@@ -319,14 +319,17 @@ baseline exists, optional Skeptic/repair protocol or budget failure preserves cl
 drops only findings carrying validated objections; provider failure remains a whole-run failure.
 Output is capped at 2,000 tokens per call.
 
-Production accepts one `FINWATCH_MODEL` using the `openai/` or `openrouter/` prefix, with an optional
-`FINWATCH_SKEPTIC_MODEL` on the same provider (otherwise it reuses the Generator), and the matching
-`OPENAI_API_KEY`
-or `OPENROUTER_API_KEY`; other providers and base-URL overrides stay out of the launch path. Broader
-provider/model flexibility inside dormant developer utilities is not a production configuration
-promise. CLI/local keys may come from the environment or browser session memory. Hosted participants
-must provide their own matching key; hosted requests ignore environment provider keys. Keys must
-never be logged, persisted, placed in cookies/browser storage, or returned.
+Production accepts one `FINWATCH_MODEL` using the `openai/`, `openrouter/`, or `z-ai/` prefix, with an
+optional `FINWATCH_SKEPTIC_MODEL` on the same provider (otherwise it reuses the Generator), and the
+matching `OPENAI_API_KEY`, `OPENROUTER_API_KEY`, or `ZAI_API_KEY`. Each prefix maps to exactly one
+fixed endpoint — `z-ai/<model>` routes to Zhipu GLM through z.ai's Anthropic-compatible endpoint
+(`https://api.z.ai/api/anthropic`), where the Anthropic API has no JSON-object response format so the
+prompt carries the JSON contract instead. Arbitrary providers and caller-supplied base-URL overrides
+stay out of the launch path. Broader provider/model flexibility inside dormant developer utilities is
+not a production configuration promise. CLI/local keys may come from the environment or browser
+session memory. Hosted participants must provide their own matching key; hosted requests ignore
+environment provider keys. Keys must never be logged, persisted, placed in cookies/browser storage,
+or returned.
 
 ---
 

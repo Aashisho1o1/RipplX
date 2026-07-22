@@ -430,3 +430,35 @@ def test_more_than_three_findings_is_stage_error_and_leaves_no_orphan_row():
     assert json.loads(trace.output_json)["research_terminal_reason"] == (
         "malformed_action_breakdown"
     )
+
+
+def test_zai_model_resolves_to_anthropic_endpoint_without_json_mode():
+    """z-ai/<model> maps to litellm's anthropic provider + the z.ai base URL.
+
+    The Anthropic API has no json_object response_format, so JSON mode is off there and
+    the prompt carries the contract (verified live: GLM 5.2 drives the harness this way).
+    """
+    from finwatch.llm.router import resolve_model
+
+    assert resolve_model("z-ai/glm-5.2") == (
+        "anthropic/glm-5.2", "https://api.z.ai/api/anthropic", False
+    )
+    # openai/openrouter route unchanged: their own endpoint, json mode supported.
+    assert resolve_model("openrouter/z-ai/glm-5.2") == (
+        "openrouter/z-ai/glm-5.2", None, True
+    )
+    assert resolve_model("openai/gpt-4o") == ("openai/gpt-4o", None, True)
+
+
+def test_zai_env_key_and_provider_label(monkeypatch):
+    from finwatch.web.runtime import _environment_key_for, provider_for_model
+
+    monkeypatch.delenv("ZAI_API_KEY", raising=False)
+    assert _environment_key_for("z-ai/glm-5.2") is False
+    monkeypatch.setenv("ZAI_API_KEY", "zai-key")
+    assert _environment_key_for("z-ai/glm-5.2") is True
+    # A mismatched provider key must NOT report z-ai as ready.
+    monkeypatch.delenv("ZAI_API_KEY", raising=False)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "or-key")
+    assert _environment_key_for("z-ai/glm-5.2") is False
+    assert provider_for_model("z-ai/glm-5.2") == "z.ai"

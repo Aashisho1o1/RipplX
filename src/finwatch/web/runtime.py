@@ -66,13 +66,15 @@ class RuntimeSecrets:
 
 def _environment_key_for(model: str | None) -> bool:
     # The credential must match the configured model's provider: openai/* reads
-    # OPENAI_API_KEY, openrouter/* reads OPENROUTER_API_KEY. A key for the OTHER
-    # provider does NOT enable analysis (litellm would route by the model prefix and
-    # never see it), so it must not report the model as ready.
+    # OPENAI_API_KEY, openrouter/* reads OPENROUTER_API_KEY, z-ai/* reads ZAI_API_KEY. A
+    # key for the OTHER provider does NOT enable analysis (litellm would route by the
+    # model prefix and never see it), so it must not report the model as ready.
     if model and model.startswith("openai/"):
         return bool(os.environ.get("OPENAI_API_KEY", "").strip())
     if model and model.startswith("openrouter/"):
         return bool(os.environ.get("OPENROUTER_API_KEY", "").strip())
+    if model and model.startswith("z-ai/"):
+        return bool(os.environ.get("ZAI_API_KEY", "").strip())
     return False
 
 
@@ -91,6 +93,8 @@ def provider_for_model(model: str | None) -> str | None:
         return "OpenAI"
     if model and model.startswith("openrouter/"):
         return "OpenRouter"
+    if model and model.startswith("z-ai/"):
+        return "z.ai"
     return None
 
 

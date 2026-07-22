@@ -22,10 +22,16 @@ def test_load_config_reads_user_agent_from_env(monkeypatch, tmp_path):
 
 def test_load_config_accepts_allowlisted_production_providers(monkeypatch, tmp_path):
     monkeypatch.setenv("SEC_USER_AGENT", "Test User test@example.com")
-    for model in ("openai/evaluated-model", "openrouter/deepseek/deepseek-v4-flash"):
+    for model in (
+        "openai/evaluated-model",
+        "openrouter/deepseek/deepseek-v4-flash",
+        "z-ai/glm-5.2",
+    ):
         monkeypatch.setenv("FINWATCH_MODEL", model)
         assert load_config(env_path=tmp_path / "missing.env").model == model
 
+    # A raw anthropic/ model is still rejected — only the z-ai/ prefix (which maps to the
+    # z.ai Anthropic-compatible endpoint) is an allowlisted production provider.
     monkeypatch.setenv("FINWATCH_MODEL", "anthropic/other-model")
     with pytest.raises(ValueError, match="production providers"):
         load_config(env_path=tmp_path / "missing.env")

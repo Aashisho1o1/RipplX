@@ -10,9 +10,25 @@ so tests and non-LLM code paths never pay its (heavy) import cost — tests driv
 from __future__ import annotations
 
 import json
+import os
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Protocol
+
+# z.ai (Zhipu) serves GLM through an Anthropic-compatible endpoint, reached via
+# litellm's ``anthropic`` provider with this fixed base URL and a ``ZAI_API_KEY``. The
+# Anthropic API has no ``response_format`` json_object, so JSON mode is disabled for it
+# and the prompt carries the JSON contract instead. The ``z-ai/`` prefix keeps the
+# finwatch-facing model string in the same one-token provider form as openai/openrouter.
+ZAI_PREFIX = "z-ai/"
+_ZAI_API_BASE = "https://api.z.ai/api/anthropic"
+
+
+def resolve_model(model: str) -> tuple[str, str | None, bool]:
+    """Map a finwatch model string to (litellm_model, api_base, json_object_supported)."""
+    if model.startswith(ZAI_PREFIX):
+        return "anthropic/" + model[len(ZAI_PREFIX):], _ZAI_API_BASE, False
+    return model, None, True
 
 LAUNCH_MAX_OUTPUT_TOKENS = 2_000
 
@@ -57,8 +73,9 @@ class LiteLLMClient:
     ) -> LLMResponse:
         import litellm  # lazy: heavy import, only when a real call is made
 
+        litellm_model, api_base, json_supported = resolve_model(self.model)
         kwargs: dict = {
-            "model": self.model,
+            "model": litellm_model,
             "messages": [
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
@@ -68,10 +85,17 @@ class LiteLLMClient:
             "timeout": self.timeout,
             "num_retries": self.num_retries,
         }
-        if json_mode:
+        if api_base:
+            kwargs["api_base"] = api_base
+        if json_mode and json_supported:
             kwargs["response_format"] = {"type": "json_object"}
-        if self._api_key:
-            kwargs["api_key"] = self._api_key
+        # z.ai keys live in ZAI_API_KEY; litellm's anthropic provider would otherwise
+        # look for ANTHROPIC_API_KEY, so pass it explicitly when none was supplied.
+        api_key = self._api_key
+        if api_key is None and self.model.startswith(ZAI_PREFIX):
+            api_key = os.environ.get("ZAI_API_KEY", "").strip() or None
+        if api_key:
+            kwargs["api_key"] = api_key
         resp = litellm.completion(**kwargs)
         text = resp.choices[0].message.content or ""
         usage = getattr(resp, "usage", None)

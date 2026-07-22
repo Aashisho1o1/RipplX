@@ -13,10 +13,12 @@ from pathlib import Path
 from pydantic import BaseModel, field_validator
 
 DEFAULT_ENV_PATH = Path(".env")
-# Launch accepts a small allowlist of litellm provider prefixes: OpenAI direct and
+# Launch accepts a small allowlist of litellm provider prefixes: OpenAI direct,
 # OpenRouter (which proxies cheap models such as deepseek/gemini through one fixed,
-# known endpoint). Other providers stay out of the production path.
-PRODUCTION_MODEL_PREFIXES = ("openai/", "openrouter/")
+# known endpoint), and z.ai (Zhipu GLM via its Anthropic-compatible coding endpoint,
+# reached with ZAI_API_KEY). Each maps to exactly one known endpoint; other providers
+# and arbitrary base-URL overrides stay out of the production path.
+PRODUCTION_MODEL_PREFIXES = ("openai/", "openrouter/", "z-ai/")
 
 
 class ConfigError(RuntimeError):
