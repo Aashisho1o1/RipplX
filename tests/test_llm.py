@@ -52,7 +52,7 @@ def test_prompt_loader_splices_foundation_and_versions():
     assert "[FOUNDATION BLOCK]" not in text
     assert "R1. NUMBERS" in text            # foundation content spliced in
     assert "filing-research Generator" in text
-    assert version == "P1_extractor.v6+foundation.v2"
+    assert version == "P1_extractor.v7+foundation.v2"
     assert '"findings"' in text and '"critical_flag"' in text
     assert "the server derives them" in text  # offsets are server-anchored, not model-supplied
 

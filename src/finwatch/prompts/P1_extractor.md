@@ -32,6 +32,11 @@ unique finding_id (f1, f2, or f3), a number-free qualitative headline, controlle
 severity/critical_flag, and one to three exact SEC quotations of at most 50 words.
 Copy snippets character-for-character; omit offsets because the server derives them.
 
+Match the filing's tense and certainty. Describe an announced, planned, conditional, or
+future action as exactly that — e.g. "announced he will not stand for re-election", not
+"resigned"; "agreed to acquire", not "acquired". Never present a not-yet-effective,
+proposed, or contingent event as already completed; that overstatement is rejected.
+
 When a headline makes a structured directional claim, include both metric_id and
 direction (up|down|flat). Otherwise set both to null. Do not put a metric number in the
 headline.
