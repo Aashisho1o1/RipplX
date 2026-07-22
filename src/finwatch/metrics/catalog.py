@@ -21,3 +21,32 @@ STARTER_METRIC_LABELS = {
     "share_count_change": "Share count Δ",
     "simple_leverage": "Net debt / (operating income + D&A) proxy",
 }
+
+STARTER_METRIC_EXPRESSIONS: dict[str, str] = {
+    "revenue_growth": (
+        "(current annual revenue − prior annual revenue) ÷ |prior annual revenue|; "
+        "TTM revenue is the sum of four contiguous quarters when available"
+    ),
+    "net_income_trend": (
+        "(current annual net income − prior annual net income) ÷ |prior annual net "
+        "income|; direction uses four contiguous quarters when available"
+    ),
+    "cfo_trend": (
+        "(current annual operating cash flow − prior annual operating cash flow) ÷ "
+        "|prior annual operating cash flow|; direction uses four contiguous quarters "
+        "when available"
+    ),
+    "liquidity_basics": (
+        "total debt = long-term debt + short-term debt; net debt = total debt − cash; "
+        "current ratio = current assets ÷ current liabilities when available"
+    ),
+    "share_count_change": (
+        "(current shares outstanding − prior shares outstanding) ÷ prior shares "
+        "outstanding"
+    ),
+    "simple_leverage": (
+        "net debt = long-term debt + short-term debt − cash; leverage proxy = net debt "
+        "÷ (operating income + D&A); interest coverage = operating income ÷ interest "
+        "expense when available"
+    ),
+}

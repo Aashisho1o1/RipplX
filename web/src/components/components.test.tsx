@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { FilingItemCard } from "./FilingItemCard";
@@ -40,6 +40,44 @@ describe("trust vocabulary", () => {
     expect(screen.getByLabelText(/stored result failed/)).toHaveTextContent("Withheld");
     expect(container.querySelector(".trust.missing")).toBeNull();
     expect(screen.getByText(/computation #41/)).toHaveTextContent("computed as of 2025-06-30");
+  });
+
+  it("opens a validated metric derivation in place", () => {
+    render(<MetricTable rows={[
+      {
+        metric: "Revenue growth", value: "+17.5%", formula: "revenue_growth.v5",
+        state: "computed", state_label: "Computed from SEC XBRL facts",
+        source_computation_id: 41, effective_as_of: "2025-06-30",
+        derivation: {
+          expression: "(current annual revenue − prior annual revenue) ÷ |prior annual revenue|",
+          formula_version: "revenue_growth.v5",
+          inputs: [{
+            concept: "RevenueFromContractWithCustomerExcludingAssessedTax",
+            taxonomy: "us-gaap", value: "$168.1B", unit: "USD",
+            period: "2020-07-01 to 2021-06-30",
+            accession: "0000950170-23-035122",
+          }],
+        },
+      },
+      {
+        metric: "Liquidity", value: "— withheld", formula: "liquidity_basics.v2",
+        state: "withheld", state_label: "Withheld — stored result failed validation",
+        source_computation_id: 44, effective_as_of: "2025-06-30", derivation: null,
+      },
+    ]} />);
+
+    const toggle = screen.getByRole("button", { name: /Show derivation for Revenue growth/ });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText("0000950170-23-035122")).not.toBeInTheDocument();
+
+    fireEvent.click(toggle);
+
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText(/current annual revenue/)).toBeInTheDocument();
+    expect(screen.getByText("0000950170-23-035122")).toBeInTheDocument();
+    const withheldRow = screen.getByText("— withheld").closest("tr");
+    expect(withheldRow).not.toBeNull();
+    expect(within(withheldRow as HTMLTableRowElement).queryByRole("button")).toBeNull();
   });
 
   it("renders exact evidence as text and links only to SEC HTTPS citations", () => {

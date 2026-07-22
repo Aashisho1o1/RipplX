@@ -53,6 +53,21 @@ class FilingDigestEntry(BaseModel):
     dropped_finding_count: int = Field(default=0, ge=0)
 
 
+class MetricInputView(BaseModel):
+    concept: str
+    taxonomy: str
+    value: str
+    unit: str
+    period: str
+    accession: str
+
+
+class MetricDerivationView(BaseModel):
+    expression: str
+    formula_version: str
+    inputs: list[MetricInputView]
+
+
 class MetricRowView(BaseModel):
     metric: str
     value: str
@@ -61,6 +76,7 @@ class MetricRowView(BaseModel):
     state_label: str
     source_computation_id: int
     effective_as_of: str
+    derivation: MetricDerivationView | None = None
 
 
 class IssuerMetricsView(BaseModel):

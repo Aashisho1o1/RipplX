@@ -7,7 +7,9 @@ export type FilingOutcome = "published" | "no_findings" | "findings_dropped" | "
 export interface Evidence { claim_id: string; accession: string; section_key: string; char_start: number; char_end: number; quote: string; section_sha256: string; edgar_url: string }
 export interface Finding { finding_id: string; headline: string; severity: Severity; evidence: Evidence[] }
 export interface FilingDigestEntry { accession: string; ticker: string; form: string; filed: string; edgar_url: string; findings: Finding[]; withheld: boolean; withheld_reason: string | null; withheld_kind: WithheldKind | null; outcome: FilingOutcome; dropped_finding_count: number }
-export interface MetricRow { metric: string; value: string; formula: string; state: MetricState; state_label: string; source_computation_id: number; effective_as_of: string }
+export interface MetricInput { concept: string; taxonomy: string; value: string; unit: string; period: string; accession: string }
+export interface MetricDerivation { expression: string; formula_version: string; inputs: MetricInput[] }
+export interface MetricRow { metric: string; value: string; formula: string; state: MetricState; state_label: string; source_computation_id: number; effective_as_of: string; derivation?: MetricDerivation | null }
 export interface IssuerMetrics { ticker: string; rows: MetricRow[]; empty: string | null; summary: string }
 export interface Brief { period: { covered_label: string; filings_in_window: number; analyzed_filings: number; published_filings: number; withheld_filings: number; filings_tracked_total: number; outside_window: string | null }; tracked_tickers: string[]; answer: string; filings: FilingDigestEntry[]; gate_removed_filings: FilingDigestEntry[]; verified_numbers: IssuerMetrics[]; open_questions: string[]; reviewed_filings: FilingDigestEntry[]; withheld_filings: FilingDigestEntry[]; tracked_but_unanalyzed: boolean; filings_synced: number; disclaimer: string; sample_data: boolean }
 export interface VerificationCheck { check_id: string; verdict: string; severity: string; detail: string | null }

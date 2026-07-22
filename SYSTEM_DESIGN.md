@@ -206,7 +206,9 @@ bound above.
    Directional metrics expose current-minus-prior delta and the sum of both raw rounding slacks;
    subtraction and slack addition use decimal arithmetic before conversion to the existing float
    DTO. Unknown, overflowing, or float-underflowing finite decimals mean unknown direction, never
-   zero slack. User-facing surfaces say “computed as of.”
+   zero slack. User-facing surfaces say “computed as of.” Presentation projects the persisted,
+   re-validated formula expression and XBRL inputs into an expandable derivation; a provenance-
+   withheld row exposes no derivation.
 
 4. **Point-in-time contract** — companyfacts entries without a provable filing date or filed after
    the filing's `as_of` are excluded before normalization. Current annual legs older than 550 days

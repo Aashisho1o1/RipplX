@@ -287,6 +287,8 @@ re-validation; such a row is rendered from trusted database columns only, never 
 that failed, and it still counts against the fixed six-metric denominator. Metric rows are never
 silently dropped, and a metric table is rendered whenever any starter row exists — an all-unavailable
 issuer must be distinguishable from an issuer that was never synced.
+Validated metric rows also project their persisted formula expression and SEC XBRL inputs for an
+expandable browser derivation; a row withheld by provenance re-validation exposes no derivation.
 
 ---
 

@@ -30,6 +30,13 @@ def _num(value: float | None, places: int = 2) -> str:
     return "n/a" if value is None else f"{value:.{places}f}"
 
 
+def format_fact_value(value: float | None, unit_ref: str | None) -> str:
+    """Format one persisted SEC fact without re-deriving it."""
+    if unit_ref and unit_ref.upper().startswith("USD"):
+        return _usd(value)
+    return _num(value)
+
+
 def format_metric_value(result: MetricResult) -> str:
     components = result.components
     metric = result.metric

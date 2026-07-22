@@ -2,10 +2,16 @@ import json
 
 import pytest
 
-from finwatch.db import Filing, Repo
+from finwatch.db import Computation, Filing, Repo
 from finwatch.db.repositories import VerificationResult
 from finwatch.demo import DEMO_SINCE, build_demo_db
 from finwatch.llm.schemas import P1Output
+from finwatch.metrics.catalog import (
+    STARTER_METRIC_EXPRESSIONS,
+    STARTER_METRICS,
+    MetricId,
+)
+from finwatch.metrics.envelope import MetricResult
 from finwatch.presentation.canonical import build_filing_entry
 from finwatch.presentation.projection import (
     GATE_WITHHELD_REASON,
@@ -208,3 +214,118 @@ def test_structured_metric_rows_carry_exact_persisted_source_identity():
     source_ids = {row.id for row in stored}
     assert all(row.source_computation_id in source_ids for row in view.rows)
     assert all(row.effective_as_of <= "2024-08-05" for row in view.rows)
+
+
+def test_computed_metric_projects_only_its_persisted_validated_inputs():
+    conn = build_demo_db()
+    try:
+        repo = Repo(conn)
+        stored = next(
+            row for row in repo.latest_computations("MSFT")
+            if row.tool == "revenue_growth"
+        )
+        persisted = json.loads(stored.result_json)
+        view = PresentationService(repo).metrics("MSFT", as_of="2024-08-05")
+    finally:
+        conn.close()
+
+    assert view is not None
+    row = next(item for item in view.rows if item.source_computation_id == stored.id)
+    assert row.derivation is not None
+    assert row.derivation.formula_version == persisted["formula_version"]
+    assert row.derivation.expression == STARTER_METRIC_EXPRESSIONS["revenue_growth"]
+    assert len(row.derivation.inputs) == len(persisted["inputs_used"])
+    for projected, source in zip(
+        row.derivation.inputs, persisted["inputs_used"], strict=True
+    ):
+        period = (
+            f"as of {source['instant']}"
+            if source["instant"]
+            else f"{source['period_start']} to {source['period_end']}"
+            if source["period_start"] and source["period_end"]
+            else f"period ended {source['period_end']}"
+            if source["period_end"]
+            else "period not stated"
+        )
+        assert projected.concept == source["tag"]
+        assert projected.taxonomy == source["taxonomy"]
+        assert projected.unit == source["unit_ref"]
+        assert projected.period == period
+        assert projected.accession == source["accession_number"]
+    first = row.derivation.inputs[0]
+    persisted_first = persisted["inputs_used"][0]
+    assert first.model_dump() == {
+        "concept": persisted_first["tag"],
+        "taxonomy": persisted_first["taxonomy"],
+        "value": "$168.1B",
+        "unit": persisted_first["unit_ref"],
+        "period": "2020-07-01 to 2021-06-30",
+        "accession": persisted_first["accession_number"],
+    }
+
+
+def test_provenance_invalid_metric_withholds_its_derivation():
+    conn = build_demo_db()
+    try:
+        repo = Repo(conn)
+        stored = next(
+            row for row in repo.latest_computations("MSFT")
+            if row.tool == "revenue_growth"
+        )
+        corrupted = json.loads(stored.result_json)
+        corrupted["metric"] = "cfo_trend"
+        conn.execute(
+            "UPDATE computations SET result_json = ? WHERE id = ?",
+            (json.dumps(corrupted), stored.id),
+        )
+        conn.commit()
+
+        view = PresentationService(repo).metrics("MSFT", as_of="2024-08-05")
+    finally:
+        conn.close()
+
+    assert view is not None
+    row = next(item for item in view.rows if item.source_computation_id == stored.id)
+    assert row.state == "withheld"
+    assert row.derivation is None
+
+
+def test_unavailable_metric_projects_formula_with_no_fabricated_inputs():
+    conn = build_demo_db()
+    try:
+        repo = Repo(conn)
+        metric = MetricResult(
+            metric="revenue_growth",
+            status="unavailable",
+            unavailable_missing=["revenue (2 annual periods)"],
+            formula_version="revenue_growth.v5",
+            as_of="2024-08-05",
+        )
+        repo.insert_computations([
+            Computation(
+                ticker="MSFT",
+                tool=metric.metric,
+                args_json="{}",
+                result_json=metric.model_dump_json(),
+                status=metric.status.value,
+                formula_version=metric.formula_version,
+                as_of=metric.as_of,
+                created_at="2026-07-22T00:00:00Z",
+            )
+        ])
+        view = PresentationService(repo).metrics("MSFT", as_of="2024-08-05")
+    finally:
+        conn.close()
+
+    assert view is not None
+    row = next(item for item in view.rows if item.metric == "Revenue growth")
+    assert row.state == "unavailable"
+    assert row.derivation is not None
+    assert row.derivation.expression == STARTER_METRIC_EXPRESSIONS["revenue_growth"]
+    assert row.derivation.inputs == []
+
+
+def test_every_starter_metric_has_a_human_readable_expression():
+    assert set(STARTER_METRIC_EXPRESSIONS) == set(STARTER_METRICS)
+    assert set(STARTER_METRIC_EXPRESSIONS) == {metric.value for metric in MetricId}
+    assert all(expression.strip() for expression in STARTER_METRIC_EXPRESSIONS.values())

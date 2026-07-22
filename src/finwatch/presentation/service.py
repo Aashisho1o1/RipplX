@@ -9,13 +9,18 @@ from collections import Counter
 from datetime import date
 
 from finwatch.db.repositories import LOCAL_USER_ID, Company, Computation, Filing, Repo
-from finwatch.metrics.catalog import STARTER_METRIC_LABELS, STARTER_METRICS
-from finwatch.metrics.envelope import MetricResult
+from finwatch.metrics.catalog import (
+    STARTER_METRIC_EXPRESSIONS,
+    STARTER_METRIC_LABELS,
+    STARTER_METRICS,
+)
+from finwatch.metrics.envelope import InputUsed, MetricResult
 from finwatch.pipeline.progress import PIPELINE_STAGES, STAGE_LABELS
 from finwatch.preprocess.forms import ANALYZABLE_FORMS, base_form
 from finwatch.presentation.canonical import build_filing_entry
 from finwatch.presentation.formatting import (
     compressed_metric_parts,
+    format_fact_value,
     format_metric_value,
     plural_count,
 )
@@ -28,6 +33,8 @@ from finwatch.presentation.models import (
     FilingDetailView,
     FilingDigestEntry,
     IssuerMetricsView,
+    MetricDerivationView,
+    MetricInputView,
     MetricRowView,
     MetricsView,
     PipelineStageView,
@@ -82,6 +89,25 @@ def _metric_summary(rows: list[MetricRowView]) -> str:
         if counts[state]
     ]
     return f"{' · '.join(parts)} of {len(STARTER_METRICS)} starter metrics"
+
+
+def _metric_input_view(source: InputUsed) -> MetricInputView:
+    if source.instant:
+        period = f"as of {source.instant}"
+    elif source.period_start and source.period_end:
+        period = f"{source.period_start} to {source.period_end}"
+    elif source.period_end:
+        period = f"period ended {source.period_end}"
+    else:
+        period = "period not stated"
+    return MetricInputView(
+        concept=source.tag,
+        taxonomy=source.taxonomy,
+        value=format_fact_value(source.value, source.unit_ref),
+        unit=source.unit_ref or "unit not stated",
+        period=period,
+        accession=source.accession_number or "not stated",
+    )
 
 
 def _check_detail(check_id: str, detail: str | None) -> str | None:
@@ -188,6 +214,7 @@ class PresentationService:
                         state_label=_WITHHELD_METRIC_LABEL,
                         source_computation_id=computation.id,
                         effective_as_of=computation.as_of,
+                        derivation=None,
                     )
                 )
                 continue
@@ -211,6 +238,11 @@ class PresentationService:
                     state_label=state_label,
                     source_computation_id=computation.id,
                     effective_as_of=metric.as_of,
+                    derivation=MetricDerivationView(
+                        expression=STARTER_METRIC_EXPRESSIONS[metric.metric],
+                        formula_version=metric.formula_version,
+                        inputs=[_metric_input_view(row) for row in metric.inputs_used],
+                    ),
                 )
             )
         return result
