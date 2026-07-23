@@ -64,18 +64,27 @@ class RuntimeSecrets:
             self._api_keys.pop(session_id, None)
 
 
-def _environment_key_for(model: str | None) -> bool:
-    # The credential must match the configured model's provider: openai/* reads
-    # OPENAI_API_KEY, openrouter/* reads OPENROUTER_API_KEY, z-ai/* reads ZAI_API_KEY. A
-    # key for the OTHER provider does NOT enable analysis (litellm would route by the
-    # model prefix and never see it), so it must not report the model as ready.
+def environment_api_key(model: str | None) -> str | None:
+    """Return the operator's provider key for ``model``, or None.
+
+    The credential must match the configured model's provider: openai/* reads
+    OPENAI_API_KEY, openrouter/* reads OPENROUTER_API_KEY, z-ai/* reads ZAI_API_KEY. A
+    key for the OTHER provider does NOT enable analysis (litellm would route by the
+    model prefix and never see it), so a mismatched key must never report the model as
+    ready — that mismatch is silent at request time and surfaces only as a provider
+    failure deep inside the run.
+    """
     if model and model.startswith("openai/"):
-        return bool(os.environ.get("OPENAI_API_KEY", "").strip())
+        return os.environ.get("OPENAI_API_KEY", "").strip() or None
     if model and model.startswith("openrouter/"):
-        return bool(os.environ.get("OPENROUTER_API_KEY", "").strip())
+        return os.environ.get("OPENROUTER_API_KEY", "").strip() or None
     if model and model.startswith("z-ai/"):
-        return bool(os.environ.get("ZAI_API_KEY", "").strip())
-    return False
+        return os.environ.get("ZAI_API_KEY", "").strip() or None
+    return None
+
+
+def _environment_key_for(model: str | None) -> bool:
+    return environment_api_key(model) is not None
 
 
 def production_model() -> str | None:
@@ -108,9 +117,11 @@ def resolve_settings(
 ) -> ResolvedSettings:
     model = production_model()
     session_key = secrets.api_key(session_id)
-    # Hosted participants must bring their own key. Environment credentials remain
-    # available only to the local browser and CLI operator.
-    environment_key = not remote and _environment_key_for(model)
+    # The operator may configure one server-side provider key that serves every hosted
+    # participant, so onboarding does not demand a key from each person. A participant's
+    # own session key still wins when present. The operator key is never returned to a
+    # browser — only the boolean that analysis is configured.
+    environment_key = _environment_key_for(model)
     return ResolvedSettings(
         sec_user_agent=(
             os.environ.get("SEC_USER_AGENT")

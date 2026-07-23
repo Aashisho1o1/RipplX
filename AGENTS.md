@@ -223,8 +223,9 @@ Replace-style writes for XBRL, filing sections/FTS, and verifier results are tra
 
 Sensitive local data includes account emails, private tracked-ticker membership/preferences, the
 persisted local SEC User-Agent/contact email, and filing/metric data. SQLite and the data volume are
-plaintext; filesystem/container access is the data-at-rest boundary. Hosted participant provider
-keys are session-keyed process memory only, never SQLite fields, cookies, logs, or API responses.
+plaintext; filesystem/container access is the data-at-rest boundary. Participant provider keys are
+session-keyed process memory only, and the operator's shared key stays in process environment
+memory; neither is ever a SQLite field, cookie, log line, or API response.
 
 ---
 
@@ -328,10 +329,11 @@ fixed endpoint — `z-ai/<model>` routes to Zhipu GLM through z.ai's Anthropic-c
 (`https://api.z.ai/api/anthropic`), where the Anthropic API has no JSON-object response format so the
 prompt carries the JSON contract instead. Arbitrary providers and caller-supplied base-URL overrides
 stay out of the launch path. Broader provider/model flexibility inside dormant developer utilities is
-not a production configuration promise. CLI/local keys may come from the environment or browser
-session memory. Hosted participants must provide their own matching key; hosted requests ignore
-environment provider keys. Keys must never be logged, persisted, placed in cookies/browser storage,
-or returned.
+not a production configuration promise. Keys may come from the environment or browser session
+memory. The operator may configure one server-side key for the configured provider so hosted
+onboarding never demands a key from each participant; a participant's own session key takes
+precedence when present. Keys must never be logged, persisted, placed in cookies/browser storage,
+or returned, and the API reports only whether analysis is configured — never which key served it.
 
 ---
 
@@ -445,8 +447,11 @@ Request bodies are capped at 1 MiB for both declared-length and chunked streams.
 scope watchlists, briefs, filing/metric reads, preferences, mutations, and job polling to the current
 user; cross-user private resources return 404. Public SEC-derived artifacts remain shared. The single
 owner-tagged job registry strips diagnostics, allowlists verdicts, stages, and a closed set of typed
-no-op reason codes, and returns only fixed user-safe failure messages; caller-supplied item text is
-always discarded; unhandled API errors use a generic JSON contract. Decoded EDGAR responses
+no-op and stage-failure reason codes, and returns only fixed user-safe messages; a failed stage names
+its typed reason (`provider_failed`, `malformed_action_breakdown`, ...) so an operator can tell a
+rejected key from unusable model output, while any reason outside that vocabulary — and every raw
+exception string — is discarded; caller-supplied item text is always discarded; unhandled API errors
+use a generic JSON contract. Decoded EDGAR responses
 are capped at 64 MiB before cache writes. There is no durable queue, multi-instance coordination,
 team/role model, or persistent session registry.
 

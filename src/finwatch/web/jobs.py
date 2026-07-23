@@ -11,6 +11,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from finwatch.pipeline.progress import FAILURE_REASON_LABELS
+
 JobKind = Literal["sync", "analysis"]
 JobState = Literal["queued", "running", "completed", "partial", "failed"]
 DEFAULT_MAX_JOB_HISTORY = 100
@@ -36,6 +38,10 @@ _JOB_REASONS = {
         "There is nothing new to analyze right now."
     ),
 }
+# No-op reasons plus finwatch's own typed stage-failure reasons. Both are closed
+# vocabularies of fixed identifiers mapped to fixed operator-facing sentences; neither
+# carries provider text, filing content, or model-authored prose.
+_SAFE_REASONS = {**_JOB_REASONS, **FAILURE_REASON_LABELS}
 
 
 def _safe_message(
@@ -44,15 +50,22 @@ def _safe_message(
     """Return only fixed text; provider and exception strings are never display data."""
     if stage in _STAGE_LABELS:
         label = _STAGE_LABELS[stage]
+        if state in {"failed", "skipped"} or state not in {"queued", "running", "completed"}:
+            failed = f"{label} could not be completed."
+            if state == "skipped":
+                return f"{label} was not needed."
+            # Name WHY the stage failed when finwatch raised a typed reason. Without it
+            # every failure reads identically and an operator cannot separate a bad key
+            # from unusable model output.
+            explanation = FAILURE_REASON_LABELS.get(reason or "")
+            return f"{failed} {explanation}" if explanation else failed
         return {
             "queued": f"{label} is queued.",
             "running": f"{label}…",
             "completed": f"{label} complete.",
-            "skipped": f"{label} was not needed.",
-            "failed": f"{label} could not be completed.",
-        }.get(state, f"{label} could not be completed.")
-    if reason in _JOB_REASONS:
-        return _JOB_REASONS[reason]
+        }[state]
+    if reason in _SAFE_REASONS:
+        return _SAFE_REASONS[reason]
     if kind == "sync":
         return (
             "Filings and verified metrics synced."
@@ -149,7 +162,7 @@ class JobRegistry:
         state = item.state if item.state in _SAFE_ITEM_STATES else "failed"
         stage = item.stage if item.stage in _STAGE_LABELS else None
         verdict = item.verdict if item.verdict in _SAFE_VERDICTS else None
-        reason = item.reason if item.reason in _JOB_REASONS else None
+        reason = item.reason if item.reason in _SAFE_REASONS else None
         return item.model_copy(
             update={
                 "state": state,

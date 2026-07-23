@@ -66,3 +66,17 @@ describe("ProvenancePanel", () => {
     expect(screen.getByRole("link", { name: /Download certificate/ })).toHaveAttribute("href", "/api/filings/a-1/certificate?download=true");
   });
 });
+
+describe("stage failure reasons", () => {
+  it("names why a stage failed, and ignores a reason outside the allowlist", () => {
+    const stages: PipelineStage[] = [
+      { stage: "extract", label: "Research changes", status: "failed", attempts: 2, error: "Stage failed; details are withheld.", diagnostics: { reason: "provider_failed" } },
+      { stage: "verify", label: "Verify publication", status: "failed", attempts: 1, error: "Stage failed; details are withheld.", diagnostics: { reason: "sk-live-leaked-secret" } },
+    ];
+    render(<ProvenancePanel research={null} certificateUrl={null} pipeline={stages} terminalReasonLabel="—" />);
+
+    expect(screen.getByText("The model provider could not be reached or rejected the request.")).toBeInTheDocument();
+    // An unrecognised reason renders nothing rather than being echoed into the page.
+    expect(screen.queryByText(/sk-live-leaked-secret/)).toBeNull();
+  });
+});

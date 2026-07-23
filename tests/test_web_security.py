@@ -305,10 +305,34 @@ def test_public_users_have_private_watchlists_preferences_filings_and_jobs(
     assert bob.get(f"/api/jobs/{started.id}").status_code == 404
 
 
-def test_provider_keys_are_session_isolated_and_environment_key_is_ignored_remotely(
+def test_operator_environment_key_enables_hosted_analysis_without_exposing_it(
     tmp_path, monkeypatch
 ):
-    monkeypatch.setenv("OPENAI_API_KEY", "operator-key-must-not-be-shared")
+    """The operator may serve every hosted participant from one server-side key.
+
+    Onboarding must not demand a provider key from each person. The key itself stays in
+    the process: it is never echoed to a browser, never written to SQLite, and never
+    reported as anything richer than the configured/not-configured boolean.
+    """
+    operator_key = "operator-key-must-not-be-exposed"
+    monkeypatch.setenv("OPENAI_API_KEY", operator_key)
+    app, sender = _remote_app(tmp_path, monkeypatch)
+    alice, _ = _login(app, sender, "alice@example.com")
+
+    bootstrap = alice.get("/api/bootstrap")
+    payload = bootstrap.json()
+    # A participant who supplied no key of their own can still analyze.
+    assert payload["api_key_configured"] is True
+    assert payload["analysis_configured"] is True
+    # ...but the operator's credential never crosses the API boundary, and the source
+    # of the key is not disclosed either.
+    assert operator_key not in bootstrap.text
+    assert "api_key_source" not in payload
+    assert operator_key.encode() not in (tmp_path / "db.sqlite").read_bytes()
+
+
+def test_provider_keys_are_session_isolated_and_never_persisted(tmp_path, monkeypatch):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     app, sender = _remote_app(tmp_path, monkeypatch)
     alice, _ = _login(app, sender, "alice@example.com")
     bob, _ = _login(app, sender, "bob@example.com")

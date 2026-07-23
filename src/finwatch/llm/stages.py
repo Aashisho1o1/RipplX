@@ -16,7 +16,16 @@ def _now_iso() -> str:
 
 
 class StageError(RuntimeError):
-    """A run-level harness failure that withholds the filing."""
+    """A run-level harness failure that withholds the filing.
+
+    Carries the originating typed ``reason`` so the stage ledger can record WHY the
+    stage failed without parsing this exception's message. The message itself is never
+    persisted or displayed.
+    """
+
+    def __init__(self, message: str, *, reason: str | None = None) -> None:
+        self.reason = reason
+        super().__init__(message)
 
 
 class P1Extractor:
@@ -56,5 +65,7 @@ class P1Extractor:
                 data_quality=data_quality or [],
             )
         except HarnessError as exc:
-            raise StageError(f"P1 harness stopped: {exc.reason}") from exc
+            raise StageError(
+                f"P1 harness stopped: {exc.reason}", reason=exc.reason
+            ) from exc
         return result

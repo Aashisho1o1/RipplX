@@ -43,6 +43,7 @@ from finwatch.web.runtime import (
     LOCAL_SESSION_ID,
     SETTING_USER_AGENT,
     RuntimeSecrets,
+    environment_api_key,
     provider_for_model,
     resolve_settings,
 )
@@ -980,7 +981,14 @@ def create_app(
                         f"{filing.accession_number}"
                     )
 
-                    def progress(stage, state, _message, _diagnostics, key=filing_key):
+                    def progress(stage, state, _message, diagnostics, key=filing_key):
+                        # Carry only the typed failure reason; the registry re-checks it
+                        # against its own allowlist before any of it reaches a browser.
+                        reason = (
+                            diagnostics.get("reason")
+                            if isinstance(diagnostics, dict)
+                            else None
+                        )
                         registry.upsert_item(
                             job_id,
                             JobItem(
@@ -988,6 +996,7 @@ def create_app(
                                 state=state,
                                 message="",
                                 stage=stage,
+                                reason=reason if isinstance(reason, str) else None,
                             ),
                         )
 
@@ -1050,10 +1059,11 @@ def create_app(
             raise ApiProblem(
                 409, "missing_user_agent", "Configure the SEC User-Agent first."
             )
-        api_key_configured = bool(
-            session_api_key or (not remote and settings.api_key_source == "environment")
-        )
-        if not settings.model or not api_key_configured:
+        # A participant's own session key wins; otherwise fall back to the operator's
+        # server-side key for the configured provider. The key itself never leaves the
+        # process — it is handed straight to the job's LLM client.
+        run_api_key = session_api_key or environment_api_key(settings.model)
+        if not settings.model or not run_api_key:
             raise ApiProblem(
                 409, "model_not_configured", "Configure the analysis model and API key first."
             )
@@ -1064,7 +1074,7 @@ def create_app(
                     principal.user_id,
                     settings.sec_user_agent or "",
                     settings.model,
-                    session_api_key,
+                    run_api_key,
                     ticker,
                     payload.form_type,
                 ),

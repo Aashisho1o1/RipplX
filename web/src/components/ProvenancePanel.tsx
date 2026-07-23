@@ -22,6 +22,26 @@ export const DROP_CODE_LABEL: Record<string, string> = {
   LOW_CONFIDENCE: "The reviewer could not support the claim with enough confidence.",
 };
 
+// Typed stage-failure reasons (src/finwatch/pipeline/progress.py FAILURE_REASONS). A
+// failed stage otherwise reads identically whatever went wrong, which hides the
+// difference between a rejected provider key and unusable model output.
+export const STAGE_FAILURE_LABEL: Record<string, string> = {
+  provider_failed: "The model provider could not be reached or rejected the request.",
+  malformed_action_breakdown: "The model did not return usable structured actions.",
+  budget_exhausted: "The bounded research budget ran out before a result was reached.",
+  compile_failed: "No candidate finding passed the deterministic compiler.",
+  repair_compile_failed: "The single allowed repair did not produce a compiling result.",
+  skeptic_blocked: "The finance reviewer's objections removed every candidate finding.",
+  skeptic_incomplete: "The finance review stage did not complete.",
+  form_scope: "The filing identity did not match the requested filing.",
+  critical_coverage: "A required critical finding was missing.",
+};
+
+export function stageFailureLabel(stage: PipelineStage): string | null {
+  const reason = stage.diagnostics?.reason;
+  return typeof reason === "string" ? STAGE_FAILURE_LABEL[reason] ?? null : null;
+}
+
 function labelKey(value: string): string {
   return value.replaceAll("_", " ").replace(/^./, first => first.toUpperCase());
 }
@@ -96,7 +116,7 @@ export function ProvenancePanel({
     {pipeline.length > 0 && <div className="stage-ledger" aria-label="Processing stages">{pipeline.map((stage, index) => <div className={`stage-row ${stage.status}`} key={stage.stage}>
       <span className="stage-index">{String(index + 1).padStart(2, "0")}</span>
       <span className="stage-mark" aria-hidden="true">{stage.status === "failed" ? "!" : "·"}</span>
-      <span><strong>{stage.label}</strong>{stage.attempts > 1 && <small>attempt {stage.attempts} of {stage.attempts}</small>}</span>
+      <span><strong>{stage.label}</strong>{stage.attempts > 1 && <small>attempt {stage.attempts} of {stage.attempts}</small>}{stageFailureLabel(stage) && <small>{stageFailureLabel(stage)}</small>}</span>
       <span className="stage-status">{stage.error ?? stage.status}</span>
     </div>)}</div>}
 

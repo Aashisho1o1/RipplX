@@ -449,3 +449,69 @@ def test_v5_still_blocks_a_single_offending_headline():
 
     assert report.verdict == "FAIL"
     assert any("trade" in (r.detail or "") for r in report.results if r.verdict == "fail")
+
+
+def test_stage_failure_records_typed_reason_but_never_raw_exception_text(tmp_path):
+    """A failed stage must say WHY without ever storing provider/exception text.
+
+    Before this, every failure persisted the same fixed sentence, so an operator could
+    not tell a rejected API key from a model returning unusable JSON — two failures with
+    completely different fixes looked identical in the UI.
+    """
+    from finwatch.llm.harness import HarnessError
+    from finwatch.pipeline.progress import StageReporter
+
+    connection = init_db(str(tmp_path / "reason.db"))
+    repo = Repo(connection)
+    _seed(repo)
+    reporter = StageReporter(repo, ACCN)
+
+    reporter.failed("extract", HarnessError("provider_failed"))
+    stage = {row.stage: row for row in repo.list_filing_stages(ACCN)}["extract"]
+    assert stage.status == "failed"
+    assert json.loads(stage.diagnostics_json)["reason"] == "provider_failed"
+    assert "provider_failed" not in (stage.error or "")
+
+    # An arbitrary exception carries untrusted text: no reason is recorded and no part
+    # of the message survives anywhere in the persisted row.
+    secret = "sk-live-must-never-be-persisted"
+    reporter.failed("extract", RuntimeError(f"401 unauthorized {secret}"))
+    stage = {row.stage: row for row in repo.list_filing_stages(ACCN)}["extract"]
+    assert "reason" not in json.loads(stage.diagnostics_json)
+    assert secret not in (stage.error or "")
+    assert secret not in stage.diagnostics_json
+    connection.close()
+
+
+def test_job_messages_explain_typed_stage_failures_only_from_the_allowlist():
+    from finwatch.web.jobs import _safe_message
+
+    explained = _safe_message("analysis", state="failed", stage="extract", reason="provider_failed")
+    assert "could not be completed" in explained
+    assert "provider could not be reached" in explained
+
+    # An unknown reason degrades to the bare fixed sentence rather than being echoed.
+    bare = _safe_message("analysis", state="failed", stage="extract", reason="sk-live-secret")
+    assert bare == "Researching important changes could not be completed."
+    assert _safe_message("analysis", state="completed", stage="extract") == (
+        "Researching important changes complete."
+    )
+
+
+def test_wrapped_stage_error_preserves_the_typed_reason():
+    """A layer that rephrases the message must not lose the reason.
+
+    P1Extractor re-raises HarnessError as StageError("P1 harness stopped: ..."). Reading
+    the reason from the message text would break here — the ledger recorded nothing at
+    all for a real provider failure until the reason travelled as an attribute.
+    """
+    from finwatch.llm.harness import HarnessError
+    from finwatch.llm.stages import StageError
+    from finwatch.pipeline.progress import failure_reason
+
+    assert failure_reason(HarnessError("provider_failed")) == "provider_failed"
+    wrapped = StageError("P1 harness stopped: provider_failed", reason="provider_failed")
+    assert failure_reason(wrapped) == "provider_failed"
+    # An untyped wrapper still yields nothing rather than leaking its message.
+    assert failure_reason(StageError("P1 harness stopped: sk-live-secret")) is None
+    assert failure_reason(RuntimeError("401 unauthorized sk-live-secret")) is None

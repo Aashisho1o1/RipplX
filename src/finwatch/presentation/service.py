@@ -15,7 +15,7 @@ from finwatch.metrics.catalog import (
     STARTER_METRICS,
 )
 from finwatch.metrics.envelope import InputUsed, MetricResult
-from finwatch.pipeline.progress import PIPELINE_STAGES, STAGE_LABELS
+from finwatch.pipeline.progress import FAILURE_REASONS, PIPELINE_STAGES, STAGE_LABELS
 from finwatch.preprocess.forms import ANALYZABLE_FORMS, base_form
 from finwatch.presentation.canonical import build_filing_entry
 from finwatch.presentation.formatting import (
@@ -415,11 +415,13 @@ class PresentationService:
             stored = stored_stages.get(stage)
             raw_error = stored.error if stored else None
             diagnostics = {}
-            if stage == "parse" and stored:
+            persisted: dict | object = {}
+            if stored:
                 try:
                     persisted = json.loads(stored.diagnostics_json)
                 except (TypeError, ValueError):
                     persisted = {}
+            if stage == "parse" and stored:
                 sections_found = (
                     persisted.get("sections_found") if isinstance(persisted, dict) else None
                 )
@@ -427,6 +429,12 @@ class PresentationService:
                     isinstance(section, str) for section in sections_found
                 ):
                     diagnostics = {"sections_found": sections_found}
+            if raw_error and isinstance(persisted, dict):
+                # Only the closed FAILURE_REASONS vocabulary crosses the API boundary;
+                # a stored value outside it is discarded rather than projected.
+                reason = persisted.get("reason")
+                if isinstance(reason, str) and reason in FAILURE_REASONS:
+                    diagnostics = {**diagnostics, "reason": reason}
             pipeline.append(
                 PipelineStageView(
                     stage=stage,
