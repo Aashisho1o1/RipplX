@@ -52,7 +52,7 @@ def test_prompt_loader_splices_foundation_and_versions():
     assert "[FOUNDATION BLOCK]" not in text
     assert "R1. NUMBERS" in text            # foundation content spliced in
     assert "filing-research Generator" in text
-    assert version == "P1_extractor.v8+foundation.v2"
+    assert version == "P1_extractor.v9+foundation.v2"
     assert '"findings"' in text and '"critical_flag"' in text
     assert "the server derives them" in text  # offsets are server-anchored, not model-supplied
 
@@ -202,8 +202,6 @@ def test_critical_flag_is_strictly_controlled_and_severity_gated():
 
 
 def test_p1_compiler_localizes_numbers_and_schema_keeps_severity_consistent():
-    from pydantic import ValidationError
-
     for headline in ("Revenue rose 12 percent", "Revenue rose fifty percent"):
         draft = P1Output.model_validate({
             **VALID_P1,
@@ -217,18 +215,63 @@ def test_p1_compiler_localizes_numbers_and_schema_keeps_severity_consistent():
             metrics=MetricsBundle(),
         )
         assert "AUTHORED_NUMBER" in {issue.code for issue in result.issues}
-    with pytest.raises(ValidationError):
-        P1Output.model_validate({
+    # overall_severity is derived from the findings, so it can never disagree with them
+    # no matter what the model authored — including a severity it invented outright.
+    for authored, findings, expected in (
+        ("high", [_finding(severity="medium")], "medium"),
+        ("critical", [], "routine"),
+        ("low", [_finding(severity="medium"), _finding(finding_id="f2", severity="high")],
+         "high"),
+        ("routine", [_finding(severity="critical", critical_flag="going_concern")],
+         "critical"),
+    ):
+        output = P1Output.model_validate({
             **VALID_P1,
-            "classification": {"overall_severity": "high"},
-            "findings": [_finding(severity="medium")],
+            "classification": {"overall_severity": authored},
+            "findings": findings,
         })
-    with pytest.raises(ValidationError):
-        P1Output.model_validate({
-            **VALID_P1,
-            "classification": {"overall_severity": "critical"},
-            "findings": [],
-        })
+        assert output.classification.overall_severity == expected
+
+
+def test_routine_classification_beside_a_low_finding_is_derived_not_rejected():
+    """The exact GLM draft that used to end an MSFT 10-Q run.
+
+    "routine" overall beside one "low" finding is a natural reading of a boring 10-Q.
+    It used to fail P1Output validation, which happens at the ACTION-parsing layer in
+    llm/harness.py — so the compiler never saw the draft, the one repair was never
+    spent, and two such turns withheld the whole filing as malformed_action_breakdown.
+    The finding must survive, and the headline severity must follow it.
+    """
+    output = P1Output.model_validate({
+        **VALID_P1,
+        "classification": {"overall_severity": "routine"},
+        "findings": [_finding(headline="Revenue and net income both grew", severity="low")],
+    })
+    assert output.classification.overall_severity == "low"
+    assert [finding.finding_id for finding in output.findings] == ["f1"]
+
+
+def test_pruning_every_finding_re_derives_the_headline_severity_as_routine():
+    """A filing whose only finding is dropped must not keep a 'critical' headline."""
+    draft = P1Output.model_validate({
+        **VALID_P1,
+        "classification": {"overall_severity": "critical"},
+        "findings": [_finding(
+            headline="Revenue rose 12 percent", severity="critical",
+            critical_flag="going_concern",
+        )],
+    })
+    assert draft.classification.overall_severity == "critical"
+    result = compile_draft(
+        draft,
+        trusted_meta={"accession_number": "a-1", "ticker": "T", "form_type": "8-K"},
+        sections={"item_2_02": {"text": "hello"}},
+        metrics=MetricsBundle(),
+        prune=True,
+    )
+    assert result.output.findings == []
+    assert [row.finding_id for row in result.dropped] == ["f1"]
+    assert result.output.classification.overall_severity == "routine"
 
 
 @pytest.mark.parametrize(

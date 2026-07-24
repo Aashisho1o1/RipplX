@@ -223,6 +223,28 @@ def test_two_slips_separated_by_a_valid_action_do_not_break_down():
     assert _trace(repo)["research_outcome"] == "published"
 
 
+def test_routine_classification_beside_a_low_finding_publishes():
+    # The exact shape that ended a real MSFT 10-Q run: GLM read the filing as "routine"
+    # overall while grading its single finding "low". That mismatch used to fail P1Output
+    # validation at the ACTION-parsing layer, so compile_draft never saw the draft, the one
+    # repair was never spent, and two such turns in a row withheld the whole filing as
+    # malformed_action_breakdown. Severity is derived now: the finding must publish, the
+    # headline severity must follow it, and the repair must remain unspent.
+    repo = Repo(init_db(":memory:"))
+    draft = _draft(_finding("f1", "Revenue increased", severity="low"))
+    draft["classification"]["overall_severity"] = "routine"
+    llm = FakeLLMClient(responses=[_submit(draft), _done()])
+
+    output = P1Extractor(llm, repo).run(filing_meta=META, sections=SECTIONS).output
+
+    assert [row.finding_id for row in output.findings] == ["f1"]
+    assert output.classification.overall_severity == "low"
+    trace = _trace(repo)
+    assert trace["research_outcome"] == "published"
+    assert trace["research_terminal_reason"] == "verified"
+    assert trace["repair_used"] is False
+
+
 def test_final_compiler_drops_only_bad_finding_after_shared_repair():
     repo = Repo(init_db(":memory:"))
     repo.upsert_company(Company(

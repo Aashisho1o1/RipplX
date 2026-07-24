@@ -52,6 +52,11 @@ Item 2.04 acceleration, Item 3.01 delisting, and Item 4.02 non-reliance are crit
 going-concern doubt, auditor resignation, and material weakness are at least high.
 Item 1.05 is critical only for a disclosed material impact.
 
+classification.overall_severity follows your findings rather than being judged on its
+own: set it to the highest severity among them, or routine only when you report none.
+The server derives this field from the findings you submit, so a mismatch is corrected
+silently — never delete or downgrade a finding to make the two agree.
+
 Draft shape:
 {"accession_number":str,"ticker":str,"form_type":str,
  "classification":{"overall_severity":"critical|high|medium|low|routine"},

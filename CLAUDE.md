@@ -343,8 +343,13 @@ against the registry metric's rounding-aware delta. Offsets are server-derived r
 named canonical section and must satisfy
 `section_text[start:end] == snippet`.
 
-Medium/high/critical classifications require a finding; an empty finding list is legitimate only
-for low/routine filings. Canonical 8-K Items 1.03, 2.04, 3.01, and 4.02 deterministically require the
+`classification.overall_severity` is derived, never authored: `derive_overall_severity` in
+`llm/schemas.py` sets it to the highest severity among the findings, or `routine` when there are
+none, and `verify/compiler.py` re-derives through the same function after pruning. A filing can
+therefore never present a headline severity its findings do not support, and a model that misgrades
+the field is corrected rather than rejected — the earlier reject-on-mismatch rule fired at the
+action-parsing layer, ahead of the compiler and its one repair, and withheld whole filings over a
+field the compiler recomputes anyway. Canonical 8-K Items 1.03, 2.04, 3.01, and 4.02 deterministically require the
 corresponding critical, section-backed finding; prompt/evaluation rules cover semantic
 going-concern, auditor, control, and material-cyber cases. No evidence means no finding. Echoed
 accession, ticker, and form must match trusted filing metadata before persistence.

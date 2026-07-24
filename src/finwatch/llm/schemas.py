@@ -118,6 +118,22 @@ class Finding(BaseModel):
         return self
 
 
+SEVERITY_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+
+
+def derive_overall_severity(findings: list[Finding]) -> str:
+    """The single rule for a filing's overall severity: the highest one it publishes.
+
+    Severity is derived from the findings, never judged independently of them, so the
+    headline severity a reader sees can never disagree with the findings underneath it.
+    ``verify/compiler.py`` re-derives through this same function after pruning, so a
+    filing whose findings were all dropped reports ``routine``.
+    """
+    if not findings:
+        return "routine"
+    return min((finding.severity for finding in findings), key=SEVERITY_RANK.__getitem__)
+
+
 class P1Output(BaseModel):
     model_config = _STRICT
     accession_number: str
@@ -139,17 +155,19 @@ class P1Output(BaseModel):
                     raise ValueError("finding evidence accession_number must match P1 output")
                 if evidence.form_type != self.form_type:
                     raise ValueError("finding evidence form_type must match P1 output")
-
-        if not self.findings:
-            if self.classification.overall_severity not in {"routine", "low"}:
-                raise ValueError("medium/high/critical classification requires a finding")
-            return self
-
-        rank = {"critical": 0, "high": 1, "medium": 2, "low": 3}
-        highest = min((finding.severity for finding in self.findings), key=rank.__getitem__)
-        if self.classification.overall_severity != highest:
-            raise ValueError("overall_severity must equal the highest finding severity")
         flags = [finding.critical_flag for finding in self.findings if finding.critical_flag]
         if len(flags) != len(set(flags)):
             raise ValueError("critical_flag values must be unique within a P1 output")
+
+        # overall_severity is DERIVED here, not validated against what the model authored.
+        # Rejecting a mismatch cost real filings: "routine" alongside one "low" finding is
+        # a natural model reading of a boring 10-Q, but the rejection landed at the
+        # ACTION-parsing layer in llm/harness.py — before compile_draft could raise a typed
+        # issue or spend the one repair — so two such turns in a row ended the whole run as
+        # malformed_action_breakdown, and runs that survived did so by deleting findings to
+        # satisfy a field the compiler recomputes anyway. Deriving enforces the invariant
+        # unconditionally instead of only when the model happens to agree.
+        self.classification = Classification(
+            overall_severity=derive_overall_severity(self.findings)
+        )
         return self

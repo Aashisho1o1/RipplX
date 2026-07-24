@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from pydantic import BaseModel, ConfigDict
 
 from finwatch.core.text_policy import authored_text_violations
-from finwatch.llm.schemas import Classification, Finding, P1Output
+from finwatch.llm.schemas import SEVERITY_RANK, Finding, P1Output
 from finwatch.metrics.envelope import MetricsBundle
 from finwatch.preprocess.forms import base_form, is_amendment
 
@@ -120,9 +120,6 @@ def _finding_issues(
     return issues
 
 
-_SEVERITY_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3}
-
-
 def _evidence_span(finding: Finding) -> frozenset[tuple[str, int, int]] | None:
     """The anchored spans a finding cites, or None if any span failed to anchor."""
     spans: list[tuple[str, int, int]] = []
@@ -193,7 +190,7 @@ def _duplicate_evidence_issues(
         keeper = min(group, key=lambda row: (
             0 if _satisfies_required_coverage(row, required) else 1,
             0 if row.critical_flag else 1,
-            _SEVERITY_RANK.get(row.severity, 9),
+            SEVERITY_RANK.get(row.severity, 9),
             row.finding_id,
         ))
         for finding in group:
@@ -291,13 +288,11 @@ def compile_draft(
             for finding in anchored.findings
             if finding.finding_id in codes_by_finding
         ]
-        severity = "routine"
-        if survivors:
-            rank = {"critical": 0, "high": 1, "medium": 2, "low": 3}
-            severity = min((finding.severity for finding in survivors), key=rank.__getitem__)
         payload = anchored.model_dump(mode="json")
         payload["findings"] = [finding.model_dump(mode="json") for finding in survivors]
-        payload["classification"] = Classification(overall_severity=severity).model_dump()
+        # Re-validation re-derives classification.overall_severity from the findings that
+        # actually survived the prune; ``derive_overall_severity`` in llm/schemas.py is the
+        # only place that rule lives, so a pruned filing cannot keep a stale headline.
         anchored = P1Output.model_validate(payload)
 
     if not _critical_coverage(anchored, set(sections)):
