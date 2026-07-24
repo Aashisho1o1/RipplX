@@ -977,6 +977,99 @@ def test_repair_that_omits_a_clean_baseline_finding_records_the_loss():
     assert trace["research_terminal_reason"] != "verified"
 
 
+def test_skeptic_recovers_from_an_isolated_malformed_reply():
+    """One bad Skeptic reply between good ones must not abandon the finance review.
+
+    The Skeptic's invalid-action counter was cumulative and never reset, so two
+    non-consecutive malformed replies ended the whole pass as skeptic_incomplete even
+    though the model was working. The generator loop resets for exactly this reason.
+    """
+    responses = [
+        _submit(_baseline_pair()),
+        "not json at all",                                   # slip 1
+        _tool("search_sections", {"queries": ["Revenue"]}),  # valid tool -> resets
+        "still not json",                                    # slip 2, previously fatal
+        _done([{"finding_id": "f2", "code": "LOW_CONFIDENCE"}]),
+        _submit(_draft(_finding("f1", "Revenue increased"))),
+        _done([]),
+    ]
+    _output, trace = _run(responses)
+
+    assert trace["research_terminal_reason"] != "skeptic_incomplete"
+
+
+def test_skeptic_still_terminates_when_every_reply_is_malformed():
+    """The reset must not make the loop unbounded.
+
+    A `done` naming an unknown finding_id is schema-valid but semantically rejected and
+    consumes no tool budget, so resetting on any validated action would let the Skeptic
+    repeat it forever. The reset is tied to a successful tool call, which is hard-capped.
+    """
+    responses = [
+        _submit(_baseline_pair()),
+        *["not json"] * 12,
+        *[_done([{"finding_id": "f9", "code": "LOW_CONFIDENCE"}])] * 12,
+        *[_tool("search_sections", {"queries": ["x"]})] * 12,
+    ]
+    # The pass must end on its own budget rather than exhausting the response queue.
+    _output, trace = _run(responses)
+
+    assert trace["research_terminal_reason"] in {
+        "skeptic_incomplete", "verified", "skeptic_blocked",
+    }
+    assert trace["skeptic_tool_calls"] <= 2
+
+
+def test_dropping_the_objected_finding_is_recorded_even_when_its_id_is_reused():
+    """The objected claim is gone; a clean finding wearing its label is not a repair.
+
+    Survival used to be keyed on finding_id alone, so a repair that dropped the objected
+    claim and renumbered a clean finding onto its id recorded no drop at all: outcome
+    "published", terminal "verified", dropped_findings empty. That trace is hashed into
+    the owner-visible certificate, so the attestation stated a Skeptic objection removed
+    nothing. The published content here is identical to the label-only control below —
+    only the id differs — so the two must not disagree about what was dropped.
+    """
+    objection = _done([{"finding_id": "f1", "code": "MATERIALITY_OVERREACH"}])
+    # The objected claim ("Revenue increased") is dropped; the clean f2 claim takes id f1.
+    renumbered_clean = _draft(
+        _finding("f1", "costs remained stable", headline="Costs remained stable")
+    )
+    output, trace = _run(
+        [_submit(_baseline_pair()), objection, _submit(renumbered_clean), _done([])]
+    )
+
+    assert [row.headline for row in output.findings] == ["Costs remained stable"]
+    assert any(
+        row["finding_id"] == "f1" and "MATERIALITY_OVERREACH" in row["error_codes"]
+        for row in trace["dropped_findings"]
+    ), trace["dropped_findings"]
+    assert trace["research_terminal_reason"] == "skeptic_blocked"
+    assert trace["research_outcome"] == "partial"
+
+
+def test_repair_that_only_rewrites_the_headline_discharges_its_objection():
+    """The control for the test above: same id kept, claim genuinely rewritten.
+
+    A rewritten headline over the same quote IS the repair, so it must discharge the
+    objection rather than be recorded as a drop — otherwise the signature-aware survival
+    test would prune corrected findings and, on a required 8-K critical finding, withhold
+    the whole filing.
+    """
+    objection = _done([{"finding_id": "f1", "code": "MATERIALITY_OVERREACH"}])
+    rewritten = _draft(
+        _finding("f1", "Revenue increased", headline="Revenue rose on services"),
+        _finding("f2", "costs remained stable", headline="Costs remained stable"),
+    )
+    output, trace = _run(
+        [_submit(_baseline_pair()), objection, _submit(rewritten), _done([])]
+    )
+
+    assert "Revenue rose on services" in [row.headline for row in output.findings]
+    assert trace["dropped_findings"] == []
+    assert trace["research_terminal_reason"] == "verified"
+
+
 def test_renumbering_cannot_launder_a_skeptic_objection():
     """Objections discharge on the cited evidence, not on the finding label.
 

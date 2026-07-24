@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Container, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Annotated, Literal
@@ -216,6 +216,42 @@ def _normalize_tool_arguments(raw: object) -> object:
         if isinstance(value, list) and len(value) > cap:
             args[field_name] = value[:cap]
     return raw
+
+
+# A finding's identity for repair reconciliation: authored claim + the evidence it cites
+# (see FilingResearchHarness._finding_signature).
+_FindingSignature = tuple[str, frozenset[tuple[str, str]]]
+
+
+def _survived_repair(
+    baseline_id: str,
+    baseline_sig_by_id: Mapping[str, _FindingSignature],
+    published_sig_by_id: Mapping[str, _FindingSignature],
+    surviving_sigs: Container[_FindingSignature],
+) -> bool:
+    """Whether a pre-repair finding still reaches the user after the shared repair.
+
+    ``finding_id`` is a label the model chooses freely, so keying survival on it alone
+    lets a repair launder an objection by renumbering: drop the objected claim, move a
+    clean finding onto its id, and the run records no drop at all — which then reaches
+    the signed certificate as "nothing was dropped, terminated verified".
+
+    Survival is therefore signature-first: the same authored claim over the same evidence
+    published under ANY label still survived. The id only counts as survival when the
+    finding now wearing it is not simply a different baseline finding renumbered onto
+    that label — that residual case is the genuine repair (e.g. a rewritten headline over
+    the same quote), which discharges its objection rather than recording a drop.
+    """
+    own = baseline_sig_by_id.get(baseline_id)
+    if own is not None and own in surviving_sigs:
+        return True
+    published_sig = published_sig_by_id.get(baseline_id)
+    if published_sig is None:
+        return False
+    return not any(
+        other_id != baseline_id and other_sig == published_sig
+        for other_id, other_sig in baseline_sig_by_id.items()
+    )
 
 
 _FINDING_ADAPTER = TypeAdapter(Finding)
@@ -936,6 +972,15 @@ class FilingResearchHarness:
                 state["last_error"] = "SKEPTIC_TOOL_BUDGET_EXHAUSTED_RETURN_DONE"
                 return _SkepticPassResult(completed=False)
             counters.skeptic_tool_calls += 1
+            # A successful tool call clears the slate, so an isolated malformed reply
+            # between good ones no longer abandons the whole finance review (the
+            # generator loop resets for the same reason). The reset is deliberately here
+            # and NOT after validate_python: a `done` naming an unknown finding_id is
+            # schema-valid but semantically rejected and consumes no tool budget, so
+            # resetting there would let the Skeptic repeat it forever. Tool calls are
+            # hard-capped at MAX_SKEPTIC_TOOL_CALLS, which keeps this loop bounded.
+            invalid_actions = 0
+            state.pop("last_error", None)
             # The Skeptic's action union has no check_draft, so it never compiles a draft.
             result, _ = self._execute_tool(
                 action, context, check_draft_used=True, extra_issues=[]
@@ -1178,20 +1223,28 @@ class FilingResearchHarness:
                                 )
                                 dropped.extend(carried_drops)
                                 objection_caused_drop = bool(carried_drops)
-                            surviving_ids = {
-                                finding.finding_id for finding in output.findings
-                            }
                             surviving_sigs = {
                                 self._finding_signature(finding)
                                 for finding in output.findings
                             }
+                            published_sig_by_id = {
+                                finding.finding_id: self._finding_signature(finding)
+                                for finding in output.findings
+                            }
+                            baseline_sig_by_id = {
+                                finding.finding_id: self._finding_signature(finding)
+                                for finding in baseline.findings
+                            }
                             recorded = {row.finding_id for row in dropped}
                             # An objected finding the repair actually removed is a
                             # discharged objection; record why it is gone. A finding
-                            # still published under its own id was repaired with new
-                            # evidence and is not a drop.
+                            # genuinely repaired under its own id is not a drop, but a
+                            # clean finding renumbered onto that id is not a repair.
                             for row in original_objections:
-                                if row.finding_id in surviving_ids:
+                                if _survived_repair(
+                                    row.finding_id, baseline_sig_by_id,
+                                    published_sig_by_id, surviving_sigs,
+                                ):
                                     continue
                                 # The objected finding is gone, so the objection took
                                 # effect regardless of which layer recorded the drop —
@@ -1207,11 +1260,12 @@ class FilingResearchHarness:
                             # A clean, unobjected baseline finding the repair simply
                             # dropped must be recorded rather than silently lost.
                             for finding in baseline.findings:
-                                if finding.finding_id in surviving_ids:
+                                if _survived_repair(
+                                    finding.finding_id, baseline_sig_by_id,
+                                    published_sig_by_id, surviving_sigs,
+                                ):
                                     continue
                                 if finding.finding_id in recorded:
-                                    continue
-                                if self._finding_signature(finding) in surviving_sigs:
                                     continue
                                 dropped.append(DroppedFinding(
                                     finding_id=finding.finding_id,
