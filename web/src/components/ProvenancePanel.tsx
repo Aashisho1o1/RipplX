@@ -20,6 +20,8 @@ export const DROP_CODE_LABEL: Record<string, string> = {
   MATERIALITY_OVERREACH: "The claim overstated what the evidence established.",
   MISSING_CHANGE_BASIS: "The claim lacked evidence from a changed passage.",
   LOW_CONFIDENCE: "The reviewer could not support the claim with enough confidence.",
+  FINDING_SCHEMA_INVALID: "The finding did not satisfy the extraction contract.",
+  EVIDENCE_IDENTITY_MISMATCH: "The quotation claimed a different filing or form.",
 };
 
 // Typed stage-failure reasons (src/finwatch/pipeline/progress.py FAILURE_REASONS). A

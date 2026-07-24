@@ -24,10 +24,12 @@ SECTIONS = {"mdna": {"text": "Revenue increased while costs remained stable."}}
 
 
 def _draft(*findings, form_type="10-Q"):
-    severity = "routine"
-    if findings:
-        rank = {"critical": 0, "high": 1, "medium": 2, "low": 3}
-        severity = min((row["severity"] for row in findings), key=rank.__getitem__)
+    # Mirrors a well-behaved model: the envelope severity follows the findings it can
+    # grade. A finding carrying a bogus severity is the finding's own error, so it must
+    # not make the envelope unparsable too. The server derives this field regardless.
+    rank = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+    gradable = [row["severity"] for row in findings if row["severity"] in rank]
+    severity = min(gradable, key=rank.__getitem__) if gradable else "routine"
     return {
         "accession_number": META["accession_number"], "ticker": "TEST",
         "form_type": form_type,
@@ -321,6 +323,159 @@ def test_dropping_required_critical_finding_withholds_run():
 
     trace = json.loads(repo.latest_analysis(META["accession_number"], "P1_TRACE").output_json)
     assert trace["research_outcome"] == "withheld"
+
+
+# ---- per-finding schema errors are compiler drops, not protocol breakdown ----
+@pytest.mark.parametrize(
+    ("broken", "code"),
+    [
+        # every rule a single finding can violate on its own
+        ({"severity": "banana"}, "FINDING_SCHEMA_INVALID"),
+        ({"headline": ""}, "FINDING_SCHEMA_INVALID"),
+        ({"metric_id": "revenue_growth"}, "FINDING_SCHEMA_INVALID"),   # no direction
+        ({"critical_flag": "going_concern", "severity": "medium"}, "FINDING_SCHEMA_INVALID"),
+        ({"critical_flag": "invented_flag", "severity": "high"}, "FINDING_SCHEMA_INVALID"),
+        ({"evidence": [{
+            "accession_number": "9999999999-99-999999", "form_type": "10-Q",
+            "section_key": "mdna", "snippet": "Revenue increased",
+        }]}, "EVIDENCE_IDENTITY_MISMATCH"),
+    ],
+)
+def test_one_schema_invalid_finding_is_dropped_and_the_rest_publish(broken, code):
+    # A finding that breaks its own contract is a CONTENT mistake — the same class the
+    # compiler already prunes per finding. It used to fail strict union validation, so the
+    # whole action died as a protocol error and took every good finding beside it down.
+    repo = Repo(init_db(":memory:"))
+    draft = _draft(
+        _finding("f1", "Revenue increased"),
+        _finding("f2", "Revenue increased", **broken),
+    )
+    llm = FakeLLMClient(responses=[_submit(draft), _submit(draft), _done()])
+
+    output = P1Extractor(llm, repo).run(filing_meta=META, sections=SECTIONS).output
+
+    assert [row.finding_id for row in output.findings] == ["f1"]
+    trace = _trace(repo)
+    assert trace["dropped_findings"] == [{"finding_id": "f2", "error_codes": [code]}]
+    assert trace["research_outcome"] == "partial"
+
+
+def test_a_51_word_quotation_drops_only_its_own_finding():
+    repo = Repo(init_db(":memory:"))
+    long_snippet = " ".join(f"word{n}" for n in range(51))
+    sections = {"mdna": {"text": f"Revenue increased. {long_snippet}"}}
+    draft = _draft(
+        _finding("f1", "Revenue increased"),
+        _finding("f2", long_snippet),
+    )
+    llm = FakeLLMClient(responses=[_submit(draft), _submit(draft), _done()])
+
+    output = P1Extractor(llm, repo).run(filing_meta=META, sections=sections).output
+
+    assert [row.finding_id for row in output.findings] == ["f1"]
+    assert _trace(repo)["dropped_findings"] == [
+        {"finding_id": "f2", "error_codes": ["FINDING_SCHEMA_INVALID"]}
+    ]
+
+
+def test_every_finding_schema_invalid_publishes_metrics_only_not_breakdown():
+    # The whole point: a stuck model no longer withholds the filing. Two submits whose
+    # only finding is unparsable used to be two invalid actions in a row.
+    repo = Repo(init_db(":memory:"))
+    draft = _draft(_finding("f1", "Revenue increased", severity="banana"))
+    llm = FakeLLMClient(responses=[_submit(draft), _submit(draft)])
+
+    result = P1Extractor(llm, repo).run(filing_meta=META, sections=SECTIONS)
+
+    assert result.output.findings == []
+    assert result.output.classification.overall_severity == "routine"
+    trace = _trace(repo)
+    assert trace["research_outcome"] == "metrics_only"
+    assert trace["research_terminal_reason"] == "verified"
+    assert trace["dropped_findings"] == [
+        {"finding_id": "f1", "error_codes": ["FINDING_SCHEMA_INVALID"]}
+    ]
+
+
+def test_schema_invalid_finding_gets_the_one_repair_before_being_dropped():
+    repo = Repo(init_db(":memory:"))
+    broken = _draft(_finding("f2", "Revenue increased", severity="banana"))
+    fixed = _draft(_finding("f2", "Revenue increased", severity="low"))
+    llm = FakeLLMClient(responses=[_submit(broken), _submit(fixed), _done()])
+
+    output = P1Extractor(llm, repo).run(filing_meta=META, sections=SECTIONS).output
+
+    assert [row.finding_id for row in output.findings] == ["f2"]
+    trace = _trace(repo)
+    assert trace["repair_used"] is True
+    assert trace["dropped_findings"] == []
+
+
+def test_schema_invalid_required_critical_finding_still_withholds():
+    # Fail-closed is the property that must survive leniency: dropping a schema-invalid
+    # finding must not let an 8-K that REQUIRES a critical finding publish without one.
+    repo = Repo(init_db(":memory:"))
+    meta = {**META, "form_type": "8-K"}
+    sections = {"item_4_02": {"text": "Statements should no longer be relied upon."}}
+    finding = _finding(
+        "f1", "Statements should no longer be relied upon", severity="critical",
+        critical_flag="item_4_02_non_reliance", metric_id="revenue_growth",  # no direction
+    )
+    finding["evidence"][0].update({"form_type": "8-K", "section_key": "item_4_02"})
+    llm = FakeLLMClient(responses=[
+        _submit(_draft(finding, form_type="8-K")),
+        _submit(_draft(finding, form_type="8-K")),
+    ])
+
+    with pytest.raises(StageError, match="critical_coverage"):
+        P1Extractor(llm, repo).run(filing_meta=meta, sections=sections)
+    assert _trace(repo)["research_outcome"] == "withheld"
+
+
+def test_cross_finding_invariants_stay_strict_because_no_finding_owns_them():
+    # Duplicate finding_id / critical_flag name no single culprit, so they cannot be
+    # reported under one finding id. A silent drop would be worse than a rejected action.
+    repo = Repo(init_db(":memory:"))
+    duplicate_id = _draft(
+        _finding("f1", "Revenue increased"),
+        _finding("f1", "Revenue increased", headline="Costs changed"),
+    )
+    llm = FakeLLMClient(responses=[_submit(duplicate_id), _submit(duplicate_id)])
+    with pytest.raises(StageError, match="malformed_action_breakdown"):
+        P1Extractor(llm, repo).run(filing_meta=META, sections=SECTIONS)
+
+
+def test_a_reply_that_is_not_an_action_is_still_a_protocol_error():
+    # Leniency is scoped to findings inside a well-formed draft; prose is still a strike.
+    repo = Repo(init_db(":memory:"))
+    llm = FakeLLMClient(responses=["I think I should look at the MD&A.", "Still thinking."])
+    with pytest.raises(StageError, match="malformed_action_breakdown"):
+        P1Extractor(llm, repo).run(filing_meta=META, sections=SECTIONS)
+
+
+def test_check_draft_reports_schema_drops_instead_of_killing_the_turn():
+    # The preflight tool argument is also a P1Output, so an unparsable finding used to
+    # kill the very turn the model spent trying to validate its draft.
+    repo = Repo(init_db(":memory:"))
+    draft = _draft(
+        _finding("f1", "Revenue increased"),
+        _finding("f2", "Revenue increased", severity="banana"),
+    )
+    llm = FakeLLMClient(responses=[
+        _tool("check_draft", {"draft": draft}),
+        _submit(_draft(_finding("f1", "Revenue increased"))),
+        _done(),
+    ])
+
+    output = P1Extractor(llm, repo).run(filing_meta=META, sections=SECTIONS).output
+
+    assert [row.finding_id for row in output.findings] == ["f1"]
+    trace = _trace(repo)
+    assert [call["tool"] for call in trace["tool_calls"]] == ["check_draft"]
+    observed = json.loads(llm.calls[1][1])["observations"][0]["result"]
+    assert {"code": "FINDING_SCHEMA_INVALID", "finding_id": "f2",
+            "detail": "severity: Value error, must be one of "
+                      "['critical', 'high', 'low', 'medium'], got 'banana'"} in observed["issues"]
 
 
 @pytest.mark.parametrize(

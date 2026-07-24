@@ -354,6 +354,17 @@ corresponding critical, section-backed finding; prompt/evaluation rules cover se
 going-concern, auditor, control, and material-cyber cases. No evidence means no finding. Echoed
 accession, ticker, and form must match trusted filing metadata before persistence.
 
+A finding that violates the strict `Finding` contract on its own — bad enum, over-long quotation,
+`metric_id` without `direction`, `critical_flag` below critical/high severity, evidence citing
+another accession/form — is pruned from the inbound action and enters the normal typed-issue path as
+`FINDING_SCHEMA_INVALID` or `EVIDENCE_IDENTITY_MISMATCH`: repairable once, then dropped and counted,
+with the surviving findings and the metrics still publishing. The contract itself is not relaxed —
+every surviving finding satisfies `Finding` in full — and a dropped finding that a canonical 8-K item
+required still fails `CRITICAL_COVERAGE` and withholds the filing. The pruning unit is one finding,
+so cross-finding invariants (duplicate `finding_id`, duplicate `critical_flag`) name no single
+culprit, cannot be reported under one finding id, and stay strict; a reply that is not a well-formed
+action at all remains a protocol error, and two in a row are still `malformed_action_breakdown`.
+
 The initial P1 prompt contains only trusted filing/section/metric catalogs. Current-versus-prior
 change ranges are precomputed before the model acts, so compiler validity never depends on whether
 the model called `get_changes`. The Generator retrieves bounded evidence progressively through

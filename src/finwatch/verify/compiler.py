@@ -28,6 +28,11 @@ class CompilerIssue(BaseModel):
     model_config = _STRICT
     code: str
     finding_id: str | None = None
+    # Optional rule text for codes whose name alone does not say what to change. It is
+    # only ever OUR schema text (see ``_schema_rule_text`` in llm/harness.py, which never
+    # echoes model input) and it reaches the repair prompt only — persisted drops keep
+    # carrying codes alone.
+    detail: str | None = None
 
 
 class DroppedFinding(BaseModel):

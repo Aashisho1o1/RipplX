@@ -133,25 +133,17 @@ _KNOWN_TOOLS = frozenset({
 _STRUCTURAL_NOISE = ("Input should be", "Field required", "Extra inputs are not permitted")
 
 
-def _safe_validation_hint(exc: Exception) -> str:
-    """Turn a schema failure into a controlled hint the model can act on.
+def _schema_rule_text(exc: ValidationError) -> str:
+    """Render a ValidationError as our own rule text: field path plus rule message.
 
-    Feeds back ONLY our own schema rule text (field path + message), never the model's
-    rejected input: ``include_input=False`` drops every echoed value, so untrusted model
-    output can never round-trip through the prompt. Literal-union discriminator noise
-    ("Input should be 'tool'") is dropped so the real violation — e.g. a 50-word snippet
-    cap — is what the model sees. This is what lets a capable model self-correct a
-    fixable mistake instead of dying with a blind ``INVALID_ACTION``.
+    ``include_input=False`` drops pydantic's echoed input, so a rejected draft never
+    round-trips through the prompt; the only model-supplied text that can survive is a
+    scalar a validator names inside its own message (``_one_of`` quotes the bad enum
+    value). Literal-union discriminator noise ("Input should be 'tool'") is dropped so the
+    real violation — e.g. a 50-word snippet cap — is what the model sees. This is what
+    lets a capable model self-correct a fixable mistake instead of being told only that
+    something, somewhere, was wrong.
     """
-    if not isinstance(exc, ValidationError):
-        # A non-schema failure means the reply did not parse as one JSON action at all
-        # (e.g. the model returned reasoning prose or markdown). Name that concretely so
-        # the model returns JSON next turn instead of repeating the mistake blindly.
-        return (
-            "INVALID_ACTION: reply with exactly one JSON action object and nothing else "
-            "(no prose, no markdown fences), e.g. {\"action\":\"tool\",\"tool\":...} or "
-            "{\"action\":\"submit\",\"draft\":...}"
-        )
     parts: list[str] = []
     for err in exc.errors(include_url=False, include_input=False):
         loc = ".".join(
@@ -173,7 +165,22 @@ def _safe_validation_hint(exc: Exception) -> str:
         if not any(noise in item for noise in _STRUCTURAL_NOISE)
     ]
     useful = substantive or [item for item in parts if "Input should be" not in item] or parts
-    return "INVALID_ACTION: " + "; ".join(useful[:4]) if useful else "INVALID_ACTION"
+    return "; ".join(useful[:4])
+
+
+def _safe_validation_hint(exc: Exception) -> str:
+    """Turn a schema failure into a controlled hint the model can act on."""
+    if not isinstance(exc, ValidationError):
+        # A non-schema failure means the reply did not parse as one JSON action at all
+        # (e.g. the model returned reasoning prose or markdown). Name that concretely so
+        # the model returns JSON next turn instead of repeating the mistake blindly.
+        return (
+            "INVALID_ACTION: reply with exactly one JSON action object and nothing else "
+            "(no prose, no markdown fences), e.g. {\"action\":\"tool\",\"tool\":...} or "
+            "{\"action\":\"submit\",\"draft\":...}"
+        )
+    rules = _schema_rule_text(exc)
+    return f"INVALID_ACTION: {rules}" if rules else "INVALID_ACTION"
 
 
 def _normalize_tool_arguments(raw: object) -> object:
@@ -209,6 +216,87 @@ def _normalize_tool_arguments(raw: object) -> object:
         if isinstance(value, list) and len(value) > cap:
             args[field_name] = value[:cap]
     return raw
+
+
+_FINDING_ADAPTER = TypeAdapter(Finding)
+_FINDING_IDS = frozenset({"f1", "f2", "f3"})
+
+
+def _draft_findings(raw: object) -> list | None:
+    """The mutable ``findings`` list inside a submit or check_draft action, if present."""
+    if not isinstance(raw, dict):
+        return None
+    if raw.get("action") == "submit":
+        holder = raw
+    elif raw.get("action") == "tool" and raw.get("tool") == "check_draft":
+        holder = raw.get("arguments")
+    else:
+        return None
+    draft = holder.get("draft") if isinstance(holder, dict) else None
+    if not isinstance(draft, dict):
+        return None
+    findings = draft.get("findings")
+    return findings if isinstance(findings, list) else None
+
+
+def _prune_unparsable_findings(raw: object) -> list[CompilerIssue]:
+    """Remove findings that fail the strict contract, so one bad finding is not fatal.
+
+    A finding that violates its own contract — a 51-word quotation, ``metric_id`` without
+    ``direction``, a ``critical_flag`` below critical/high severity, evidence citing a
+    different accession — is a CONTENT mistake, the same class the compiler already prunes
+    per finding. Leaving it to strict union validation instead made it a PROTOCOL failure:
+    the whole action was rejected, the compiler never saw the good findings beside it, and
+    two such turns withheld the entire filing. Dropping it here keeps the strict contract
+    exactly as strict (every surviving finding still satisfies ``Finding`` in full) while
+    routing the failure into the normal typed-issue, one-repair, prune path.
+
+    The pruning unit is one finding, so only violations attributable to a single finding
+    are handled. Cross-finding invariants — duplicate ``finding_id``, duplicate
+    ``critical_flag`` — name no single culprit, cannot be reported under one finding id,
+    and stay strict rather than getting a guessed tie-break. Mutates ``raw`` in place.
+    """
+    findings = _draft_findings(raw)
+    if findings is None:
+        return []
+    draft = raw["draft"] if raw.get("action") == "submit" else raw["arguments"]["draft"]
+    issues: list[CompilerIssue] = []
+    kept: list = []
+    ids = [
+        row.get("finding_id") if isinstance(row, dict) else None for row in findings
+    ]
+    for row, finding_id in zip(findings, ids, strict=True):
+        # An unusable or repeated id cannot key a drop the user would ever see, and a
+        # silent drop is worse than a rejected action — leave those to strict validation.
+        if finding_id not in _FINDING_IDS or ids.count(finding_id) > 1:
+            kept.append(row)
+            continue
+        try:
+            finding = _FINDING_ADAPTER.validate_python(row)
+        except ValidationError as exc:
+            issues.append(CompilerIssue(
+                code="FINDING_SCHEMA_INVALID",
+                finding_id=finding_id,
+                detail=_schema_rule_text(exc) or None,
+            ))
+            continue
+        # P1Output enforces this against the envelope, so it fails the whole action rather
+        # than the one finding that cited the wrong filing. Checking the echo is enough:
+        # an echo that disagrees with trusted metadata is already a FORM_SCOPE run error.
+        if any(
+            evidence.accession_number != draft.get("accession_number")
+            or evidence.form_type != draft.get("form_type")
+            for evidence in finding.evidence
+        ):
+            issues.append(CompilerIssue(
+                code="EVIDENCE_IDENTITY_MISMATCH",
+                finding_id=finding_id,
+                detail="evidence accession_number and form_type must match the draft",
+            ))
+            continue
+        kept.append(row)
+    findings[:] = kept
+    return issues
 
 
 class SkepticObligation(BaseModel):
@@ -542,6 +630,7 @@ class FilingResearchHarness:
         context: ToolContext,
         *,
         check_draft_used: bool,
+        extra_issues: list[CompilerIssue],
     ) -> tuple[dict, bool]:
         cache_key = json.dumps(
             {"tool": action.tool, "arguments": action.arguments.model_dump(mode="json")},
@@ -568,9 +657,13 @@ class FilingResearchHarness:
                 metrics=context.metrics,
                 change_ranges=context.change_ranges,
                 has_prior_comparable=context.has_prior_comparable,
+                extra_issues=extra_issues,
             )
             result = {
-                "issues": [issue.model_dump(mode="json") for issue in compiled.issues],
+                "issues": [
+                    issue.model_dump(mode="json", exclude_none=True)
+                    for issue in compiled.issues
+                ],
                 "run_errors": compiled.run_errors,
             }
         context.tool_cache[cache_key] = result
@@ -623,11 +716,14 @@ class FilingResearchHarness:
                 ),
                 "repair_available": not repair_state["used"],
             }
+            schema_issues: list[CompilerIssue] = []
             try:
                 raw = self._call(
                     self.generator, usage, system=system, state=state, temperature=0.1
                 )
-                action = _GENERATOR_ADAPTER.validate_python(_normalize_tool_arguments(raw))
+                normalized = _normalize_tool_arguments(raw)
+                schema_issues = _prune_unparsable_findings(normalized)
+                action = _GENERATOR_ADAPTER.validate_python(normalized)
             except HarnessError:
                 raise
             except Exception as exc:
@@ -659,6 +755,7 @@ class FilingResearchHarness:
                     metrics=context.metrics,
                     change_ranges=context.change_ranges,
                     has_prior_comparable=context.has_prior_comparable,
+                    extra_issues=schema_issues,
                 )
                 if (compiled.issues or compiled.run_errors) and not repair_state["used"]:
                     repair_state["used"] = True
@@ -675,7 +772,8 @@ class FilingResearchHarness:
                     }
                     state["current_draft"] = compiled.output.model_dump(mode="json")
                     state["compiler_errors"] = [
-                        issue.model_dump(mode="json") for issue in compiled.issues
+                        issue.model_dump(mode="json", exclude_none=True)
+                        for issue in compiled.issues
                     ] + [{"code": code} for code in compiled.run_errors]
                     state["instruction"] = (
                         "Use the single repair now. Return a complete corrected submit action; "
@@ -707,6 +805,13 @@ class FilingResearchHarness:
                     raise HarnessError(final.run_errors[0].lower())
                 dropped = list(final.dropped)
                 surviving = {finding.finding_id for finding in final.output.findings}
+                # Findings pruned before validation never reach compile_draft, so record
+                # them here or a run would report fewer drops than it actually made.
+                for issue in schema_issues:
+                    if not any(row.finding_id == issue.finding_id for row in dropped):
+                        dropped.append(DroppedFinding(
+                            finding_id=issue.finding_id, error_codes=[issue.code]
+                        ))
                 for finding_id, codes in state.get("repair_targets", {}).items():
                     if finding_id not in surviving and not any(
                         row.finding_id == finding_id for row in dropped
@@ -735,7 +840,8 @@ class FilingResearchHarness:
                 break
             counters.generator_tool_calls += 1
             result, check_draft_used = self._execute_tool(
-                action, context, check_draft_used=check_draft_used
+                action, context, check_draft_used=check_draft_used,
+                extra_issues=schema_issues,
             )
             state["check_draft_used"] = check_draft_used
             call_id = f"t{len(trace_calls) + 1}"
@@ -830,7 +936,10 @@ class FilingResearchHarness:
                 state["last_error"] = "SKEPTIC_TOOL_BUDGET_EXHAUSTED_RETURN_DONE"
                 return _SkepticPassResult(completed=False)
             counters.skeptic_tool_calls += 1
-            result, _ = self._execute_tool(action, context, check_draft_used=True)
+            # The Skeptic's action union has no check_draft, so it never compiles a draft.
+            result, _ = self._execute_tool(
+                action, context, check_draft_used=True, extra_issues=[]
+            )
             call_id = f"t{len(trace_calls) + 1}"
             observation = self._tool_observation(call_id, action.tool, result)
             state.setdefault("observations", []).append(observation)
