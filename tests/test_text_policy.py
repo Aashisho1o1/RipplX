@@ -67,6 +67,26 @@ def test_number_words_are_flagged(text):
 
 
 @pytest.mark.parametrize("text", [
+    "Impairment charges reached billions of dollars",
+    "Restructuring charges in the hundreds of millions were disclosed",
+    "Revenue declined by tens of millions",
+    "The company settled thousands of claims",
+    "Cumulative losses ran to trillions",
+    "Reported percentages shifted after the review",
+])
+def test_plural_magnitude_words_are_quantities(text):
+    """Plural magnitudes are authored quantities exactly as their singulars are.
+
+    `\\bbillion\\b` does not match "billions", so the singular-only spelling let an
+    unverified order-of-magnitude financial claim publish through every gate at once —
+    the compiler's AUTHORED_NUMBER prune, V5 hygiene, and the final-DTO verifier all
+    delegate to this one function, so a single miss is a miss in all three.
+    """
+    assert contains_authored_quantity(text) is True
+    assert "quantity" in authored_text_violations(text)
+
+
+@pytest.mark.parametrize("text", [
     "Margins moved ½ a point",
     "The ² adjustment changed",
     "Exposure moved Ⅳ times",

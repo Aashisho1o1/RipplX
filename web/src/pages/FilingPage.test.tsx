@@ -116,6 +116,41 @@ describe("filing trust surface", () => {
     expect(outcomeHeadline("partial", 2, 1)).toBe("2 findings published, 1 finding removed by the evidence gate");
   });
 
+  it("presents a filing that proposed nothing as routine, not as a gate rejection", async () => {
+    // research.outcome "metrics_only" covers BOTH "nothing was proposed" and "everything
+    // was pruned". The bundled ?demo=1 brief contains no_findings filings, so announcing
+    // them as gate failures contradicted this page's own routine copy two clicks from
+    // onboarding.
+    const value = detail("metrics_only");
+    value.filing.outcome = "no_findings";
+    value.filing.findings = [];
+    value.filing.dropped_finding_count = 0;
+    value.research!.dropped_findings = [];
+    renderDetail(value);
+
+    expect(await screen.findByText("Reviewed — nothing material; verified numbers published")).toBeInTheDocument();
+    expect(screen.queryByText(/no qualitative finding passed the gate/)).toBeNull();
+    const banner = screen.getByLabelText("Publication outcome");
+    expect(banner.querySelector(".outcome-glyph")).toHaveTextContent("✓");
+    expect(banner.className).toContain("routine");
+    // The body copy below must agree with the banner above it.
+    expect(screen.getByText(/legitimate routine result/)).toBeInTheDocument();
+  });
+
+  it("still reports a pruned filing as an evidence-gate removal", async () => {
+    const value = detail("metrics_only");
+    value.filing.outcome = "findings_dropped";
+    value.filing.findings = [];
+    value.filing.dropped_finding_count = 1;
+    value.research!.dropped_findings = [{ finding_id: "f1", error_codes: ["QUOTE_NOT_EXACT"] }];
+    renderDetail(value);
+
+    expect(await screen.findByText("Metrics published; no qualitative finding passed the gate")).toBeInTheDocument();
+    const banner = screen.getByLabelText("Publication outcome");
+    expect(banner.querySelector(".outcome-glyph")).toHaveTextContent("!");
+    expect(banner.className).not.toContain("routine");
+  });
+
   it("never renders withheld findings or an affirmative evidence badge", async () => {
     renderDetail(detail("withheld", {
       filing: {

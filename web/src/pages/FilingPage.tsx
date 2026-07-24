@@ -7,7 +7,7 @@ import { MetricTable } from "../components/MetricTable";
 import { ProvenancePanel } from "../components/ProvenancePanel";
 import { VerificationBand } from "../components/VerificationBand";
 import { useResource } from "../hooks/useResource";
-import type { FilingDetail } from "../types";
+import type { FilingDetail, FilingOutcome } from "../types";
 
 export const TERMINAL_REASON_LABEL: Record<string, string> = {
   verified: "All checks passed",
@@ -42,7 +42,24 @@ export function researchOutcomeLabel(outcome: NonNullable<FilingDetail["research
 
 const VERIFIED_OUTCOMES = new Set<NonNullable<FilingDetail["research"]>["outcome"]>(["published", "partial"]);
 
-export function outcomeHeadline(outcome: NonNullable<FilingDetail["research"]>["outcome"], publishedCount: number, droppedCount: number): string {
+/** Whether the run reviewed the filing and legitimately proposed nothing.
+ *
+ * The harness collapses two very different results into research.outcome
+ * "metrics_only": the model proposed no finding at all (filing outcome "no_findings"),
+ * and every candidate it proposed was pruned by the gate ("findings_dropped"). Only the
+ * second is a gate rejection. Reporting the first as one tells the user the AI tried and
+ * was refused when it never tried — and contradicts this page's own routine copy.
+ */
+export function isRoutineReview(
+  outcome: NonNullable<FilingDetail["research"]>["outcome"],
+  filingOutcome?: FilingOutcome,
+  droppedCount = 0,
+): boolean {
+  return outcome === "metrics_only" && filingOutcome === "no_findings" && droppedCount === 0;
+}
+
+export function outcomeHeadline(outcome: NonNullable<FilingDetail["research"]>["outcome"], publishedCount: number, droppedCount: number, filingOutcome?: FilingOutcome): string {
+  if (isRoutineReview(outcome, filingOutcome, droppedCount)) return "Reviewed — nothing material; verified numbers published";
   if (outcome !== "partial" || droppedCount === 0) return researchOutcomeLabel(outcome);
   const published = `${publishedCount} ${publishedCount === 1 ? "finding" : "findings"} published`;
   const removed = `${droppedCount} ${droppedCount === 1 ? "finding" : "findings"} removed by the evidence gate`;
@@ -71,6 +88,9 @@ export function FilingPage() {
   const withheld = Boolean(withheldReason) || filing.withheld || research?.outcome === "withheld";
   const filingUrl = trustedSecUrl(filing.edgar_url);
   const reasonLabel = research ? terminalReasonLabel(research.terminal_reason) : "Analysis has not completed";
+  const routineReview = research
+    ? isRoutineReview(research.outcome, filing.outcome, research.dropped_findings.length)
+    : false;
   const sectionValue = detail.pipeline.find(stage => stage.stage === "parse")?.diagnostics.sections_found;
   const parsedSections = Array.isArray(sectionValue) ? sectionValue.map(String) : [];
 
@@ -82,9 +102,9 @@ export function FilingPage() {
       {filingUrl && <a className="sec-link" href={filingUrl} target="_blank" rel="noopener noreferrer">Open SEC filing <span aria-hidden="true">↗</span></a>}
     </header>
 
-    {research && <section className={`outcome-banner ${research.outcome}`} aria-label="Publication outcome">
-      <span className="outcome-glyph" aria-hidden="true">{VERIFIED_OUTCOMES.has(research.outcome) ? "✓" : "!"}</span>
-      <div><p>{outcomeHeadline(research.outcome, filing.findings.length, research.dropped_findings.length)}</p><small>{reasonLabel}</small></div>
+    {research && <section className={`outcome-banner ${routineReview ? "routine" : research.outcome}`} aria-label="Publication outcome">
+      <span className="outcome-glyph" aria-hidden="true">{VERIFIED_OUTCOMES.has(research.outcome) || routineReview ? "✓" : "!"}</span>
+      <div><p>{outcomeHeadline(research.outcome, filing.findings.length, research.dropped_findings.length, filing.outcome)}</p><small>{reasonLabel}</small></div>
     </section>}
     {!research && withheldReason && <section className={`outcome-banner ${pipelineFailed ? "not-analyzed" : "withheld"}`}><span className="outcome-glyph" aria-hidden="true">!</span><div><p>{pipelineFailed ? "Analysis did not complete" : "Analysis held back"}</p><small>{withheldReason}</small></div></section>}
 

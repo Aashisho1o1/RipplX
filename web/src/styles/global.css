@@ -945,7 +945,10 @@ code,
 }
 
 .outcome-banner.published,
-.outcome-banner.partial {
+.outcome-banner.partial,
+/* A reviewed filing that legitimately proposed nothing is a verified result, not a
+   gate refusal, so it must not inherit the warning colour of the base rule. */
+.outcome-banner.routine {
   color: var(--color-verified);
   background: var(--color-accent-wash);
 }

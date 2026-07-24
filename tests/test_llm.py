@@ -475,11 +475,12 @@ def test_more_than_three_findings_is_stage_error_and_leaves_no_orphan_row():
     )
 
 
-def test_zai_model_resolves_to_anthropic_endpoint_without_json_mode():
-    """z-ai/<model> maps to litellm's anthropic provider + the z.ai base URL.
+def test_zai_model_resolves_to_the_openai_compatible_coding_endpoint_with_json_mode():
+    """z-ai/<model> maps to litellm's openai provider + z.ai's coding base URL.
 
-    The Anthropic API has no json_object response_format, so JSON mode is off there and
-    the prompt carries the contract (verified live: GLM 5.2 drives the harness this way).
+    That endpoint is the one a GLM Coding Plan key is authorized for and it supports the
+    json_object response format, so the provider enforces valid JSON rather than leaving
+    the contract to the prompt. The earlier Anthropic-compatible endpoint had neither.
     """
     from finwatch.llm.router import resolve_model
 

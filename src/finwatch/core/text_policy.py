@@ -12,10 +12,15 @@ import re
 from finwatch.core.types import FORBIDDEN_VOCABULARY
 
 _AUTHORED_QUANTITY = re.compile(
-    r"\b(?:zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|"
+    # Magnitude nouns are plural-tolerant: "charges reached billions" is exactly the
+    # authored quantity this policy exists to reject, and `\bbillion\b` does not match
+    # "billions". The singular-only spelling let plural magnitudes through all three
+    # enforcement points (compiler AUTHORED_NUMBER, V5 hygiene, final-DTO verify), since
+    # every one of them delegates to this single function.
+    r"\b(?:zero|one|two|three|four|five|six|seven|eight|nine|tens?|eleven|twelve|"
     r"thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|"
-    r"thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|thousand|million|"
-    r"billion|trillion|percent|percentage|double|doubled|triple|tripled|"
+    r"thirty|forty|fifty|sixty|seventy|eighty|ninety|hundreds?|thousands?|millions?|"
+    r"billions?|trillions?|percent|percentages?|double|doubled|triple|tripled|"
     r"quadruple|quadrupled|quintuple|quintupled|halved|twice|thrice|"
     r"twofold|threefold|fourfold|fivefold|sixfold|sevenfold|eightfold|ninefold|"
     r"tenfold|dozens?|scores?|fractions?|fractional)\b|"

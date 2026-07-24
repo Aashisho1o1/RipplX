@@ -244,9 +244,10 @@ bound above.
    filing/model text as text.
 
 10. **Production model contract** — `FINWATCH_MODEL` and optional `FINWATCH_SKEPTIC_MODEL` must use
-   the same supported `openai/` or `openrouter/` provider prefix
-   and production credential discovery recognizes `OPENAI_API_KEY` / `OPENROUTER_API_KEY` plus the
-   process-memory browser key. Model bake-off flexibility is developer tooling, not runtime provider routing.
+   the same supported `openai/`, `openrouter/`, or `z-ai/` provider prefix — each mapping to one
+   fixed endpoint — and production credential discovery recognizes `OPENAI_API_KEY` /
+   `OPENROUTER_API_KEY` / `ZAI_API_KEY` plus the process-memory browser key. Model bake-off
+   flexibility is developer tooling, not runtime provider routing.
 
 11. **Certificate contract** — completed `verified` and completed-withheld `analyzed` attempts may
    expose `certificate.v2`; failed or pending attempts may not. Every hashed field comes from the
@@ -336,8 +337,9 @@ and capped at 25 tracked tickers per workspace; the instance retains one global 
 
 Hosted participant API keys exist only in `RuntimeSecrets`, keyed by opaque session ID and captured
 before a job is enqueued. They are never placed in SQLite, cookies, browser storage, job DTOs, logs,
-or API responses; expired-session entries are pruned from memory. Hosted requests ignore provider
-keys from the environment; environment discovery remains for CLI/local mode. SQLite stores account
+or API responses; expired-session entries are pruned from memory. A participant's session key wins;
+otherwise a hosted run uses the operator's server-side key for the configured provider, which stays
+in process environment memory and is never returned by the API. SQLite stores account
 emails, private ticker membership/preferences, an optional local operator SEC User-Agent, and public
 filing artifacts in plaintext; filesystem/container access is the data-at-rest boundary.
 

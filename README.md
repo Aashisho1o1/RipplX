@@ -53,7 +53,8 @@ The launch path does **not** execute or expose:
 - offline reverify or historical analysis replay;
 - portfolio accounting, position sizing, rebalancing, thesis checks, or extended valuation and
   forensic-score suites; or
-- open-ended provider/model routing (only the `openai/` and `openrouter/` prefixes are accepted).
+- open-ended provider/model routing (only the `openai/`, `openrouter/`, and `z-ai/` prefixes are
+  accepted, each mapping to one fixed endpoint).
 
 Dormant research modules and historical tests may remain in the repository to preserve prior
 work, but the launch assembly does not construct, execute, render, or advertise them.
@@ -100,20 +101,23 @@ Copy `.env.example` to `.env`. The real process environment takes precedence ove
 ```dotenv
 SEC_USER_AGENT=Your Name your-email@example.com
 FINWATCH_DB=./data/finwatch.db
-FINWATCH_MODEL=openai/your-evaluated-model
+FINWATCH_MODEL=z-ai/glm-5.2
 FINWATCH_SKEPTIC_MODEL=
-OPENAI_API_KEY=
+ZAI_API_KEY=
 ```
 
 - `SEC_USER_AGENT` identifies the EDGAR client. The local browser can also collect it during
   setup; unlike an API key, this setting is persisted in SQLite.
-- `FINWATCH_MODEL` is the single operator-selected launch model and must use the `openai/` or
-  `openrouter/` LiteLLM prefix. The browser displays it read-only.
+- `FINWATCH_MODEL` is the single operator-selected launch model and must use the `openai/`,
+  `openrouter/`, or `z-ai/` LiteLLM prefix. Each maps to exactly one fixed endpoint; `z-ai/<model>`
+  reaches Zhipu GLM through z.ai's OpenAI-compatible coding endpoint. The browser displays it
+  read-only.
 - `FINWATCH_SKEPTIC_MODEL` optionally selects a stronger finance Skeptic on the same provider. When
   absent, the Generator model is reused. The Skeptic can object to a finding but cannot approve it.
-- `OPENAI_API_KEY` or `OPENROUTER_API_KEY` (matching the model prefix) is the production provider
-  credential read from the environment.
-- Instead of setting `OPENAI_API_KEY`, a local user may enter a key in Settings. That key exists
+- `OPENAI_API_KEY`, `OPENROUTER_API_KEY`, or `ZAI_API_KEY` (matching the model prefix) is the
+  production provider credential read from the environment. A key for the wrong provider is
+  reported as not configured rather than failing mid-run.
+- Instead of setting a provider key, a local user may enter one in Settings. That key exists
   only in the running Python process, is never written to SQLite or returned by the API, and is
   lost on restart. `FINWATCH_MODEL` must still be configured by the operator.
 
@@ -144,7 +148,8 @@ Create a `.env` file on the deployment host:
 
 ```dotenv
 SEC_USER_AGENT=Your Name your-email@example.com
-FINWATCH_MODEL=openai/your-evaluated-model
+FINWATCH_MODEL=z-ai/glm-5.2
+ZAI_API_KEY=
 FINWATCH_AUTH_SECRET=replace-with-a-random-value-of-at-least-32-characters
 FINWATCH_ALLOWED_HOSTS=alpha.example.com
 RESEND_API_KEY=re_your_resend_key
@@ -152,9 +157,11 @@ FINWATCH_EMAIL_FROM=RipplX <login@your-verified-domain.example>
 ```
 
 On Railway, set the same six values in the service Variables tab, mount a persistent volume at
-`/data`, and set `FINWATCH_ALLOWED_HOSTS` to the exact Railway/custom-domain hostname. Do not add a
-shared `OPENAI_API_KEY` or `OPENROUTER_API_KEY` for browser users; each participant supplies the key
-matching `FINWATCH_MODEL` after login.
+`/data`, and set `FINWATCH_ALLOWED_HOSTS` to the exact Railway/custom-domain hostname. Set the
+provider key matching `FINWATCH_MODEL` (`ZAI_API_KEY`, `OPENAI_API_KEY`, or `OPENROUTER_API_KEY`) so
+hosted onboarding does not demand a key from every participant; that key stays in process
+environment memory and is never returned by the API. A participant who supplies their own key in
+Settings takes precedence for their session.
 
 Generate the cookie-signing secret without placing it in shell history:
 
@@ -193,11 +200,13 @@ Required remote controls:
   copied cookie is not centrally revocable; it remains valid until its expiry or signing-secret
   rotation. This is an accepted public-alpha limitation with no persistent session registry.
 
-Hosted browser users add the OpenAI or OpenRouter key matching `FINWATCH_MODEL` in Settings. The key
-is isolated by browser session, captured when a job is submitted, never stored in SQLite/cookies or
-returned by the API, pruned when the session expires, and lost when the process restarts. Hosted web
-requests intentionally ignore shared `OPENAI_API_KEY` / `OPENROUTER_API_KEY` environment values;
-those remain available to local and CLI workflows.
+A hosted browser user may add the provider key matching `FINWATCH_MODEL` in Settings. That key is
+isolated by browser session, captured when a job is submitted, never stored in SQLite/cookies or
+returned by the API, pruned when the session expires, and lost when the process restarts. When a
+participant supplies no key of their own, the run falls back to the operator's server-side key for
+the configured provider, so hosted onboarding never demands a key from each participant. The
+operator key stays in process environment memory; the API reports only whether analysis is
+configured, never which key served a run.
 
 Schema v6 is a clean prototype break, not a migration. It introduces attempt-linked `harness.v2`
 and frozen `certificate.v2` semantics without carrying a v1 compatibility path. Before upgrading an existing Railway volume,
