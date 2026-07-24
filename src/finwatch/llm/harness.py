@@ -123,6 +123,14 @@ _ARG_LIST_CAPS = {
     "get_changes": {"section_keys": 3},
     "get_metric": {"metric_ids": 3},
 }
+# The five read tools. Models routinely flatten the discriminator, emitting
+# {"action":"search_sections", ...} instead of {"action":"tool","tool":"search_sections"}.
+_KNOWN_TOOLS = frozenset({
+    "search_sections", "get_changes", "get_metric",
+    "get_accounting_checks", "check_draft",
+})
+# Generic union-member complaints that hide the real violation of a nearly-valid action.
+_STRUCTURAL_NOISE = ("Input should be", "Field required", "Extra inputs are not permitted")
 
 
 def _safe_validation_hint(exc: Exception) -> str:
@@ -136,7 +144,14 @@ def _safe_validation_hint(exc: Exception) -> str:
     fixable mistake instead of dying with a blind ``INVALID_ACTION``.
     """
     if not isinstance(exc, ValidationError):
-        return "INVALID_ACTION"
+        # A non-schema failure means the reply did not parse as one JSON action at all
+        # (e.g. the model returned reasoning prose or markdown). Name that concretely so
+        # the model returns JSON next turn instead of repeating the mistake blindly.
+        return (
+            "INVALID_ACTION: reply with exactly one JSON action object and nothing else "
+            "(no prose, no markdown fences), e.g. {\"action\":\"tool\",\"tool\":...} or "
+            "{\"action\":\"submit\",\"draft\":...}"
+        )
     parts: list[str] = []
     for err in exc.errors(include_url=False, include_input=False):
         loc = ".".join(
@@ -148,23 +163,38 @@ def _safe_validation_hint(exc: Exception) -> str:
         item = f"{loc}: {message}" if loc else message
         if item not in parts:
             parts.append(item)
-    useful = [item for item in parts if "Input should be" not in item] or parts
+    # With the left-to-right union, a wrong-shaped or over-long submit collects generic
+    # structural complaints from every tool member it failed to match ("Field required",
+    # "Extra inputs are not permitted", "Input should be 'tool'"). Prefer the substantive
+    # content violation (e.g. the 50-word snippet cap) so the model fixes the real problem
+    # instead of the union noise; fall back to the raw parts only if nothing else remains.
+    substantive = [
+        item for item in parts
+        if not any(noise in item for noise in _STRUCTURAL_NOISE)
+    ]
+    useful = substantive or [item for item in parts if "Input should be" not in item] or parts
     return "INVALID_ACTION: " + "; ".join(useful[:4]) if useful else "INVALID_ACTION"
 
 
 def _normalize_tool_arguments(raw: object) -> object:
     """Map benign tool-argument variants onto the canonical schema before validation.
 
-    Tool arguments are navigation — which section, change, or metric to inspect — never
-    verified output, so accepting the shapes real models actually emit costs no trust
-    guarantee. Three variants are common across providers: echoing identifiers the
-    harness already knows (accession/ticker/form), using a singular key where the schema
-    wants a list, and over-supplying list items past the cap. We drop the first, alias
-    the second, and truncate the third; everything else still fails validation exactly as
-    before. Mutates and returns the same dict.
+    Tool navigation — which section, change, or metric to inspect — is never verified
+    output, so accepting the shapes real models actually emit costs no trust guarantee.
+    Four variants are common across providers: emitting a flattened discriminator
+    (``{"action":"search_sections",...}`` instead of ``{"action":"tool","tool":...}``),
+    echoing identifiers the harness already knows (accession/ticker/form), using a
+    singular key where the schema wants a list, and over-supplying list items past the
+    cap. We rewrite the first, drop the second, alias the third, and truncate the fourth;
+    everything else still fails validation exactly as before. Mutates and returns the
+    same dict.
     """
     if not isinstance(raw, dict):
         return raw
+    action = raw.get("action")
+    if action in _KNOWN_TOOLS and "tool" not in raw:
+        raw["tool"] = action
+        raw["action"] = "tool"
     args = raw.get("arguments")
     if not isinstance(args, dict):
         return raw
@@ -615,6 +645,12 @@ class FilingResearchHarness:
                     raise HarnessError("malformed_action_breakdown") from exc
                 continue
 
+            # A valid action clears the slate: the counter tracks a model that is *stuck*,
+            # not the lifetime total, so an isolated slip between good turns never sums to
+            # a breakdown. The stale hint is cleared so the next turn isn't misled by it.
+            invalid_actions = 0
+            state.pop("last_error", None)
+
             if isinstance(action, SubmitAction):
                 compiled = compile_draft(
                     action.draft,
@@ -772,9 +808,9 @@ class FilingResearchHarness:
                 action = _SKEPTIC_ADAPTER.validate_python(_normalize_tool_arguments(raw))
             except HarnessError:
                 raise
-            except Exception:
+            except Exception as exc:
                 invalid_actions += 1
-                state["last_error"] = "INVALID_ACTION"
+                state["last_error"] = _safe_validation_hint(exc)
                 if invalid_actions >= 2:
                     return _SkepticPassResult(completed=False)
                 continue

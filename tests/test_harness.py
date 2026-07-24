@@ -166,6 +166,63 @@ def test_generator_uses_tool_then_submits_and_skeptic_finishes():
     assert trace["research_outcome"] == "published"
 
 
+def test_flattened_discriminator_action_is_normalized_and_runs():
+    # GLM routinely emits {"action":"search_sections",...} instead of the two-level
+    # {"action":"tool","tool":"search_sections",...}. The intent is unambiguous, so it
+    # normalizes to a valid tool call rather than counting as a malformed action.
+    repo = Repo(init_db(":memory:"))
+    flattened = json.dumps({
+        "action": "search_sections",
+        "arguments": {"scope": "current", "queries": ["Revenue"]},
+    })
+    llm = FakeLLMClient(responses=[
+        flattened,
+        _submit(_draft(_finding("f1", "Revenue increased"))),
+        _done(),
+    ])
+    result = P1Extractor(llm, repo, model_label="fake/model").run(
+        filing_meta=META, sections=SECTIONS,
+    )
+    assert [row.finding_id for row in result.output.findings] == ["f1"]
+    trace = _trace(repo)
+    assert [row["tool"] for row in trace["tool_calls"]] == ["search_sections"]
+    assert trace["research_outcome"] == "published"
+
+
+def test_prose_slip_then_valid_action_recovers_not_breakdown():
+    # A one-off reasoning-prose reply (no JSON) must not doom the run: the model gets an
+    # actionable hint and its next valid action publishes.
+    repo = Repo(init_db(":memory:"))
+    prose = "Looking at the observations, I have partial evidence. Let me submit now."
+    llm = FakeLLMClient(responses=[
+        prose,
+        _submit(_draft(_finding("f1", "Revenue increased"))),
+        _done(),
+    ])
+    output = P1Extractor(llm, repo).run(filing_meta=META, sections=SECTIONS).output
+    assert [row.finding_id for row in output.findings] == ["f1"]
+    assert _trace(repo)["research_outcome"] == "published"
+
+
+def test_two_slips_separated_by_a_valid_action_do_not_break_down():
+    # The invalid-action counter tracks a *stuck* model, not lifetime slips. Two malformed
+    # replies with a successful action between them must NOT trip the >=2 breakdown — this
+    # is exactly the shape (prose slip + later submit slip, valid calls between) that made
+    # a real MSFT 8-K die as malformed_action_breakdown.
+    repo = Repo(init_db(":memory:"))
+    prose = "I need to think about which section to read."
+    llm = FakeLLMClient(responses=[
+        prose,                                                                   # slip 1
+        _tool("search_sections", {"scope": "current", "queries": ["Revenue"]}),  # resets
+        prose,                                                                   # slip 2
+        _submit(_draft(_finding("f1", "Revenue increased"))),
+        _done(),
+    ])
+    output = P1Extractor(llm, repo).run(filing_meta=META, sections=SECTIONS).output
+    assert [row.finding_id for row in output.findings] == ["f1"]
+    assert _trace(repo)["research_outcome"] == "published"
+
+
 def test_final_compiler_drops_only_bad_finding_after_shared_repair():
     repo = Repo(init_db(":memory:"))
     repo.upsert_company(Company(
