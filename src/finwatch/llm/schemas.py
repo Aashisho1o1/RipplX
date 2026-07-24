@@ -24,7 +24,6 @@ _STRICT = ConfigDict(extra="forbid")
 _SEVERITY = frozenset({"critical", "high", "medium", "low"})
 _OVERALL = _SEVERITY | {"routine"}
 _CONFIDENCE = frozenset({"high", "medium", "low"})
-#AS: Is this vocab thing really good enough to continute? just like in another comment
 
 def _one_of(allowed: frozenset[str]):
     def _validate(value: str) -> str:

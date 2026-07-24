@@ -1230,14 +1230,12 @@ code,
   font-size: var(--text-caption);
 }
 
-.check-row.pass span,
-.check-row.pass_with_warnings span {
+.check-row.pass span {
   color: var(--color-verified);
   font-weight: 700;
 }
 
-.certificate-detail.redacted .check-row.pass span,
-.certificate-detail.redacted .check-row.pass_with_warnings span {
+.certificate-detail.redacted .check-row.pass span {
   color: var(--color-muted);
 }
 

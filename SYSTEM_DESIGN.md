@@ -25,14 +25,16 @@ Tiers describe review depth, not edit permissions.
 Tier 1 files:
 
 ```
-src/finwatch/core/types.py            src/finwatch/signals/matrix.py        (dormant)
-src/finwatch/metrics/envelope.py      src/finwatch/verify/checks.py
-src/finwatch/xbrl/normalize.py        tests/test_signals_matrix.py          (dormant spec)
-src/finwatch/metrics/formulas.py      tests/test_verifier_mutations.py
+src/finwatch/llm/schemas.py           src/finwatch/verify/checks.py
+src/finwatch/llm/stages.py            src/finwatch/verify/presentation.py
+src/finwatch/xbrl/normalize.py        src/finwatch/verify/compiler.py
+src/finwatch/metrics/formulas.py      src/finwatch/presentation/canonical.py
+src/finwatch/metrics/envelope.py      src/finwatch/core/types.py
+tests/test_verifier_mutations.py
 ```
 
-The dormant signal matrix remains Tier 1 because accidental reactivation or future promotion would
-make its silent decisions consequential.
+This is the same list AGENTS.md carries, plus `verify/compiler.py`: the compiler is the sole judge
+of publication, so the two documents must name one set.
 
 ---
 
@@ -51,18 +53,16 @@ src/finwatch/
 │   ├── foundation.md         prompt-injection and evidence rules
 │   ├── P1_extractor.md       Generator action/tool protocol
 │   ├── P1_skeptic.md         one-directional finance objection protocol
-│   └── P2_impact.md, P3_rationale.md                 dormant research
 ├── xbrl/                     point-in-time SEC companyfacts normalization
 ├── metrics/
 │   ├── catalog.py            six launch metrics and labels
 │   ├── service.py            launch-only compute/persist orchestration
 │   ├── envelope.py           universal result/provenance envelope        ⚙
-│   └── formulas.py           starter + dormant extended pure formulas    ⚙
+│   └── formulas.py           starter metric pure formulas                ⚙
 ├── pipeline/
 │   ├── run.py                newest-only production wiring/scheduling
 │   ├── orchestrator.py       P0→metrics→tool harness→publication gate
-│   ├── progress.py           five-stage persisted ledger
-│   └── adapters.py           dormant P2/P3/matrix adapters
+│   └── progress.py           five-stage persisted ledger
 ├── verify/
 │   ├── compiler.py           finding-local compile/repair/prune + direction gate ⚙
 │   ├── checks.py             deterministic V1–V5 primitives              ⚙
@@ -82,7 +82,6 @@ src/finwatch/
 │   └── security.py           remote signing/email/host configuration policy
 ├── db/                       one fresh SQLite schema + repositories
 ├── evals/                    12-case accession-pinned golden set/harness
-├── signals/                  dormant deterministic research matrix
 └── cli.py                    operator/developer CLI
 
 web/                          React/Vite launch client; consumes presentation DTOs

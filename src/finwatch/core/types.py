@@ -3,8 +3,6 @@ from __future__ import annotations
 
 from enum import Enum
 
-FORMULA_SUITE_VERSION = "core.v1"
-
 DISCLAIMER = (
     "Educational analysis of public information for the portfolio owner's "
     "own decision-making. Not individualized investment advice. "
@@ -14,19 +12,7 @@ DISCLAIMER = (
 FORBIDDEN_VOCABULARY = [
     "guaranteed", "can't lose", "moon", "obvious", "no-brainer",
     "sure thing", "risk-free",
-] #AS: Are forbidden vocabulary really necessary? I think the current one is too limited to have any decisive impact? I know, we are trying to be mindful of soem financiala dvisory regulation, but let's remove this or if it's absolutely necessary, let's have better way to add this forbidden vocab or any better necessary thing.
-
-
-# Caution ordering: index 0 = MOST cautious. Caps may only move toward index 0.
-CAUTION_ORDER = ["STRONG_REVIEW_SELL", "TRIM", "HOLD", "ACCUMULATE"] #AS: I think we already moved away from these trim, hold etc while leaniong for the prorotype.. looks like the remnants from past version.
-
-POSTURE_MAP = {
-    "STRONG_REVIEW_SELL": "critical_review",
-    "TRIM": "risk_review",
-    "HOLD": "monitor",
-    "ACCUMULATE": "positive_support",
-    "INSUFFICIENT_DATA": "insufficient_data",
-} #AS: looks like left ove from past version
+]
 
 # Red-flag codes emitted by P1 (adapter in pipeline/ maps P1 JSON -> these codes).
 CRITICAL_DOC_FLAGS = frozenset({
@@ -38,7 +24,7 @@ CRITICAL_DOC_FLAGS = frozenset({
     "auditor_resignation",
     "material_weakness_with_restatement_risk",
     "cyber_1_05_critical_tier",
-}) #AS: Ain't these red flags too limited? I feel hard writing these things will be difficult and may not exhaustively covers a lot of stuff. Maybe, using cheap LLm tool call for such things would be super helpful so we don't miss crucual red flags if theya re absolutely encessary in the lean proroptye version.
+})
 
 
 
@@ -54,7 +40,7 @@ class SectorClass(str, Enum):
     INSURANCE = "insurance"
     REIT = "reit"
     UTILITY = "utility"
-#AS: Looks like the leftover. i don't think lean version has such sector level thing in the frontend
+
 
 def sector_from_sic(sic: str | None) -> "SectorInfo":
     """v0 heuristic per spec: SIC 6000-6999 financial-class; 4900-4999 utility."""
@@ -70,12 +56,6 @@ def sector_from_sic(sic: str | None) -> "SectorInfo":
     if 4900 <= code <= 4999:
         return SectorInfo(SectorClass.UTILITY, False, sic)
     return SectorInfo(SectorClass.GENERAL, False, sic)
-#AS: looks left over
-
-def is_manufacturer_sic(sic: str | None) -> bool:
-    if not sic or not sic.strip().isdigit():
-        return False
-    return 2000 <= int(sic.strip()) <= 3999
 
 
 class SectorInfo:
