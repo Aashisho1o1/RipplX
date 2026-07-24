@@ -325,9 +325,9 @@ Output is capped at 2,000 tokens per call.
 Production accepts one `FINWATCH_MODEL` using the `openai/`, `openrouter/`, or `z-ai/` prefix, with an
 optional `FINWATCH_SKEPTIC_MODEL` on the same provider (otherwise it reuses the Generator), and the
 matching `OPENAI_API_KEY`, `OPENROUTER_API_KEY`, or `ZAI_API_KEY`. Each prefix maps to exactly one
-fixed endpoint — `z-ai/<model>` routes to Zhipu GLM through z.ai's Anthropic-compatible endpoint
-(`https://api.z.ai/api/anthropic`), where the Anthropic API has no JSON-object response format so the
-prompt carries the JSON contract instead. Arbitrary providers and caller-supplied base-URL overrides
+fixed endpoint — `z-ai/<model>` routes to Zhipu GLM through z.ai's OpenAI-compatible coding endpoint
+(`https://api.z.ai/api/coding/paas/v4/`, the endpoint a GLM Coding Plan key is authorized for), which
+supports the JSON-object response format so the provider enforces valid JSON. Arbitrary providers and caller-supplied base-URL overrides
 stay out of the launch path. Broader provider/model flexibility inside dormant developer utilities is
 not a production configuration promise. Keys may come from the environment or browser session
 memory. The operator may configure one server-side key for the configured provider so hosted

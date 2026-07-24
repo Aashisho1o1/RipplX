@@ -407,7 +407,6 @@ class PresentationService:
             "parse": "completed" if self.repo.list_filing_sections(accession) else "pending",
             "extract": "completed" if view.analysis_present else "pending",
             "metrics": "completed" if self.repo.latest_computations(view.ticker) else "pending",
-            "impact": "skipped" if view.analysis_present else "pending",
             "verify": "completed" if verification else "pending",
         }
         pipeline = []

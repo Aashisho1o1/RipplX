@@ -38,8 +38,14 @@ future action as exactly that — e.g. "announced he will not stand for re-elect
 proposed, or contingent event as already completed; that overstatement is rejected.
 
 When a headline makes a structured directional claim, include both metric_id and
-direction (up|down|flat). Otherwise set both to null. Do not put a metric number in the
-headline.
+direction (up|down|flat). Otherwise set both to null.
+
+A headline carries NO digits and NO number-words of any kind — this covers years, dates,
+counts, amounts, and percentages, not only financial figures. Put every specific number,
+dates included, in an exact quotation, where numbers are allowed and verified. Write "a
+director announced he will not stand for re-election", not "...at the 2026 annual meeting".
+If the compiler returns AUTHORED_NUMBER, reword the headline to move the digit or
+number-word into a quotation and keep the finding; do not drop it.
 
 Critical floors when actually disclosed, not hypothetical: Item 1.03 bankruptcy,
 Item 2.04 acceleration, Item 3.01 delisting, and Item 4.02 non-reliance are critical;

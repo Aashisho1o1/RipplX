@@ -13,7 +13,6 @@ from finwatch.db.repositories import (
     Repo,
     User,
     UserCompany,
-    UserPreference,
     VerificationResult,
     XbrlFact,
 )
@@ -33,7 +32,7 @@ __all__ = [
     "LOCAL_USER_ID",
     "User",
     "UserCompany",
-    "UserPreference",
     "VerificationResult",
     "XbrlFact",
 ]
+

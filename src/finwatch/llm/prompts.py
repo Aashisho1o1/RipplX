@@ -14,7 +14,7 @@ _FOUNDATION_PLACEHOLDER = "[FOUNDATION BLOCK]"
 
 STAGE_P1 = "P1_extractor"
 STAGE_SKEPTIC = "P1_skeptic"
-_STAGE_VERSIONS = {STAGE_P1: "v7", STAGE_SKEPTIC: "v2"}
+_STAGE_VERSIONS = {STAGE_P1: "v8", STAGE_SKEPTIC: "v2"}
 # Stage prompts MUST embed the shared foundation block (untrusted-input / prompt-injection
 # defense). ``foundation`` itself is not a stage and carries no placeholder.
 _STAGE_PROMPTS = frozenset({STAGE_P1, STAGE_SKEPTIC})

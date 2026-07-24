@@ -1,8 +1,11 @@
-"""Thin repository layer with typed (pydantic) row mappers.
+"""
+
+Thin repository layer with typed (pydantic) row mappers.
 
 Every method is a small, explicit SQL call. Row models mirror the schema columns
 one-to-one so ``Model(**dict(row))`` round-trips. Booleans-as-INTEGER (owned,
 is_financial, is_amendment) are kept as ``int`` to match the DB exactly.
+
 """
 
 from __future__ import annotations
@@ -38,11 +41,6 @@ class UserCompany(BaseModel):
     user_id: str
     cik: str
     tracked_at: str
-
-
-class UserPreference(BaseModel):
-    user_id: str
-    period: str
 
 
 class Filing(BaseModel):
@@ -214,10 +212,6 @@ class Repo:
             "SELECT * FROM companies WHERE ticker = ? COLLATE NOCASE LIMIT 1", (ticker,)
         ).fetchone()
         return None if row is None else Company(**dict(row))
-
-    def list_companies(self) -> list[Company]:
-        rows = self.conn.execute("SELECT * FROM companies ORDER BY ticker").fetchall()
-        return [Company(**dict(r)) for r in rows]
 
     def list_tracked_companies(self, user_id: str = LOCAL_USER_ID) -> list[Company]:
         rows = self.conn.execute(
@@ -435,14 +429,6 @@ class Repo:
             (accession_number,),
         ).fetchall()
         return [FilingSection(**dict(r)) for r in rows]
-
-    def get_filing_section(self, accession_number: str, section_key: str) -> FilingSection | None:
-        row = self.conn.execute(
-            "SELECT * FROM filing_sections WHERE accession_number = ? AND section_key = ? "
-            "ORDER BY char_start LIMIT 1",
-            (accession_number, section_key),
-        ).fetchone()
-        return None if row is None else FilingSection(**dict(row))
 
     def prior_comparable_section(
         self, cik: str, base_form: str, section_key: str, filed_before: str

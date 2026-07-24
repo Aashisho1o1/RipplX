@@ -52,7 +52,7 @@ def test_prompt_loader_splices_foundation_and_versions():
     assert "[FOUNDATION BLOCK]" not in text
     assert "R1. NUMBERS" in text            # foundation content spliced in
     assert "filing-research Generator" in text
-    assert version == "P1_extractor.v7+foundation.v2"
+    assert version == "P1_extractor.v8+foundation.v2"
     assert '"findings"' in text and '"critical_flag"' in text
     assert "the server derives them" in text  # offsets are server-anchored, not model-supplied
 
@@ -441,7 +441,7 @@ def test_zai_model_resolves_to_anthropic_endpoint_without_json_mode():
     from finwatch.llm.router import resolve_model
 
     assert resolve_model("z-ai/glm-5.2") == (
-        "anthropic/glm-5.2", "https://api.z.ai/api/anthropic", False
+        "openai/glm-5.2", "https://api.z.ai/api/coding/paas/v4/", True
     )
     # openai/openrouter route unchanged: their own endpoint, json mode supported.
     assert resolve_model("openrouter/z-ai/glm-5.2") == (
