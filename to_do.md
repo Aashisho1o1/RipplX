@@ -12,6 +12,30 @@ Severity: S2 high · S3 medium · S4 low. Confidence noted where it is not High.
 
 ---
 
+## Phase 0.5 — the sample's remaining gap (do before promoting the link widely)
+
+### S2 · Sample evidence is not byte-authentic to the documents it links
+The bundled filings are abridged excerpts (a few hundred bytes to ~2 KB) while the UI links
+"Open SEC filing" to the complete document. The displayed character offsets and section SHA-256
+therefore attest to the excerpt and will not reproduce against EDGAR. For a product whose entire
+claim is verifiable provenance, this is the worst place to overclaim.
+
+**Interim (shipped f54e746):** both sample surfaces now state plainly that the copies are abridged
+excerpts and that the offsets/hash prove the excerpt, not the full document.
+
+**Real fix:** bundle complete frozen primary documents for the demo cases and re-record their P1
+outputs, so a visitor can verify a quote against EDGAR character-for-character. Cost is repo size
+(a real 10-Q is ~500 KB–3 MB each); consider one byte-authentic hero filing plus abridged others,
+clearly distinguished. Related: `src/finwatch/evals/golden_set/manifest.yaml` calls its HTML
+"representative fixtures", so the same caveat applies to the golden set.
+
+### S3 · The sample proves verification wiring, not discovery
+`DemoLLM` replays a canned submit, so every sample trace reports zero tool calls, zero repairs, and
+zero dropped findings. Either replay an authentic recorded action sequence (search → get_metric →
+submit → skeptic) or state in the UI that the sample is a verification replay.
+
+---
+
 ## Phase 1 — trust integrity (do before wider use)
 
 ### S2 · Rounding-aware metric direction is inert in production — HALF-ADDRESSED
