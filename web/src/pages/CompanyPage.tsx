@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
-import { api, ApiError } from "../api/client";
+import { api, ApiError, readPath } from "../api/client";
 import { DisclaimerFooter } from "../components/DisclaimerFooter";
 import { AnalysisPanel } from "../components/AnalysisPanel";
 import { Drawer } from "../components/Drawer";
@@ -22,7 +22,7 @@ export function CompanyPage() {
   // showed none. One clock for both surfaces.
   const [asOf, setAsOf] = useState(new Date().toISOString().slice(0, 10));
   const [job, setJob] = useState<Job | null>(null); const [jobError, setJobError] = useState("");
-  const load = useCallback((signal: AbortSignal) => api<Metrics>(`/api/companies/${ticker}/metrics?as_of=${asOf}&demo=${demo}`, { signal }), [ticker, asOf, demo]);
+  const load = useCallback((signal: AbortSignal) => api<Metrics>(`${readPath(demo, `companies/${ticker}/metrics`)}?as_of=${asOf}`, { signal }), [ticker, asOf, demo]);
   const resource = useResource(load, [ticker, asOf, demo]);
   useEffect(() => { if (!job || !["queued", "running"].includes(job.state)) return; const timer = window.setInterval(() => api<Job>(`/api/jobs/${job.id}`).then(next => { setJob(next); if (!["queued", "running"].includes(next.state)) resource.refresh(); }).catch(reason => { setJobError(reason instanceof ApiError ? reason.message : "Job status was lost after a restart."); setJob(null); }), 700); return () => window.clearInterval(timer); }, [job, resource.refresh]);
   async function start(kind: "sync" | "analyze", formType: FilingType = "latest") { setJobError(""); const payload = { ticker, ...(formType === "latest" ? {} : { form_type: formType }) }; try { setJob(await api<Job>(`/api/jobs/${kind === "sync" ? "sync" : "analyze"}`, { method: "POST", body: JSON.stringify(payload) })); } catch (reason) { setJobError(reason instanceof Error ? reason.message : "Operation could not start."); } }

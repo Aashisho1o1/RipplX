@@ -61,6 +61,9 @@ MAX_TRACKED_TICKERS = 25
 _TICKER_PATTERN = r"^[A-Za-z][A-Za-z0-9.-]*$"
 _ACCESSION_PATTERN = r"^\d{10}-\d{2}-\d{6}$"
 _JOB_ID_PATTERN = r"^[0-9a-f]{32}$"
+# Unauthenticated, GET-only, read-only routes serving the bundled sample. Everything
+# under this prefix hardcodes the demo database and the reserved local-user scope.
+PUBLIC_SAMPLE_PREFIX = "/api/public/sample/"
 _REQUEST_TOO_LARGE_BODY = (
     b'{"error":{"code":"request_too_large",'
     b'"message":"Request body exceeds the 1 MiB limit."}}'
@@ -311,6 +314,14 @@ def create_app(
             )
             return await call_next(request)
         if request.url.path in public_auth_paths or request.method == "OPTIONS":
+            return await call_next(request)
+        # The bundled sample is public: an anonymous visitor must be able to see a real
+        # verified brief without an account. The bypass is a GET-only path prefix, never
+        # a query parameter on a private route — `?demo=false` on /api/brief would
+        # otherwise fall through to the operational database. The handlers under this
+        # prefix never read request.state.principal, so no principal is injected here
+        # and none can be impersonated.
+        if request.method == "GET" and request.url.path.startswith(PUBLIC_SAMPLE_PREFIX):
             return await call_next(request)
 
         try:
@@ -1093,6 +1104,74 @@ def create_app(
         if job is None:
             raise ApiProblem(404, "job_not_found", "Job not found.")
         return job
+
+    # ---- public sample -----------------------------------------------------
+    # Read-only projections of the bundled fixtures, reachable without an account so a
+    # first-time visitor can inspect a real verified brief, its exact evidence, and its
+    # certificate. These deliberately do NOT call principal_for: the demo database and
+    # the reserved local-user scope are hardcoded, so there is no caller-supplied value
+    # that can point them at participant data. Declared before the /api catch-all.
+
+    @app.get(f"{PUBLIC_SAMPLE_PREFIX}bootstrap")
+    def public_sample_bootstrap():
+        """A fixed literal, never settings_payload().
+
+        settings_payload reports whether the *operator* has a provider key configured
+        and which model is selected. That is not public information, and an anonymous
+        caller has no session for it to describe.
+        """
+        return {
+            "setup_required": False,
+            "sec_user_agent": "",
+            "account_email": None,
+            "period": "90d",
+            "model": "",
+            "provider": None,
+            "api_key_configured": False,
+            "analysis_configured": False,
+        }
+
+    @app.get(f"{PUBLIC_SAMPLE_PREFIX}brief")
+    def public_sample_brief():
+        with repo_context(True) as repo:
+            return PresentationService(repo, user_id=LOCAL_USER_ID).brief(
+                since=DEMO_SINCE, sample_data=True
+            )
+
+    @app.get(f"{PUBLIC_SAMPLE_PREFIX}filings/{{accession}}")
+    def public_sample_filing(accession: str = PathParam(pattern=_ACCESSION_PATTERN)):
+        with repo_context(True) as repo:
+            result = PresentationService(repo, user_id=LOCAL_USER_ID).filing(
+                accession, sample_data=True
+            )
+            if result is None:
+                raise ApiProblem(404, "filing_not_found", "Filing not found.")
+            return result
+
+    @app.get(f"{PUBLIC_SAMPLE_PREFIX}filings/{{accession}}/certificate")
+    def public_sample_certificate(
+        accession: str = PathParam(pattern=_ACCESSION_PATTERN),
+    ):
+        with repo_context(True) as repo:
+            result = PresentationService(repo, user_id=LOCAL_USER_ID).certificate(
+                accession
+            )
+            if result is None:
+                raise ApiProblem(404, "certificate_not_found", "Certificate not found.")
+            return result
+
+    @app.get(f"{PUBLIC_SAMPLE_PREFIX}companies/{{ticker}}/metrics")
+    def public_sample_metrics(
+        ticker: str = PathParam(pattern=_TICKER_PATTERN),
+        as_of: str | None = None,
+    ):
+        with repo_context(True) as repo:
+            result = PresentationService(repo, user_id=LOCAL_USER_ID).metrics(
+                ticker, as_of=as_of
+            )
+            if result is None:
+                raise ApiProblem(404, "company_not_found", "Company not found.")
+            return result
 
     @app.api_route(
         "/api/{path:path}",

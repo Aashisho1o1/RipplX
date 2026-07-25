@@ -4,6 +4,17 @@ export class ApiError extends Error {
 
 const CSRF_COOKIE = "__Host-finwatch_csrf";
 
+/** Route a read to the public sample endpoints when viewing the bundled sample.
+ *
+ * The sample is served by unauthenticated, read-only routes under
+ * /api/public/sample/. Private routes stay private: a signed-out visitor asking for
+ * /api/brief gets 401 whatever query string they attach, which is why the sample has
+ * its own prefix rather than a `?demo=` flag on the real endpoints.
+ */
+export function readPath(demo: boolean, suffix: string): string {
+  return demo ? `/api/public/sample/${suffix}` : `/api/${suffix}`;
+}
+
 function csrfToken(): string | null {
   const prefix = `${CSRF_COOKIE}=`;
   const match = document.cookie.split("; ").find(value => value.startsWith(prefix));

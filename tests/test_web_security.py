@@ -537,3 +537,52 @@ def test_production_schema_initializes_once_before_concurrent_requests(tmp_path,
 
     assert statuses == [200] * 8
     assert calls == {"init": 1, "connect": 8}
+
+
+def test_public_sample_is_readable_without_an_account_and_leaks_no_operator_state(
+    tmp_path, monkeypatch
+):
+    """The bundled sample must be reachable by an anonymous visitor.
+
+    Bootstrap runs before any route renders, so while it required a session a link to
+    the sample landed a signed-out visitor on the sign-in form. These routes are a
+    GET-only prefix that hardcodes the demo database and the reserved local-user scope,
+    rather than a `?demo=` flag on the private routes — a flag would leave
+    `/api/brief?demo=false` reachable and scoped to whatever principal was injected.
+    """
+    monkeypatch.setenv("OPENAI_API_KEY", "operator-key-must-not-be-implied")
+    app, _sender = _remote_app(tmp_path, monkeypatch)
+    anon = TestClient(app, base_url="https://alpha.example")
+
+    boot = anon.get("/api/public/sample/bootstrap")
+    assert boot.status_code == 200
+    payload = boot.json()
+    # An anonymous caller has no session, and the operator's configuration is not
+    # public: never report a configured model/provider/key to one.
+    assert payload["account_email"] is None
+    assert payload["api_key_configured"] is False
+    assert payload["analysis_configured"] is False
+    assert payload["model"] == "" and payload["provider"] is None
+    assert payload["setup_required"] is False
+
+    brief = anon.get("/api/public/sample/brief")
+    assert brief.status_code == 200 and brief.json()["sample_data"] is True
+    accession = brief.json()["filings"][0]["accession"]
+    assert anon.get(f"/api/public/sample/filings/{accession}").status_code == 200
+    # The certificate is the artifact that best demonstrates the gate; it must be
+    # reachable in the sample rather than 404ing behind ownership.
+    assert anon.get(f"/api/public/sample/filings/{accession}/certificate").status_code == 200
+
+
+def test_public_sample_prefix_never_widens_private_access(tmp_path, monkeypatch):
+    app, _sender = _remote_app(tmp_path, monkeypatch)
+    anon = TestClient(app, base_url="https://alpha.example")
+
+    # Private routes stay private, with or without a demo flag.
+    for path in ("/api/bootstrap", "/api/brief", "/api/brief?demo=true", "/api/companies"):
+        assert anon.get(path).status_code == 401, path
+
+    # The bypass is GET-only: no mutation may ride the public prefix.
+    assert anon.post("/api/public/sample/brief").status_code in {403, 405}
+    # And it grants nothing outside the sample namespace.
+    assert anon.get("/api/public/sample/../bootstrap").status_code in {401, 404}

@@ -464,8 +464,16 @@ class PresentationService:
             withheld_reason=entry.withheld_reason,
             pipeline=pipeline,
             research=research,
+            # The sample is served by unauthenticated routes, so its certificate link
+            # must point at those too. Emitting the private URL made the panel 404 for
+            # a sample viewer, which is why the surface used to hide it entirely — the
+            # one artifact that best demonstrates the gate was the one nobody could see.
             certificate_url=(
-                f"/api/filings/{accession}/certificate"
+                (
+                    f"/api/public/sample/filings/{accession}/certificate"
+                    if sample_data
+                    else f"/api/filings/{accession}/certificate"
+                )
                 if research and filing.status in {"verified", "analyzed"}
                 else None
             ),

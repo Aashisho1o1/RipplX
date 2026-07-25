@@ -1,6 +1,6 @@
 import { useCallback } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
-import { api } from "../api/client";
+import { api, readPath } from "../api/client";
 import { DisclaimerFooter } from "../components/DisclaimerFooter";
 import { FindingList, trustedSecUrl } from "../components/FindingList";
 import { MetricTable } from "../components/MetricTable";
@@ -10,7 +10,7 @@ import { useResource } from "../hooks/useResource";
 import type { FilingDetail, FilingOutcome } from "../types";
 
 export const TERMINAL_REASON_LABEL: Record<string, string> = {
-  verified: "All checks passed",
+  verified: "Publication gate passed",
   skeptic_blocked: "A reviewer objection was left unresolved",
   skeptic_incomplete: "The reviewer pass did not complete",
   budget_exhausted: "The research budget was exhausted",
@@ -72,7 +72,7 @@ export function FilingPage() {
   const navigate = useNavigate();
   const demo = new URLSearchParams(location.search).get("demo") === "1";
   const load = useCallback(
-    (signal: AbortSignal) => api<FilingDetail>(`/api/filings/${accession}?demo=${demo}`, { signal }),
+    (signal: AbortSignal) => api<FilingDetail>(readPath(demo, `filings/${accession}`), { signal }),
     [accession, demo],
   );
   const resource = useResource(load, [accession, demo]);
@@ -123,7 +123,7 @@ export function FilingPage() {
     </section>
 
     {parsedSections.length > 0 && <p className="parsed-sections"><span>Parsed sections</span><code>{parsedSections.join(" · ")}</code></p>}
-    {!demo && <ProvenancePanel research={research} certificateUrl={detail.certificate_url} pipeline={detail.pipeline} terminalReasonLabel={reasonLabel} />}
+    <ProvenancePanel research={research} certificateUrl={detail.certificate_url} pipeline={detail.pipeline} terminalReasonLabel={reasonLabel} />
     <DisclaimerFooter text={detail.disclaimer} />
   </main>;
 }

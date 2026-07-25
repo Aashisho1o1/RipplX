@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
-import { api, ApiError } from "../api/client";
+import { api, ApiError, readPath } from "../api/client";
 import { AnalysisPanel } from "../components/AnalysisPanel";
 import { DisclaimerFooter } from "../components/DisclaimerFooter";
 import { Drawer } from "../components/Drawer";
@@ -18,7 +18,7 @@ export function BriefPage() {
   const location = useLocation(); const navigate = useNavigate(); const { bootstrap } = useBootstrap();
   const params = new URLSearchParams(location.search); const demo = params.get("demo") === "1"; const panel = params.get("panel");
   const [job, setJob] = useState<Job | null>(null); const [actionError, setActionError] = useState("");
-  const load = useCallback((signal: AbortSignal) => api<Brief>(`/api/brief?demo=${demo}`, { signal }), [demo]);
+  const load = useCallback((signal: AbortSignal) => api<Brief>(readPath(demo, "brief"), { signal }), [demo]);
   const resource = useResource(load, [demo]);
   useEffect(() => {
     if (!job || !["queued", "running"].includes(job.state)) return;

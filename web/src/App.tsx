@@ -1,9 +1,10 @@
 import { useCallback, useState, type FormEvent } from "react";
 import { BrowserRouter, Navigate, Route, Routes, useLocation } from "react-router-dom";
-import { api, ApiError } from "./api/client";
+import { api, ApiError, readPath } from "./api/client";
 import { AppShell } from "./components/AppShell";
 import { BootstrapContext } from "./context/BootstrapContext";
 import { useResource } from "./hooks/useResource";
+import { AboutPage } from "./pages/AboutPage";
 import { BriefPage } from "./pages/BriefPage";
 import { CompanyPage } from "./pages/CompanyPage";
 import { FilingPage } from "./pages/FilingPage";
@@ -14,19 +15,24 @@ import type { AuthChallenge, Bootstrap } from "./types";
 
 function RoutedApp() {
   const location = useLocation();
+  // Bootstrap is the hard gate: it runs before any route renders, so in hosted mode a
+  // signed-out visitor following a sample link used to be met with the sign-in form
+  // instead of the sample. Reading it from the public sample endpoint keeps the sample
+  // genuinely public without widening any private route.
+  const demo = new URLSearchParams(location.search).get("demo") === "1";
   const load = useCallback(
-    (signal: AbortSignal) => api<Bootstrap>("/api/bootstrap", { signal }),
-    [],
+    (signal: AbortSignal) => api<Bootstrap>(readPath(demo, "bootstrap"), { signal }),
+    [demo],
   );
-  const resource = useResource(load, []);
+  const resource = useResource(load, [demo]);
   if (!resource.data && resource.error instanceof ApiError && resource.error.code === "authentication_required") {
     return <SignInScreen onSignedIn={resource.refresh} />;
   }
   if (!resource.data) {
     return <main className="setup"><p className={resource.loading ? "loading" : "notice"}>{resource.loading ? "Starting RipplX…" : resource.error?.message ?? "RipplX could not start."}</p></main>;
   }
-  const demoPreview = resource.data.setup_required && new URLSearchParams(location.search).get("demo") === "1";
-  return <BootstrapContext.Provider value={{ bootstrap: resource.data, refresh: resource.refresh }}><Routes>{resource.data.setup_required && !demoPreview && <Route path="*" element={<SetupPage onComplete={resource.refresh} />} />} {(!resource.data.setup_required || demoPreview) && <Route element={<AppShell />}><Route path="/brief" element={<BriefPage />} /><Route path="/companies" element={<CompaniesPage />} /><Route path="/settings" element={<SettingsPage />} /><Route path="/filings/:accession" element={<FilingPage />} /><Route path="/companies/:ticker" element={<CompanyPage />} /><Route path="*" element={<Navigate to="/brief" replace />} /></Route>}</Routes></BootstrapContext.Provider>;
+  const demoPreview = resource.data.setup_required && demo;
+  return <BootstrapContext.Provider value={{ bootstrap: resource.data, refresh: resource.refresh }}><Routes>{resource.data.setup_required && !demoPreview && <Route path="*" element={<SetupPage onComplete={resource.refresh} />} />} {(!resource.data.setup_required || demoPreview) && <Route element={<AppShell />}><Route path="/brief" element={<BriefPage />} /><Route path="/about" element={<AboutPage />} /><Route path="/companies" element={<CompaniesPage />} /><Route path="/settings" element={<SettingsPage />} /><Route path="/filings/:accession" element={<FilingPage />} /><Route path="/companies/:ticker" element={<CompanyPage />} /><Route path="*" element={<Navigate to="/brief" replace />} /></Route>}</Routes></BootstrapContext.Provider>;
 }
 
 function SignInScreen({ onSignedIn }: { onSignedIn: () => void }) {
