@@ -27,3 +27,17 @@ it("replaces the shared unlock token with public email-code sign in", async () =
   const [, init] = fetchMock.mock.calls[1] as [string, RequestInit];
   expect(JSON.parse(String(init.body))).toEqual({ email: "person@example.com" });
 });
+
+it("offers the sample from the sign-in screen so an anonymous visitor is never walled off", async () => {
+  // The public sample lives at /brief?demo=1, but a visitor opening the bare project
+  // URL has no demo flag: bootstrap 401s and the sign-in card renders. Without a way
+  // through, the first thing anyone following a shared link sees is an email form.
+  const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+    error: { code: "authentication_required", message: "Sign in with your email to continue." },
+  }), { status: 401, headers: { "Content-Type": "application/json" } }));
+  vi.stubGlobal("fetch", fetchMock);
+
+  render(<App />);
+  const sample = await screen.findByRole("link", { name: /sample brief/i });
+  expect(sample).toHaveAttribute("href", "/brief?demo=1");
+});
