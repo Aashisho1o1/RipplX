@@ -14,7 +14,16 @@ Severity: S2 high · S3 medium · S4 low. Confidence noted where it is not High.
 
 ## Phase 1 — trust integrity (do before wider use)
 
-### S2 · Rounding-aware metric direction is inert in production
+### S2 · Rounding-aware metric direction is inert in production — HALF-ADDRESSED
+**Update 2026-07-24:** the P1 prompt no longer induces the annotation (it now instructs
+`metric_id`/`direction` to be null), which stopped it destroying findings — it had killed 3 of
+4 findings in a live GOOGL sample. The dead code path remains: `llm/schemas.py` still accepts the
+fields, `verify/compiler.py:111-118` still branches on them, and `direction_delta`/
+`direction_slack`/`direction_basis` + `xbrl_rounding_slack` are still computed and persisted.
+Decide (a) delete them, or (b) give slack a real source, then update AGENTS.md §8/§9 — which still
+documents this as shipped behaviour. Original analysis below.
+
+
 Real SEC companyfacts carries **no `decimals` key** — 108,895 fact entries scanned across three
 issuers, zero present. So `direction_slack` is always `None`, `deterministic_direction` returns
 `None`, and every finding that follows the prompt's own `metric_id`+`direction` instruction is pruned
