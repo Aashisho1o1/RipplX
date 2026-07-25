@@ -15,7 +15,9 @@ def test_demo_projection_preserves_digest_order_and_trust_data():
     finally:
         conn.close()
 
-    assert view.answer == "A tracked company needs a critical review."
+    # The hero names the issuer and the change instead of hinting one exists.
+    assert view.answer.startswith("DPLS 10-K:")
+    assert "Going concern" in view.answer
     assert view.period.filings_in_window == 5
     assert view.period.analyzed_filings == 5
     assert [item.ticker for item in view.filings] == ["DPLS", "MSFT", "TWKS"]
@@ -71,7 +73,7 @@ def test_critical_finding_outranks_a_pipeline_failure_in_the_headline():
             )
         )
         brief = PresentationService(repo).brief(since=DEMO_SINCE)
-        assert brief.answer.startswith("A tracked company needs a critical review.")
+        assert brief.answer.startswith("DPLS 10-K:")
         assert "could not be analyzed" in brief.answer
         assert not brief.answer.startswith("1 filing could not be analyzed")
     finally:
@@ -118,7 +120,10 @@ def test_brief_contract_carries_no_posture_field():
         assert "answer_posture" not in models.BriefView.model_fields
         assert not hasattr(models, "Posture")
         assert not any("posture" in key for key in view.model_dump())
-        assert view.answer == "A tracked company needs a critical review."
+        # The hero states a fact, not a mood: it names the issuer, the form, and the
+        # change, with no severity-derived tone.
+        assert view.answer.startswith("DPLS 10-K:")
+        assert "Going concern" in view.answer
     finally:
         conn.close()
 

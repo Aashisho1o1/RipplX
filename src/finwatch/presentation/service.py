@@ -118,6 +118,30 @@ def _check_detail(check_id: str, detail: str | None) -> str | None:
     return cleaned[:_DETAIL_MAX_CHARS] or None
 
 
+def _severe_lead(published: list[FilingDigestEntry]) -> str | None:
+    """Lead with the most severe published change, named.
+
+    Returns None when no critical/high finding is present so the caller keeps its
+    generic sentence. The headline is model-authored but already passed the authored-text
+    policy and the publication gate, and is displayed verbatim elsewhere on the page.
+    """
+    rank = {"CRITICAL": 0, "HIGH": 1}
+    best: tuple[int, FilingDigestEntry, str] | None = None
+    for entry in published:
+        for finding in entry.findings:
+            order = rank.get(finding.severity)
+            if order is None:
+                continue
+            if best is None or order < best[0]:
+                best = (order, entry, finding.headline)
+    if best is None:
+        return None
+    _order, entry, headline = best
+    others = len(published) - 1
+    tail = f" Plus {plural_count(others, 'other filing')} reviewed." if others > 0 else ""
+    return f"{entry.ticker} {entry.form}: {headline.rstrip('.')}.{tail}"
+
+
 def _coverage_sentence(
     gate_withheld: list[FilingDigestEntry],
     pipeline_failed: list[FilingDigestEntry],
@@ -300,9 +324,18 @@ class PresentationService:
         )
 
         if severe:
-            answer = "A tracked company needs a critical review."
+            # Name the issuer and the change rather than reporting that one exists.
+            # The headline already cleared the authored-text policy and is rendered
+            # verbatim further down the page, so leading with it adds no claim — it
+            # only stops the first line withholding the answer the brief already has.
+            answer = _severe_lead(published) or "A tracked company needs a critical review."
         elif published:
-            answer = f"Important changes found in {plural_count(len(published), 'filing')}."
+            issuers = sorted({entry.ticker for entry in published})
+            named = ", ".join(issuers[:3]) + (" and others" if len(issuers) > 3 else "")
+            answer = (
+                f"Important changes found in {plural_count(len(published), 'filing')}"
+                f" ({named})."
+            )
         elif gate_removed:
             answer = (
                 f"Every proposed change in {plural_count(len(gate_removed), 'filing')} "
