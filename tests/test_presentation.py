@@ -1,7 +1,7 @@
 import json
 
 from finwatch.db import LOCAL_USER_ID, Company, Computation, Filing, Repo, init_db
-from finwatch.demo import DEMO_SINCE, build_demo_db
+from finwatch.demo import DEMO_METRICS_AS_OF, DEMO_SINCE, build_demo_db
 from finwatch.metrics.catalog import STARTER_METRICS
 from finwatch.metrics.envelope import MetricResult
 from finwatch.presentation import PresentationService, models
@@ -220,12 +220,13 @@ def test_filing_verification_projects_check_ids_and_only_v2_details():
         ]
         assert detail.verification.verdict == "PASS"
         by_id = {row.check_id: row for row in checks}
+        # Real MSFT FY2025 figures from the bundled companyfacts fixture.
         assert by_id["V2c"].detail == (
-            "rev=168088000000.0 gp=115856000000.0 oi=69916000000.0"
+            "rev=281724000000.0 gp=193893000000.0 oi=128528000000.0"
         )
-        assert (by_id["V2a"].detail or "").startswith(
-            "assets/liabilities/equity resolved to different period-ends"
-        )
+        # The newer fixture vintage resolves assets and liabilities+equity to the same
+        # period-end, so the identity balances instead of warning about mixed periods.
+        assert by_id["V2a"].detail == "A=694228000000.0 L+E=694228000000.0"
         assert (by_id["V2b"].detail or "").startswith(
             "cash tie-out compares the fiscal-year change"
         )
@@ -239,16 +240,21 @@ def test_metrics_as_of_never_uses_future_computation():
     try:
         service = PresentationService(Repo(conn))
         before = service.metrics("MSFT", as_of="2024-04-01")
-        current = service.metrics("MSFT", as_of="2024-08-05")
+        day_before = service.metrics("MSFT", as_of="2026-04-28")
+        current = service.metrics("MSFT", as_of=DEMO_METRICS_AS_OF)
     finally:
         conn.close()
 
     assert before is not None and before.before_first_filing and before.rows == []
+    # The decisive case: the computation exists in the database, stamped one day later.
+    # Asking for an earlier date must not project it.
+    assert day_before is not None and day_before.rows == []
+    assert not day_before.before_first_filing
+
     assert current is not None
     rows = {row.metric: row for row in current.rows}
-    assert rows["Revenue growth"].state == "unavailable"
-    assert "current source is stale" in rows["Revenue growth"].state_label
-    assert rows["Liquidity"].state == "computed"
+    assert rows["Revenue growth"].state == "computed"
+    assert all(row.effective_as_of <= DEMO_METRICS_AS_OF for row in current.rows)
 
 
 def test_untracking_retains_company_and_filings():

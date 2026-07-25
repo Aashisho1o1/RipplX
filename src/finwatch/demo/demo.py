@@ -33,6 +33,14 @@ _MSFT_CIK = "0000789019"
 _MSFT_ACCN = "0000950170-24-048288"
 _MODEL = "demo/recorded"
 _NOW = "2024-08-05T00:00:00+00:00"
+# Production computes the starter metrics as of *today*, never as of the filing date
+# (`_compute_synced_metrics(..., as_of=date.today())`). The demo previously used each
+# case's `filed` date, which excluded the bundled fixtures' own newer facts under the
+# point-in-time rule and left almost every metric row "unavailable" — the opposite of
+# the "six verified financial deltas" the sample brief exists to show. This constant is
+# the demo's frozen "today", aligned with the bundled companyfacts vintage so the sample
+# stays deterministic instead of decaying as real time passes.
+DEMO_METRICS_AS_OF = "2026-04-29"
 
 
 class DemoLLM:
@@ -120,10 +128,20 @@ _COMPANIES = [
             is_financial=0, added_at=_NOW),
 ]
 
+_BUNDLED_FACTS = {_MSFT_CIK: "companyfacts_MSFT.json", "0000320193": "companyfacts_AAPL.json"}
+
+
 def _companyfacts(cik: str) -> dict:
-    """Bundled MSFT facts (full metric set); an empty-but-valid store otherwise."""
-    if cik == _MSFT_CIK:
-        return json.loads((_DATA / "companyfacts_MSFT.json").read_text())
+    """Bundled real SEC facts for the large-cap cases; empty-but-valid otherwise.
+
+    DPLS and TWKS ship no facts on purpose: they are a micro-cap and a company taken
+    private, and their genuinely sparse XBRL is what an `unavailable` metric row looks
+    like. Showing that beside two issuers with a full six-metric table is the honest
+    demonstration — the sample must not imply every issuer computes cleanly.
+    """
+    name = _BUNDLED_FACTS.get(cik)
+    if name:
+        return json.loads((_DATA / name).read_text())
     return {"cik": cik, "entityName": cik, "facts": {"us-gaap": {}, "dei": {}}}
 
 
@@ -152,7 +170,7 @@ def build_demo_db(db_path: str = ":memory:") -> sqlite3.Connection:
         analysis = orch.process_html(
             filing=filing,
             html=case.html_path.read_text(),
-            as_of=case.filed,
+            as_of=DEMO_METRICS_AS_OF,
         )
         repo.set_filing_status(
             case.accn,

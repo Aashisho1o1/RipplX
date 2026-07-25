@@ -4,7 +4,7 @@ import pytest
 
 from finwatch.db import Computation, Filing, Repo
 from finwatch.db.repositories import VerificationResult
-from finwatch.demo import DEMO_SINCE, build_demo_db
+from finwatch.demo import DEMO_METRICS_AS_OF, DEMO_SINCE, build_demo_db
 from finwatch.llm.schemas import P1Output
 from finwatch.metrics.catalog import (
     STARTER_METRIC_EXPRESSIONS,
@@ -13,6 +13,7 @@ from finwatch.metrics.catalog import (
 )
 from finwatch.metrics.envelope import MetricResult
 from finwatch.presentation.canonical import build_filing_entry
+from finwatch.presentation.formatting import format_fact_value
 from finwatch.presentation.projection import (
     GATE_WITHHELD_REASON,
     PIPELINE_FAILED_REASON,
@@ -206,14 +207,14 @@ def test_structured_metric_rows_carry_exact_persisted_source_identity():
     try:
         repo = Repo(conn)
         stored = repo.latest_computations("MSFT")
-        view = PresentationService(repo).metrics("MSFT", as_of="2024-08-05")
+        view = PresentationService(repo).metrics("MSFT", as_of=DEMO_METRICS_AS_OF)
     finally:
         conn.close()
 
     assert view is not None and view.rows
     source_ids = {row.id for row in stored}
     assert all(row.source_computation_id in source_ids for row in view.rows)
-    assert all(row.effective_as_of <= "2024-08-05" for row in view.rows)
+    assert all(row.effective_as_of <= DEMO_METRICS_AS_OF for row in view.rows)
 
 
 def test_computed_metric_projects_only_its_persisted_validated_inputs():
@@ -225,7 +226,7 @@ def test_computed_metric_projects_only_its_persisted_validated_inputs():
             if row.tool == "revenue_growth"
         )
         persisted = json.loads(stored.result_json)
-        view = PresentationService(repo).metrics("MSFT", as_of="2024-08-05")
+        view = PresentationService(repo).metrics("MSFT", as_of=DEMO_METRICS_AS_OF)
     finally:
         conn.close()
 
@@ -252,16 +253,23 @@ def test_computed_metric_projects_only_its_persisted_validated_inputs():
         assert projected.unit == source["unit_ref"]
         assert projected.period == period
         assert projected.accession == source["accession_number"]
+    # The projected value must be the persisted fact formatted, never a recomputation.
+    # Derived from the stored payload rather than hardcoded so a change of demo fixture
+    # vintage cannot silently turn this into a test of stale constants.
     first = row.derivation.inputs[0]
     persisted_first = persisted["inputs_used"][0]
     assert first.model_dump() == {
         "concept": persisted_first["tag"],
         "taxonomy": persisted_first["taxonomy"],
-        "value": "$168.1B",
+        "value": format_fact_value(persisted_first["value"], persisted_first["unit_ref"]),
         "unit": persisted_first["unit_ref"],
-        "period": "2020-07-01 to 2021-06-30",
+        "period": (
+            f"{persisted_first['period_start']} to {persisted_first['period_end']}"
+        ),
         "accession": persisted_first["accession_number"],
     }
+    # …and it must actually be a real formatted amount, not an empty passthrough.
+    assert first.value.startswith("$")
 
 
 def test_provenance_invalid_metric_withholds_its_derivation():
@@ -280,7 +288,7 @@ def test_provenance_invalid_metric_withholds_its_derivation():
         )
         conn.commit()
 
-        view = PresentationService(repo).metrics("MSFT", as_of="2024-08-05")
+        view = PresentationService(repo).metrics("MSFT", as_of=DEMO_METRICS_AS_OF)
     finally:
         conn.close()
 
@@ -299,7 +307,7 @@ def test_unavailable_metric_projects_formula_with_no_fabricated_inputs():
             status="unavailable",
             unavailable_missing=["revenue (2 annual periods)"],
             formula_version="revenue_growth.v5",
-            as_of="2024-08-05",
+            as_of=DEMO_METRICS_AS_OF,
         )
         repo.insert_computations([
             Computation(
@@ -313,7 +321,7 @@ def test_unavailable_metric_projects_formula_with_no_fabricated_inputs():
                 created_at="2026-07-22T00:00:00Z",
             )
         ])
-        view = PresentationService(repo).metrics("MSFT", as_of="2024-08-05")
+        view = PresentationService(repo).metrics("MSFT", as_of=DEMO_METRICS_AS_OF)
     finally:
         conn.close()
 
