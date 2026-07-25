@@ -13,9 +13,13 @@ export const CHECK_LABEL: Record<string, string> = {
 const VERDICT_LABEL: Record<string, string> = {
   PASS: "Passed", FAIL: "Failed", WARN: "Warning", SKIPPED_NOT_APPLICABLE: "Not applicable",
 };
+// "All checks passed" was shown even when several checks were skipped as not
+// applicable, which claims more than the run proved. The pill describes the gate — the
+// only thing a PASS verdict actually decides — and the ran/total split is rendered
+// beside it so a skipped check is visible rather than absorbed into "all".
 const OVERALL: Record<Verification["verdict"], { label: string; tone: string }> = {
-  PASS: { label: "All checks passed", tone: "verified" },
-  PASS_WITH_WARNINGS: { label: "Passed with data-quality warnings", tone: "amber" },
+  PASS: { label: "Publication gate passed", tone: "verified" },
+  PASS_WITH_WARNINGS: { label: "Gate passed with data-quality warnings", tone: "amber" },
   FAIL: { label: "A blocking check failed", tone: "critical" },
 };
 const GATE_CHECKS = new Set(["V1", "V4", "V5"]);
@@ -35,5 +39,6 @@ export function VerificationBand({ verification }: { verification: Verification 
   const dataQuality = verification.checks.filter(check => DATA_QUALITY_CHECK.test(check.check_id));
   const other = verification.checks.filter(check => !GATE_CHECKS.has(check.check_id) && !DATA_QUALITY_CHECK.test(check.check_id));
   const overall = OVERALL[verification.verdict];
-  return <section className="section verification-band" aria-labelledby="verification-heading"><header className="reading-heading"><div><p className="section-kicker">Deterministic publication gate</p><h2 id="verification-heading">What was checked</h2></div><span className={`pill ${overall.tone}`}>{overall.label}</span></header><p className="metric-caption">These checks prove provenance, exactness, and hygiene. They do not decide whether a change matters to you.</p><CheckGroup title="Publication gate" note="Blocking — a failure withholds the finding" checks={gate} /><CheckGroup title="Accounting data quality" note="Non-blocking — reported, never a gate" checks={dataQuality} /><CheckGroup title="Other recorded checks" note="Recorded for this attempt" checks={other} /></section>;
+  const ran = verification.checks.filter(check => check.verdict !== "SKIPPED_NOT_APPLICABLE").length;
+  return <section className="section verification-band" aria-labelledby="verification-heading"><header className="reading-heading"><div><p className="section-kicker">Deterministic publication gate</p><h2 id="verification-heading">What was checked</h2></div><span className={`pill ${overall.tone}`}>{overall.label}</span></header><p className="metric-caption">{ran} of {verification.checks.length} recorded checks ran; the rest did not apply to this filing.</p><p className="metric-caption">These checks prove provenance, exactness, and hygiene. They do not decide whether a change matters to you.</p><CheckGroup title="Publication gate" note="Blocking — a failure withholds the finding" checks={gate} /><CheckGroup title="Accounting data quality" note="Non-blocking — reported, never a gate" checks={dataQuality} /><CheckGroup title="Other recorded checks" note="Recorded for this attempt" checks={other} /></section>;
 }

@@ -16,7 +16,11 @@ export function CompanyPage() {
   const { ticker = "" } = useParams(); const location = useLocation(); const navigate = useNavigate(); const demo = new URLSearchParams(location.search).get("demo") === "1";
   const panel = new URLSearchParams(location.search).get("panel");
   const { bootstrap } = useBootstrap();
-  const [asOf, setAsOf] = useState(demo ? "2024-08-05" : new Date().toISOString().slice(0, 10));
+  // Always ask as of today, demo included. The sample's computations are stamped at a
+  // frozen vintage; pinning this control to an older date made the point-in-time rule
+  // correctly refuse them, so the brief showed six computed metrics while this page
+  // showed none. One clock for both surfaces.
+  const [asOf, setAsOf] = useState(new Date().toISOString().slice(0, 10));
   const [job, setJob] = useState<Job | null>(null); const [jobError, setJobError] = useState("");
   const load = useCallback((signal: AbortSignal) => api<Metrics>(`/api/companies/${ticker}/metrics?as_of=${asOf}&demo=${demo}`, { signal }), [ticker, asOf, demo]);
   const resource = useResource(load, [ticker, asOf, demo]);

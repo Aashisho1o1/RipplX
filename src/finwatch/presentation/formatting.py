@@ -40,13 +40,21 @@ def format_fact_value(value: float | None, unit_ref: str | None) -> str:
 def format_metric_value(result: MetricResult) -> str:
     components = result.components
     metric = result.metric
+    # Optional sub-measures are omitted when they cannot be computed rather than
+    # printed as "n/a" or as an internal token. A row that says "+15.1% YoY" is a
+    # complete, honest statement; "+15.1% YoY (TTM revenue n/a) · 4-quarter direction
+    # insufficient_points" pads the same fact with two admissions of absence and leaks
+    # a code name that means nothing to a reader.
     if metric == "revenue_growth":
-        return (
-            f"{_pct(components.get('yoy'))} YoY (TTM revenue {_usd(components.get('ttm_revenue'))})"
-        )
+        line = f"{_pct(components.get('yoy'))} YoY"
+        ttm = components.get("ttm_revenue")
+        return f"{line} (TTM revenue {_usd(ttm)})" if ttm is not None else line
     if metric in ("net_income_trend", "cfo_trend"):
-        direction = components.get("four_quarter_direction", "?")
-        return f"{_pct(components.get('yoy'))} YoY · 4-quarter direction {direction}"
+        line = f"{_pct(components.get('yoy'))} YoY"
+        direction = components.get("four_quarter_direction")
+        if direction in {"up", "down", "flat"}:
+            return f"{line} · 4-quarter direction {direction}"
+        return line
     if metric == "liquidity_basics":
         parts = [
             f"cash {_usd(components.get('cash'))}",

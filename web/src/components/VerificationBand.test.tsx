@@ -25,8 +25,19 @@ describe("deterministic verification band", () => {
     }
     expect(screen.getByText(/Every number shown traces/)).toBeInTheDocument();
     expect(screen.getByText("Not applicable")).toBeInTheDocument();
-    expect(screen.getByText("Passed with data-quality warnings")).toBeInTheDocument();
+    expect(screen.getByText("Gate passed with data-quality warnings")).toBeInTheDocument();
     expect(screen.getByText("Other recorded checks").closest(".check-group")).toHaveTextContent("V9z");
+  });
+
+  it("never claims every check passed when some were skipped", () => {
+    render(<VerificationBand verification={verification} />);
+    // The old pill said "All checks passed" while checks were recorded as not
+    // applicable — a stronger claim than the run made. The gate is what a PASS decides.
+    expect(screen.queryByText(/All checks passed/)).toBeNull();
+    const ran = verification.checks.filter(c => c.verdict !== "SKIPPED_NOT_APPLICABLE").length;
+    expect(
+      screen.getByText(`${ran} of ${verification.checks.length} recorded checks ran; the rest did not apply to this filing.`),
+    ).toBeInTheDocument();
   });
 
   it("separates the blocking gate from non-blocking data quality and escapes all text", () => {
