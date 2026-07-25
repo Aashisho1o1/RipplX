@@ -265,6 +265,16 @@ class EmailOtpManager:
             if not isinstance(code, str) or not re.fullmatch(r"[0-9]{6}", code):
                 raise RuntimeError("Authentication code generator returned an invalid value.")
 
+            # Spend the budget BEFORE dispatching, and keep it spent when delivery
+            # fails. Recording only successful sends made every limit unenforceable
+            # during exactly the incident they exist to bound: any provider error
+            # (Resend 429, unverified sender domain, outage) skipped both counters, so
+            # an unauthenticated caller on this public endpoint could drive unbounded
+            # outbound requests against the operator's account — and because the send
+            # holds this lock, stall every legitimate sign-in behind it.
+            self._email_sends[normalized].append(now)
+            self._global_sends.append(now)
+
             # Keep the lock while sending. This prototype has one process and a strict
             # global send ceiling; serialization makes the rate-limit decision atomic.
             try:
@@ -272,6 +282,8 @@ class EmailOtpManager:
             except Exception:  # noqa: BLE001 - provider details are never public
                 raise EmailDeliveryError() from None
 
+            # The challenge is stored only on a successful send, so a failed attempt
+            # costs budget without leaving a usable code behind.
             previous = self._active_by_email.get(normalized)
             if previous:
                 self._remove_challenge_locked(previous)
@@ -282,8 +294,6 @@ class EmailOtpManager:
                 expires_at=expires_at,
             )
             self._active_by_email[normalized] = challenge_id
-            self._email_sends[normalized].append(now)
-            self._global_sends.append(now)
             return OtpChallenge(challenge_id=challenge_id, expires_at=int(expires_at))
 
     def verify_code(self, challenge_id: str, code: str) -> str:

@@ -10,6 +10,7 @@ import pytest
 from pydantic import ValidationError
 
 from finwatch.web.auth import (
+    OTP_EMAIL_COOLDOWN_SECONDS,
     OTP_GLOBAL_HOURLY_LIMIT,
     OTP_MAX_ATTEMPTS,
     OTP_TTL_SECONDS,
@@ -194,24 +195,61 @@ def test_global_hourly_limit_is_bounded_and_resets():
     manager.request_code("one-more@example.com")
 
 
-def test_failed_delivery_exposes_no_provider_text_and_consumes_no_limit():
+def test_failed_delivery_exposes_no_provider_text_and_leaves_no_usable_code():
     clock = FakeClock()
-    calls = 0
 
-    def sometimes_fails(_recipient: str, _code: str) -> None:
-        nonlocal calls
-        calls += 1
-        if calls == 1:
-            raise RuntimeError("provider leaked sk-secret-sentinel")
+    def always_fails(_recipient: str, _code: str) -> None:
+        raise RuntimeError("provider leaked sk-secret-sentinel")
 
-    manager = manager_for(sometimes_fails, clock)
+    manager = manager_for(always_fails, clock)
     with pytest.raises(EmailDeliveryError) as failure:
         manager.request_code("person@example.com")
     assert "sentinel" not in str(failure.value)
+    # A failed send must not leave a usable challenge behind.
+    assert manager._challenges == {}
 
-    # The failed attempt created neither a challenge nor a cooldown reservation.
-    challenge = manager.request_code("person@example.com")
-    assert manager.verify_code(challenge.challenge_id, "123456") == "person@example.com"
+    # Once the provider recovers, the cooldown still applies (see the test below), so a
+    # legitimate retry succeeds after it elapses rather than immediately.
+    clock.advance(OTP_EMAIL_COOLDOWN_SECONDS)
+    working = manager_for(lambda _r, _c: None, clock)
+    challenge = working.request_code("person@example.com")
+    assert working.verify_code(challenge.challenge_id, "123456") == "person@example.com"
+
+
+def test_a_failed_send_still_spends_rate_limit_budget():
+    """A failing provider must not switch the send limits off.
+
+    Recording only *successful* sends made every limit unenforceable during exactly the
+    incident they exist to bound. `request_code` is public and unauthenticated, so any
+    provider error (Resend 429, unverified sender domain, outage) let a caller drive
+    unbounded outbound requests against the operator's account — and because the send is
+    performed while holding the manager lock, stall every legitimate sign-in behind it.
+    Measured before this fix: 50 requests for one address produced 50 outbound attempts
+    and zero rate-limit errors.
+
+    The accepted cost is that a user who hits a genuine provider hiccup waits out the
+    cooldown instead of retrying instantly.
+    """
+    clock = FakeClock()
+    attempts = 0
+
+    def always_fails(_recipient: str, _code: str) -> None:
+        nonlocal attempts
+        attempts += 1
+        raise RuntimeError("provider down")
+
+    manager = manager_for(always_fails, clock)
+    limited = 0
+    for _ in range(20):
+        try:
+            manager.request_code("attacker@example.com")
+        except EmailDeliveryError:
+            pass
+        except OtpRateLimitError:
+            limited += 1
+
+    assert attempts == 1, "only the first request should reach the provider"
+    assert limited == 19
 
 
 def test_resend_sender_uses_fixed_endpoint_and_minimal_payload():
