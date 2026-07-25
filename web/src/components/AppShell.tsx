@@ -1,4 +1,4 @@
-import { NavLink, Outlet, useLocation } from "react-router-dom";
+import { Link, NavLink, Outlet, useLocation } from "react-router-dom";
 
 const links = [
   { to: "/brief", label: "Filing brief", sublabel: "What changed", glyph: "01" },
@@ -27,6 +27,12 @@ export function AppShell() {
         ? <NavLink to="/brief" className="nav-link"><span className="nav-glyph">→</span><span className="nav-copy">Start your own<small>Track your tickers</small></span><span className="nav-arrow" aria-hidden="true">›</span></NavLink>
         : <NavLink to={`/settings${demoSuffix}`} className={({ isActive }) => `nav-link${isActive ? " active" : ""}`}><span className="nav-glyph">04</span><span className="nav-copy">Settings<small>Keys &amp; preferences</small></span><span className="nav-arrow" aria-hidden="true">›</span></NavLink>}</div>
     </nav>
-    <div className="content"><Outlet /></div>
+    <div className="content">
+      {demo && <div className="topbar">
+        <span className="topbar-note">Sample brief · no account needed</span>
+        <Link className="button primary" to="/signin">Sign in</Link>
+      </div>}
+      <Outlet />
+    </div>
   </div>;
 }

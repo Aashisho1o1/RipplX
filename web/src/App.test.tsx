@@ -1,10 +1,16 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import App from "./App";
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  cleanup();               // without this the previous test's DOM leaks into the next
+  vi.unstubAllGlobals();
+  window.history.pushState({}, "", "/");
+});
 
 it("replaces the shared unlock token with public email-code sign in", async () => {
+  // Sign-in is no longer the landing screen; it is reached deliberately.
+  window.history.pushState({}, "", "/signin");
   const fetchMock = vi.fn()
     .mockResolvedValueOnce(new Response(JSON.stringify({
       error: { code: "authentication_required", message: "Sign in with your email to continue." },
@@ -28,16 +34,35 @@ it("replaces the shared unlock token with public email-code sign in", async () =
   expect(JSON.parse(String(init.body))).toEqual({ email: "person@example.com" });
 });
 
-it("offers the sample from the sign-in screen so an anonymous visitor is never walled off", async () => {
-  // The public sample lives at /brief?demo=1, but a visitor opening the bare project
-  // URL has no demo flag: bootstrap 401s and the sign-in card renders. Without a way
-  // through, the first thing anyone following a shared link sees is an email form.
-  const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
-    error: { code: "authentication_required", message: "Sign in with your email to continue." },
-  }), { status: 401, headers: { "Content-Type": "application/json" } }));
+it("lands a signed-out visitor on the sample instead of a sign-in form", async () => {
+  // Asking a stranger for an email address before showing anything is friction with no
+  // payoff: they have not seen the product yet. The private bootstrap 401s, and the app
+  // sends them to the public sample rather than a login card.
+  const fetchMock = vi.fn().mockImplementation((input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.includes("/api/public/sample/bootstrap")) {
+      return Promise.resolve(new Response(JSON.stringify({
+        setup_required: false, sec_user_agent: "", account_email: null, period: "90d",
+        model: "", provider: null, api_key_configured: false, analysis_configured: false,
+      }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    }
+    if (url.includes("/api/public/sample/brief")) {
+      return Promise.resolve(new Response(JSON.stringify({
+        period: { covered_label: "", filings_in_window: 0, analyzed_filings: 0, published_filings: 0, withheld_filings: 0, filings_tracked_total: 0, outside_window: null },
+        tracked_tickers: [], answer: "Sample answer", filings: [], gate_removed_filings: [],
+        verified_numbers: [], open_questions: [], reviewed_filings: [], withheld_filings: [],
+        tracked_but_unanalyzed: false, filings_synced: 0, disclaimer: "d", sample_data: true,
+      }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    }
+    return Promise.resolve(new Response(JSON.stringify({
+      error: { code: "authentication_required", message: "Sign in with your email to continue." },
+    }), { status: 401, headers: { "Content-Type": "application/json" } }));
+  });
   vi.stubGlobal("fetch", fetchMock);
 
   render(<App />);
-  const sample = await screen.findByRole("link", { name: /sample brief/i });
-  expect(sample).toHaveAttribute("href", "/brief?demo=1");
+  // The sample renders, and sign-in is offered as an action rather than demanded.
+  expect(await screen.findByText("Sample answer")).toBeInTheDocument();
+  expect(screen.queryByRole("heading", { name: "Sign in to RipplX" })).not.toBeInTheDocument();
+  expect(screen.getByRole("link", { name: "Sign in" })).toHaveAttribute("href", "/signin");
 });
