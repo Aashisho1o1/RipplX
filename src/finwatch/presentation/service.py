@@ -249,7 +249,15 @@ class PresentationService:
                 state_label = metric.not_applicable_reason or "Not applicable for this issuer"
                 value = f"— {state_label}"
             else:
-                state_label = ", ".join(metric.unavailable_missing) or "Data missing"
+                # The missing inputs are internal identifiers; a reader should not have
+                # to decode "depreciation_and_amortization". The set is unchanged — only
+                # its spelling — so the row still names exactly what was absent.
+                state_label = (
+                    ", ".join(
+                        item.replace("_", " ") for item in metric.unavailable_missing
+                    )
+                    or "Data missing"
+                )
                 value = f"— {state_label}"
             result.append(
                 MetricRowView(

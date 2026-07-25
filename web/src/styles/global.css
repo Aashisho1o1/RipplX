@@ -117,7 +117,10 @@ code,
 }
 
 .brand {
+  display: block;
   padding: 0 10px 34px;
+  color: inherit;
+  text-decoration: none;   /* it is a link home now; keep the wordmark undecorated */
 }
 
 .brand-copy {
@@ -682,7 +685,7 @@ code,
 
 .metric-table {
   width: 100%;
-  min-width: 720px;
+  min-width: 560px;
   border-collapse: collapse;
   text-align: left;
 }
@@ -703,10 +706,11 @@ code,
 }
 
 .metric-table td:nth-child(2) {
+  min-width: 15rem;
   font-family: var(--font-serif);
   font-size: var(--text-serif-xs);
   font-weight: 600;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 
 .formula,

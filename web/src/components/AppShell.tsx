@@ -16,7 +16,7 @@ export function AppShell() {
   const railLinks = demo ? links.filter(link => link.to === "/brief") : links;
   return <div className="app">
     <nav className="rail" aria-label="Main navigation">
-      <div className="brand"><span className="brand-copy"><strong>RipplX</strong><small>Filing intelligence</small></span></div>
+      <Link className="brand" to={`/brief${demoSuffix}`}><span className="brand-copy"><strong>RipplX</strong><small>Filing intelligence</small></span></Link>
       <div className="nav-list">
         <span className="nav-label">{demo ? "Sample" : "Workspace"}</span>
         {railLinks.map(link => <NavLink key={link.to} to={`${link.to}${demoSuffix}`} className={({ isActive }) => `nav-link${isActive ? " active" : ""}`}><span className="nav-glyph">{link.glyph}</span><span className="nav-copy">{link.label}<small>{link.sublabel}</small></span><span className="nav-arrow" aria-hidden="true">›</span></NavLink>)}

@@ -1,6 +1,7 @@
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { AppShell } from "./AppShell";
 import { FilingItemCard } from "./FilingItemCard";
 import { FilingTypePicker } from "./FilingTypePicker";
 import { FindingList } from "./FindingList";
@@ -151,5 +152,19 @@ describe("trust vocabulary", () => {
       expect(screen.queryByText(state)).not.toBeInTheDocument();
       cleanup();
     }
+  });
+});
+
+describe("shell navigation", () => {
+  it("makes the wordmark a link home and keeps the visitor in the sample", () => {
+    // Reaching About used to be a one-way trip: nothing led back except editing the URL.
+    window.history.pushState({}, "", "/about?demo=1");
+    render(<MemoryRouter initialEntries={["/about?demo=1"]}><AppShell /></MemoryRouter>);
+    expect(screen.getByRole("link", { name: /RipplX/ })).toHaveAttribute("href", "/brief?demo=1");
+  });
+
+  it("returns a signed-in user to their own brief, not the sample", () => {
+    render(<MemoryRouter initialEntries={["/about"]}><AppShell /></MemoryRouter>);
+    expect(screen.getByRole("link", { name: /RipplX/ })).toHaveAttribute("href", "/brief");
   });
 });
