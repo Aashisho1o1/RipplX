@@ -89,6 +89,24 @@ def edgar_client(mock_transport) -> EdgarClient:
 
 
 @pytest.fixture
+def offline_ticker_index(monkeypatch) -> dict:
+    """Serve the SEC ticker index from a fixture, with no network.
+
+    Registration resolves issuer identity against the current SEC index on every add —
+    a stored ``companies`` row matching the symbol proves nothing, because tickers get
+    recycled. Web routes build their own ``EdgarClient`` inside ``build_service``, so
+    there is no transport to inject and the client method itself is patched.
+    """
+    index = load_fixture_json("company_tickers.json")
+
+    def _company_tickers(_self, force_refresh: bool = False) -> dict:
+        return index
+
+    monkeypatch.setattr(EdgarClient, "company_tickers", _company_tickers)
+    return index
+
+
+@pytest.fixture
 def ingest_service(repo, edgar_client) -> IngestService:
     # Fixed as_of so backfill-cutoff assertions are deterministic.
     return IngestService(repo, edgar_client, as_of=date(2024, 12, 1))

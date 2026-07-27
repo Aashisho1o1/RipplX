@@ -20,6 +20,25 @@ from pydantic import BaseModel, FiniteFloat
 LOCAL_USER_ID = "local"
 
 
+class TickerIdentityConflictError(RuntimeError):
+    """A ticker already on file resolves to a different issuer.
+
+    Tickers are recycled: a symbol freed by a delisting can later be reassigned to
+    an unrelated CIK. ``companies`` carries a UNIQUE index on ticker, so the second
+    issuer cannot simply take the symbol. Rather than let one issuer silently
+    inherit another's filings — or surface a raw ``sqlite3.IntegrityError`` — the
+    write fails closed and names both CIKs.
+    """
+
+    def __init__(self, ticker: str, existing_cik: str, incoming_cik: str) -> None:
+        super().__init__(
+            f"ticker {ticker} is on file for CIK {existing_cik}, not {incoming_cik}"
+        )
+        self.ticker = ticker
+        self.existing_cik = existing_cik
+        self.incoming_cik = incoming_cik
+
+
 # --------------------------------------------------------------- row models --
 class User(BaseModel):
     id: str
@@ -185,22 +204,48 @@ class Repo:
     def upsert_company(self, c: Company) -> None:
         """Insert-or-update issuer identity. Never clobbers name/sic with NULLs, updates
         ``is_financial`` only when a fresh ``sic_code`` is supplied. Tracking is stored
-        separately per user, so a profile refresh cannot change it."""
-        self.conn.execute(
-            """
-            INSERT INTO companies
-                (cik, ticker, name, sic_code, is_financial, added_at)
-            VALUES
-                (:cik, :ticker, :name, :sic_code, :is_financial, :added_at)
-            ON CONFLICT(cik) DO UPDATE SET
-                ticker = excluded.ticker,
-                name = COALESCE(excluded.name, companies.name),
-                sic_code = COALESCE(excluded.sic_code, companies.sic_code),
-                is_financial = CASE WHEN excluded.sic_code IS NOT NULL
-                                    THEN excluded.is_financial ELSE companies.is_financial END
-            """,
-            c.model_dump(),
-        )
+        separately per user, so a profile refresh cannot change it.
+
+        Two identity rules, because one CIK can carry several current symbols and one
+        symbol can outlive its issuer:
+
+        * **Share classes collapse to one issuer.** GOOG and GOOGL are one CIK, one
+          filing history, one watched issuer. The stored label is the lexicographically
+          smallest symbol seen for that CIK, so it does not depend on which participant
+          added which class first — ``companies`` is shared across users, so first-writer
+          -wins would let one participant fix the label everyone sees. A genuine ticker
+          rename therefore keeps the old label; changing it needs an explicit path.
+        * **Recycled symbols fail closed.** A different CIK claiming a symbol already on
+          file raises :class:`TickerIdentityConflictError` instead of inheriting the other
+          issuer's row.
+        """
+        row = self.conn.execute(
+            "SELECT cik FROM companies WHERE ticker = ? COLLATE NOCASE", (c.ticker,)
+        ).fetchone()
+        if row is not None and row["cik"] != c.cik:
+            raise TickerIdentityConflictError(c.ticker, row["cik"], c.cik)
+        try:
+            self.conn.execute(
+                """
+                INSERT INTO companies
+                    (cik, ticker, name, sic_code, is_financial, added_at)
+                VALUES
+                    (:cik, :ticker, :name, :sic_code, :is_financial, :added_at)
+                ON CONFLICT(cik) DO UPDATE SET
+                    ticker = MIN(companies.ticker, excluded.ticker),
+                    name = COALESCE(excluded.name, companies.name),
+                    sic_code = COALESCE(excluded.sic_code, companies.sic_code),
+                    is_financial = CASE WHEN excluded.sic_code IS NOT NULL
+                                        THEN excluded.is_financial ELSE companies.is_financial END
+                """,
+                c.model_dump(),
+            )
+        except sqlite3.IntegrityError as exc:
+            # The pre-check above is not atomic against a concurrent writer. Convert the
+            # ticker-uniqueness race into the same typed failure rather than a bare 500.
+            if "companies.ticker" not in str(exc):
+                raise
+            raise TickerIdentityConflictError(c.ticker, "unknown", c.cik) from exc
         self.conn.commit()
 
     def get_company(self, cik: str) -> Company | None:

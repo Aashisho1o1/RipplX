@@ -249,7 +249,7 @@ def _csrf(client: TestClient) -> dict[str, str]:
 
 
 def test_public_users_have_private_watchlists_preferences_filings_and_jobs(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, offline_ticker_index
 ):
     db_path = tmp_path / "db.sqlite"
     build_demo_db(str(db_path)).close()

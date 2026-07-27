@@ -16,7 +16,15 @@ from pydantic import BaseModel, ConfigDict, Field
 from starlette.requests import Request
 
 from finwatch.config import Config
-from finwatch.db import LOCAL_USER_ID, Repo, User, connect, init_db
+from finwatch.db import (
+    LOCAL_USER_ID,
+    Company,
+    Repo,
+    TickerIdentityConflictError,
+    User,
+    connect,
+    init_db,
+)
 from finwatch.demo import DEMO_SINCE, build_demo_db
 from finwatch.ingest import TickerNotFoundError, build_service
 from finwatch.presentation import PresentationService
@@ -715,9 +723,47 @@ def create_app(
                         "missing_user_agent",
                         "Configure the SEC User-Agent before adding a company.",
                     )
+                # Cheap pre-check only: refuse a full workspace before spending an EDGAR
+                # read. A symbol whose stored row the user already tracks may still be a
+                # no-op re-add, so it falls through to real resolution below.
                 known = repo.get_company_by_ticker(payload.ticker)
+                if repo.count_tracked_companies(principal.user_id) >= MAX_TRACKED_TICKERS \
+                        and not (
+                            known and repo.get_user_company(principal.user_id, known.cik)
+                        ):
+                    raise ApiProblem(
+                        409,
+                        "tracked_ticker_limit",
+                        f"Each workspace is limited to {MAX_TRACKED_TICKERS} tracked tickers.",
+                    )
+            # Issuer identity comes from the current SEC index, never from the stored
+            # row. Trusting a local ticker match lets a recycled symbol silently track
+            # the issuer that used to file under it.
+            config = Config(
+                sec_user_agent=settings.sec_user_agent,
+                db_path=app.state.db_path,
+                model=settings.model,
+            )
+            connection, service = build_service(config, conn=operational_connection())
+            try:
+                record = service.resolve_identity(payload.ticker)
+            except TickerNotFoundError as exc:
+                raise ApiProblem(
+                    404, "ticker_not_found", "Ticker not found on EDGAR."
+                ) from exc
+            finally:
+                service.edgar.close()
+                connection.close()
+            with repo_context() as repo:
+                if known is not None and known.cik != record.cik:
+                    raise ApiProblem(
+                        409,
+                        "ticker_identity_conflict",
+                        f"{record.ticker} is on file for a different issuer. "
+                        "Remove the stale entry before tracking this one.",
+                    )
                 already_tracked = bool(
-                    known and repo.get_user_company(principal.user_id, known.cik)
+                    repo.get_user_company(principal.user_id, record.cik)
                 )
                 if not already_tracked and repo.count_tracked_companies(
                     principal.user_id
@@ -727,35 +773,25 @@ def create_app(
                         "tracked_ticker_limit",
                         f"Each workspace is limited to {MAX_TRACKED_TICKERS} tracked tickers.",
                     )
-                company = known
-                if company and not already_tracked:
-                    repo.track_company(
-                        company.cik,
-                        at=datetime.now(UTC).isoformat(),
-                        user_id=principal.user_id,
-                    )
-            if company is None:
-                config = Config(
-                    sec_user_agent=settings.sec_user_agent,
-                    db_path=app.state.db_path,
-                    model=settings.model,
-                )
-                connection, service = build_service(config, conn=operational_connection())
+                now = datetime.now(UTC).isoformat()
                 try:
-                    company = service.track_company(
-                        payload.ticker,
-                        user_id=principal.user_id,
-                    )
-                except TickerNotFoundError as exc:
+                    repo.upsert_company(Company(
+                        cik=record.cik, ticker=record.ticker,
+                        name=record.title, added_at=now,
+                    ))
+                except TickerIdentityConflictError as exc:
                     raise ApiProblem(
-                        404, "ticker_not_found", "Ticker not found on EDGAR."
+                        409,
+                        "ticker_identity_conflict",
+                        f"{record.ticker} is on file for a different issuer. "
+                        "Remove the stale entry before tracking this one.",
                     ) from exc
-                finally:
-                    service.edgar.close()
-                    connection.close()
+                repo.track_company(record.cik, at=now, user_id=principal.user_id)
         with repo_context() as repo:
             view = PresentationService(repo, user_id=principal.user_id).companies()
-            return next(row for row in view.companies if row.ticker == company.ticker)
+            # Match on CIK: share classes collapse to one issuer, so the stored label
+            # can legitimately differ from the symbol the caller submitted.
+            return next(row for row in view.companies if row.cik == record.cik)
 
     @app.delete("/api/companies/{ticker}", status_code=204)
     def delete_company(

@@ -19,7 +19,7 @@ from finwatch.config import Config
 from finwatch.core.types import sector_from_sic
 from finwatch.db.repositories import LOCAL_USER_ID, Company, Filing, Repo, XbrlFact
 from finwatch.ingest.edgar import EdgarClient, EdgarHTTPError, normalize_cik
-from finwatch.ingest.tickers import resolve_ticker
+from finwatch.ingest.tickers import TickerRecord, resolve_ticker
 from finwatch.xbrl.companyfacts import CompanyFactsEntry, iter_companyfacts
 
 DEFAULT_BACKFILL_QUARTERS = 8
@@ -121,13 +121,14 @@ class IngestService:
         self._now_fn = now_fn or _now_iso
 
     # ---- registration ----------------------------------------------------
-    def track_company(
-        self,
-        ticker: str,
-        *,
-        user_id: str = LOCAL_USER_ID,
-    ) -> Company:
-        """Resolve a ticker to its CIK and mark the company tracked (ticker only)."""
+    def resolve_identity(self, ticker: str) -> TickerRecord:
+        """Resolve a symbol to its issuer against the *current* SEC ticker index.
+
+        Identity always comes from SEC, never from a stored row: symbols are recycled,
+        so a ``companies`` row matching the symbol proves nothing about who files under
+        it today. Callers that skip this and trust the local row can silently attribute
+        one issuer's filings to another.
+        """
         ticker = ticker.strip().upper()
         rec = resolve_ticker(self.edgar.company_tickers(), ticker)
         if rec is None:
@@ -136,8 +137,20 @@ class IngestService:
             rec = resolve_ticker(self.edgar.company_tickers(force_refresh=True), ticker)
         if rec is None:
             raise TickerNotFoundError(ticker)
+        return rec
+
+    def track_company(
+        self,
+        ticker: str,
+        *,
+        user_id: str = LOCAL_USER_ID,
+    ) -> Company:
+        """Resolve a ticker to its CIK and mark the company tracked (ticker only)."""
+        rec = self.resolve_identity(ticker)
         now = self._now_fn()
-        self.repo.upsert_company(Company(cik=rec.cik, ticker=ticker, name=rec.title, added_at=now))
+        self.repo.upsert_company(
+            Company(cik=rec.cik, ticker=rec.ticker, name=rec.title, added_at=now)
+        )
         self.repo.track_company(rec.cik, at=now, user_id=user_id)
         company = self.repo.get_company(rec.cik)
         assert company is not None  # just upserted

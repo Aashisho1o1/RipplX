@@ -17,6 +17,7 @@ from finwatch.db import (
     Filing,
     FilingSection,
     SchemaVersionError,
+    TickerIdentityConflictError,
     User,
     VerificationResult,
     XbrlFact,
@@ -650,3 +651,45 @@ def test_malformed_trace_payload_fails_closed_instead_of_raising(repo, payload):
     repo.conn.commit()
 
     assert repo.latest_linked_p1_attempt("a-1") is None
+
+
+def test_recycled_ticker_fails_closed_instead_of_inheriting_the_other_issuer(repo):
+    """A symbol freed by a delisting can be reassigned to an unrelated CIK.
+
+    ``companies`` is UNIQUE on ticker while the upsert's conflict target is ``cik``, so
+    the second issuer used to surface a raw ``sqlite3.IntegrityError`` (a generic 500
+    through the API). It must fail closed with a typed error naming both CIKs, and it
+    must never transfer the symbol away from the issuer already on file.
+    """
+    repo.upsert_company(Company(cik="0000111111", ticker="XYZ", name="Old", added_at="t"))
+
+    with pytest.raises(TickerIdentityConflictError) as caught:
+        repo.upsert_company(
+            Company(cik="0000222222", ticker="XYZ", name="New", added_at="t")
+        )
+
+    assert caught.value.existing_cik == "0000111111"
+    assert caught.value.incoming_cik == "0000222222"
+    # The incumbent keeps the symbol; nothing was silently reassigned.
+    assert repo.get_company_by_ticker("XYZ").cik == "0000111111"
+    assert repo.get_company("0000222222") is None
+
+
+@pytest.mark.parametrize("order", [("GOOG", "GOOGL"), ("GOOGL", "GOOG")])
+def test_share_classes_collapse_to_one_issuer_with_an_order_independent_label(repo, order):
+    """One CIK is one watched issuer, and its label must not depend on insert order.
+
+    ``companies`` is shared across users, so first-writer-wins would let whichever
+    participant added GOOG or GOOGL first fix the label everyone sees. The stored label
+    is the smallest symbol for the CIK either way, and the row stays addressable by it.
+    """
+    alphabet = "0001652044"
+    for ticker in order:
+        repo.upsert_company(
+            Company(cik=alphabet, ticker=ticker, name="Alphabet Inc.", added_at="t")
+        )
+        repo.track_company(alphabet, at="t")
+
+    assert [r["ticker"] for r in repo.conn.execute("SELECT ticker FROM companies")] == ["GOOG"]
+    assert repo.count_tracked_companies() == 1          # one issuer, not two rows
+    assert repo.get_company_by_ticker("GOOG").cik == alphabet   # label stays addressable

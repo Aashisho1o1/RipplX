@@ -372,3 +372,40 @@ def test_web_sync_computes_and_persists_verified_metrics(tmp_path):
         assert len(repo.list_computations("MSFT")) > before
     finally:
         conn.close()
+
+
+def test_add_resolves_issuer_identity_instead_of_trusting_a_stale_ticker_row(
+    tmp_path, offline_ticker_index
+):
+    """Registration must not infer the issuer from a stored ticker match.
+
+    Tickers are recycled, so a ``companies`` row carrying the symbol proves nothing
+    about who files under it today. The route used to short-circuit on that row and
+    track its CIK without ever consulting the SEC index, silently attributing one
+    issuer's filings to another — the worst failure mode this product has, and the one
+    a bulk import would hit routinely. It must fail closed instead.
+    """
+    client, db_path = _client(tmp_path)
+    assert client.put(
+        "/api/settings", json={"sec_user_agent": "Test User test@example.com"}
+    ).status_code == 200
+
+    # MSFT is on file for a stale CIK; the current SEC index says 0000000789019.
+    conn = init_db(str(db_path))
+    try:
+        Repo(conn).upsert_company(
+            Company(cik="0000111111", ticker="MSFT", name="Old Issuer Inc.", added_at="t")
+        )
+    finally:
+        conn.close()
+
+    response = client.post("/api/companies", json={"ticker": "MSFT"})
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "ticker_identity_conflict"
+    conn = init_db(str(db_path))
+    try:
+        # Nothing tracked at all — emphatically not the stale issuer.
+        assert Repo(conn).list_tracked_ciks() == []
+    finally:
+        conn.close()
