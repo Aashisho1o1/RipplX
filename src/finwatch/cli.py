@@ -330,7 +330,7 @@ def metrics(
         company = service.repo.get_company_by_ticker(ticker_u)
         if company is None:
             try:
-                company = service.add_holding(ticker_u)
+                company = service.track_company(ticker_u)
             except TickerNotFoundError as exc:
                 console.print(f"[red]{exc}[/]")
                 raise typer.Exit(code=1) from exc
