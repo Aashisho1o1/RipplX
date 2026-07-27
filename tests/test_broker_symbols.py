@@ -4,9 +4,11 @@ from __future__ import annotations
 import pytest
 
 from finwatch.broker import (
+    MAX_PASTED_SYMBOLS,
     BrokerPosition,
     is_trackable_instrument,
     normalize_broker_symbol,
+    parse_symbol_list,
 )
 
 
@@ -75,3 +77,27 @@ def test_only_us_listed_common_stock_is_trackable():
 )
 def test_anything_not_recognised_as_us_common_stock_fails_closed(overrides):
     assert is_trackable_instrument(_position("AAPL", **overrides)) is False
+
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("AAPL,MSFT", ["AAPL", "MSFT"]),
+        ("AAPL\nMSFT\nJPM", ["AAPL", "MSFT", "JPM"]),
+        ("aapl, msft;jpm|brk.b", ["AAPL", "MSFT", "JPM", "BRK.B"]),
+        ("  AAPL  ,, \n\n MSFT ", ["AAPL", "MSFT"]),
+        ("AAPL, AAPL, aapl", ["AAPL"]),        # de-duplicated, order preserved
+        ("", []),
+        ("   \n  ", []),
+    ],
+)
+def test_pasted_text_splits_on_whatever_separators_people_actually_use(text, expected):
+    assert parse_symbol_list(text) == expected
+
+
+def test_a_large_paste_is_bounded():
+    """One request must not turn into an unbounded amount of resolution work."""
+    text = ",".join(f"SYM{index}" for index in range(500))
+
+    assert len(parse_symbol_list(text)) == MAX_PASTED_SYMBOLS
+    assert len(parse_symbol_list(text, limit=5)) == 5

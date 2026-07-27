@@ -125,7 +125,9 @@ Do not commit `.env`; it is ignored by Git. The demo needs none of these values.
 
 ### Browser workflow
 
-1. Add one or more tickers under **Tracked tickers**.
+1. Add one or more tickers under **Tracked tickers** — one at a time, or **Paste tickers**
+   for a comma/newline-separated list. Every pasted symbol is reported with what happened to
+   it: added, already tracked, no SEC filer with that symbol, or watchlist full.
 2. Run **Sync filings** to index SEC filings and ingest companyfacts.
 3. Run **Analyze a filing**, choose Latest, 10-K, 10-Q, or 8-K, and start the run. Each request
    processes at most one newest filing in that scope.

@@ -70,45 +70,40 @@ class ImportResult(BaseModel):
     cap_reached: bool = False
 
 
-def plan_import(
-    positions: list[BrokerPosition], index: dict[str, TickerRecord]
-) -> ImportPlan:
-    """Classify, normalize, and resolve positions against a prebuilt SEC ticker index.
+class _Planner:
+    """Shared resolve-and-dedupe pass behind both entry points."""
 
-    ``index`` is built once for the whole batch rather than per symbol, so a 40-position
-    account costs one pass over ``company_tickers.json`` instead of forty.
+    def __init__(self, index: dict[str, TickerRecord]) -> None:
+        self._index = index
+        self._candidates: dict[str, Candidate] = {}
+        self._rejected: list[ImportRow] = []
+        self._order: dict[str, int] = {}
+        self._seen: set[str] = set()
 
-    Candidates are deduped **by CIK**, not by symbol: share classes are one issuer with
-    one filing history, so GOOG and GOOGL collapse to a single watchlist entry and the
-    second symbol is reported as an alias of the first.
-    """
-    candidates: dict[str, Candidate] = {}
-    rejected: list[ImportRow] = []
-    order: dict[str, int] = {}
-    seen: set[str] = set()
+    def accept(self, raw: str) -> str | None:
+        """Register a symbol for this batch, or None when it is a repeat."""
+        symbol = (raw or "").strip().upper()
+        if not symbol or symbol in self._seen:
+            return None  # one row per distinct symbol; subaccounts may repeat a holding
+        self._seen.add(symbol)
+        self._order.setdefault(symbol, len(self._order))
+        return symbol
 
-    for position in positions:
-        symbol = position.symbol.strip().upper()
-        if not symbol or symbol in seen:
-            continue  # one row per distinct symbol; subaccounts may repeat a holding
-        seen.add(symbol)
-        order.setdefault(symbol, len(order))
+    def reject(self, symbol: str, outcome: Outcome) -> None:
+        self._rejected.append(ImportRow(symbol=symbol, outcome=outcome))
 
-        if not is_trackable_instrument(position):
-            rejected.append(ImportRow(symbol=symbol, outcome="unsupported_instrument"))
-            continue
+    def resolve(self, symbol: str) -> None:
         normalized = normalize_broker_symbol(symbol)
         if normalized is None:
-            rejected.append(ImportRow(symbol=symbol, outcome="unsupported_instrument"))
-            continue
-        record = index.get(normalized)
+            self.reject(symbol, "not_found")
+            return
+        record = self._index.get(normalized)
         if record is None:
-            rejected.append(ImportRow(symbol=symbol, outcome="not_found"))
-            continue
-
-        existing = candidates.get(record.cik)
+            self.reject(symbol, "not_found")
+            return
+        existing = self._candidates.get(record.cik)
         if existing is None:
-            candidates[record.cik] = Candidate(
+            self._candidates[record.cik] = Candidate(
                 symbol=symbol, cik=record.cik, ticker=record.ticker
             )
         else:
@@ -116,9 +111,60 @@ def plan_import(
             # Mirror the persistence rule so the reported label matches what is stored.
             existing.ticker = min(existing.ticker, record.ticker)
 
-    ordered = sorted(candidates.values(), key=lambda c: order[c.symbol])
-    rejected.sort(key=lambda row: order[row.symbol])
-    return ImportPlan(candidates=ordered, rejected=rejected)
+    def plan(self) -> ImportPlan:
+        return ImportPlan(
+            candidates=sorted(
+                self._candidates.values(), key=lambda c: self._order[c.symbol]
+            ),
+            rejected=sorted(self._rejected, key=lambda row: self._order[row.symbol]),
+        )
+
+
+def plan_symbols(symbols: list[str], index: dict[str, TickerRecord]) -> ImportPlan:
+    """Plan an import from bare symbols the user supplied directly.
+
+    There is no instrument metadata to classify on, so resolution against the SEC ticker
+    index is the only gate — the same gate a hand-typed ticker already passes through.
+    An unresolvable symbol is ``not_found``, which covers both a typo and an instrument
+    with no SEC registrant.
+    """
+    planner = _Planner(index)
+    for raw in symbols:
+        symbol = planner.accept(raw)
+        if symbol is not None:
+            planner.resolve(symbol)
+    return planner.plan()
+
+
+def plan_import(
+    positions: list[BrokerPosition], index: dict[str, TickerRecord]
+) -> ImportPlan:
+    """Classify, normalize, and resolve aggregator positions.
+
+    ``index`` is built once for the whole batch rather than per symbol, so a 40-position
+    account costs one pass over ``company_tickers.json`` instead of forty.
+
+    Unlike :func:`plan_symbols`, positions carry structured instrument metadata, so the
+    stricter instrument gate applies before resolution — which is what keeps a crypto
+    ``ETH`` from resolving against an unrelated equity.
+
+    Candidates are deduped **by CIK**, not by symbol: share classes are one issuer with
+    one filing history, so GOOG and GOOGL collapse to a single watchlist entry and the
+    second symbol is reported as an alias of the first.
+    """
+    planner = _Planner(index)
+    for position in positions:
+        symbol = planner.accept(position.symbol)
+        if symbol is None:
+            continue
+        if not is_trackable_instrument(position):
+            planner.reject(symbol, "unsupported_instrument")
+            continue
+        if normalize_broker_symbol(symbol) is None:
+            planner.reject(symbol, "unsupported_instrument")
+            continue
+        planner.resolve(symbol)
+    return planner.plan()
 
 
 def apply_plan(
@@ -184,4 +230,5 @@ __all__ = [
     "Outcome",
     "apply_plan",
     "plan_import",
+    "plan_symbols",
 ]

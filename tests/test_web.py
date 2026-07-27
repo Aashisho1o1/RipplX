@@ -409,3 +409,71 @@ def test_add_resolves_issuer_identity_instead_of_trusting_a_stale_ticker_row(
         assert Repo(conn).list_tracked_ciks() == []
     finally:
         conn.close()
+
+
+def test_pasted_tickers_are_imported_in_one_pass_with_every_symbol_reported(
+    tmp_path, offline_ticker_index
+):
+    client, _ = _client(tmp_path)
+    assert client.put(
+        "/api/settings", json={"sec_user_agent": "Test User test@example.com"}
+    ).status_code == 200
+
+    response = client.post(
+        "/api/companies/import",
+        json={"symbols": "aapl, msft\nNOTATICKER"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert {row["symbol"]: row["outcome"] for row in body["rows"]} == {
+        "AAPL": "tracked",
+        "MSFT": "tracked",
+        "NOTATICKER": "not_found",
+    }
+    assert body["tracked_count"] == 2
+    assert body["cap_reached"] is False
+    tracked = [row["ticker"] for row in client.get("/api/companies").json()["companies"]]
+    assert tracked == ["AAPL", "MSFT"]
+
+
+def test_importing_past_the_cap_fills_the_remainder_instead_of_failing_the_batch(
+    tmp_path, offline_ticker_index
+):
+    """A long paste must still deliver what fits; 409-ing the whole batch would not."""
+    client, db_path = _client(tmp_path)
+    assert client.put(
+        "/api/settings", json={"sec_user_agent": "Test User test@example.com"}
+    ).status_code == 200
+    conn = init_db(str(db_path))
+    try:
+        repo = Repo(conn)
+        for index in range(24):
+            cik = f"{index + 1:010d}"
+            repo.upsert_company(Company(cik=cik, ticker=f"T{index}", added_at="t"))
+            repo.track_company(cik, at="t")
+    finally:
+        conn.close()
+
+    body = client.post(
+        "/api/companies/import", json={"symbols": "AAPL,MSFT,JPM"}
+    ).json()
+
+    assert body["tracked_count"] == 1
+    assert body["cap_reached"] is True
+    assert sorted(row["outcome"] for row in body["rows"]) == [
+        "skipped_cap", "skipped_cap", "tracked"
+    ]
+
+
+def test_import_rejects_an_empty_paste_and_unknown_body_fields(tmp_path):
+    client, _ = _client(tmp_path)
+
+    blank = client.post("/api/companies/import", json={"symbols": "  ,,  "})
+    assert blank.status_code == 422
+    assert blank.json()["error"]["code"] == "no_symbols"
+
+    assert client.post(
+        "/api/companies/import", json={"symbols": "AAPL", "shares": 10}
+    ).status_code == 422
+    assert client.post("/api/companies/import", json={}).status_code == 422

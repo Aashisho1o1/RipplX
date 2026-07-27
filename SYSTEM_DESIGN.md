@@ -259,7 +259,16 @@ bound above.
 
 12. **Ticker-only contract** — public holding create/update schemas accept identity only. Shares,
     cost basis, targets, horizons, and theses are neither collected nor returned. Dormant DB columns
-    do not expand the public contract.
+    do not expand the public contract. Bulk import (`POST /api/companies/import`) accepts pasted
+    symbol text and nothing else; it returns one row per submitted symbol carrying only the symbol,
+    a fixed outcome code, and the resolved SEC label.
+
+13. **Issuer identity comes from SEC, never from a stored row** — registration resolves every
+    symbol against the current `company_tickers.json` before consulting `companies`. Symbols are
+    recycled, so a local row matching a symbol proves nothing about who files under it today; a
+    stored row disagreeing on CIK fails closed rather than tracking the previous owner. Share
+    classes collapse to one issuer under an order-independent label, since `companies` is shared
+    across users and first-writer-wins would let one participant fix the label everyone sees.
 
 ---
 

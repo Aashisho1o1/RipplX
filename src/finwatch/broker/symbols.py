@@ -86,10 +86,41 @@ def normalize_broker_symbol(raw: str) -> str | None:
     return symbol
 
 
+MAX_PASTED_SYMBOLS = 100
+
+_SEPARATORS = re.compile(r"[\s,;|]+")
+
+
+def parse_symbol_list(text: str, *, limit: int = MAX_PASTED_SYMBOLS) -> list[str]:
+    """Split pasted text into candidate symbols, in order, without duplicates.
+
+    Accepts whatever separators a person actually pastes — commas, newlines, tabs,
+    semicolons, pipes. Nothing is validated here; a nonsense token simply fails to
+    resolve later and is reported as ``not_found``, which is more useful than rejecting
+    the whole paste over one bad line.
+
+    ``limit`` bounds the batch so a large paste cannot turn one request into an
+    unbounded amount of work.
+    """
+    symbols: list[str] = []
+    seen: set[str] = set()
+    for token in _SEPARATORS.split(text or ""):
+        symbol = token.strip().upper()
+        if not symbol or symbol in seen:
+            continue
+        seen.add(symbol)
+        symbols.append(symbol)
+        if len(symbols) >= limit:
+            break
+    return symbols
+
+
 __all__ = [
     "COMMON_STOCK_KINDS",
+    "MAX_PASTED_SYMBOLS",
     "US_EXCHANGE_MICS",
     "BrokerPosition",
     "is_trackable_instrument",
     "normalize_broker_symbol",
+    "parse_symbol_list",
 ]

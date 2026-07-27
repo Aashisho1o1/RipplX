@@ -1340,6 +1340,46 @@ code,
 .input.mono-input { font-family: var(--font-mono); }
 .input.ticker-input { height: 60px; font-size: 20px; text-transform: uppercase; }
 .input.otp-input { font-size: 22px; letter-spacing: 0.32em; text-align: center; }
+.input.paste-input {
+  min-height: 148px;
+  font-family: var(--font-mono);
+  line-height: 1.6;
+  text-transform: uppercase;
+  resize: vertical;
+}
+
+/* Import outcome log — every submitted symbol is listed with what happened to it, so a
+   paste that mostly could not be tracked reads as such instead of looking half-broken. */
+.import-log {
+  display: flex;
+  flex-direction: column;
+  margin-top: 20px;
+  border-top: var(--border-hair);
+}
+
+.import-row {
+  display: flex;
+  gap: 12px;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 9px 0;
+  border-bottom: var(--border-hair);
+}
+
+.import-symbol {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--color-ink);
+}
+
+.import-outcome {
+  font-size: 12px;
+  color: var(--color-muted);
+  text-align: right;
+}
+
+.import-outcome.added { color: var(--color-verified); }
+.import-outcome.blocked { color: var(--color-warn); }
 
 .helper {
   margin: 0;

@@ -1,7 +1,7 @@
 """Brokerage ticker import: planning is pure, applying respects the workspace cap."""
 from __future__ import annotations
 
-from finwatch.broker import BrokerPosition, apply_plan, plan_import
+from finwatch.broker import BrokerPosition, apply_plan, plan_import, plan_symbols
 from finwatch.db.repositories import Company
 from finwatch.ingest.tickers import build_ticker_index
 
@@ -144,3 +144,33 @@ def test_planning_touches_no_database(repo):
     assert [c.ticker for c in plan.candidates] == ["AAPL"]
     assert [r.outcome for r in plan.rejected] == ["unsupported_instrument"]
     assert repo.list_tracked_ciks() == []
+
+
+def test_pasted_symbols_are_gated_by_sec_resolution_alone(repo):
+    """A pasted symbol carries no instrument metadata, so resolution is the only gate.
+
+    That is the same gate a hand-typed ticker already passes, and an unresolvable token
+    is reported rather than failing the whole paste.
+    """
+    result = apply_plan(
+        repo,
+        plan_symbols(["AAPL", "BRK.B", "NOTATICKER", "MSFT"], INDEX),
+        cap=25,
+        now="t",
+    )
+
+    assert _outcomes(result) == {
+        "AAPL": "tracked",
+        "BRK.B": "tracked",
+        "MSFT": "tracked",
+        "NOTATICKER": "not_found",
+    }
+    assert result.tracked_count == 3
+
+
+def test_pasted_share_classes_collapse_to_one_issuer(repo):
+    result = apply_plan(repo, plan_symbols(["GOOGL", "GOOG"], INDEX), cap=25, now="t")
+
+    assert {row.ticker for row in result.rows} == {"GOOG"}
+    assert repo.list_tracked_ciks() == [ALPHABET]
+    assert result.tracked_count == 1

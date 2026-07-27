@@ -13,14 +13,18 @@ from finwatch.broker.importer import (
     ImportRow,
     apply_plan,
     plan_import,
+    plan_symbols,
 )
 from finwatch.broker.symbols import (
+    MAX_PASTED_SYMBOLS,
     BrokerPosition,
     is_trackable_instrument,
     normalize_broker_symbol,
+    parse_symbol_list,
 )
 
 __all__ = [
+    "MAX_PASTED_SYMBOLS",
     "BrokerPosition",
     "Candidate",
     "ImportPlan",
@@ -29,5 +33,7 @@ __all__ = [
     "apply_plan",
     "is_trackable_instrument",
     "normalize_broker_symbol",
+    "parse_symbol_list",
     "plan_import",
+    "plan_symbols",
 ]

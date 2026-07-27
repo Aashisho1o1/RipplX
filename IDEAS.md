@@ -51,9 +51,16 @@ Connection Portal is a **top-level redirect**, which ships under the current CSP
 Plaid-Link-style embedded SDK cannot load without weakening `script-src`, `default-src`, and
 `connect-src` in `web/app.py`; for a trust-first product that outranks pricing.
 
-CSV/paste was rejected as the launch surface (hosted-only decision), not on merit. It remains the
-obvious second input to the same importer if that is ever revisited — `plan_import` already takes a
-plain list of positions, so it costs a parser and nothing else.
+**Ticker paste shipped (2026-07-27)** as the first input to the importer, reversing the earlier
+hosted-only-no-fallback call. It is one importer with two inputs, not a second architecture:
+`plan_symbols` and `plan_import` share the resolve-and-dedupe core and both produce an `ImportPlan`.
+It earns its place three times over — it gives the importer a real caller today, it is the
+network-free end-to-end path, and it is the control experiment for whether an aggregator materially
+improves activation over pasting a list. It is also the outage and unsupported-broker fallback.
+
+Paste carries no instrument metadata, so SEC resolution is its only gate — the same gate a
+hand-typed ticker already passes. Aggregator positions do carry structured metadata and get the
+stricter instrument filter. No CSV, no quantities, no account export.
 
 **Watch, do not build on:** since 2026-05-27 Robinhood operates a first-party OAuth MCP endpoint
 (`agent.robinhood.com/mcp/trading`, PKCE + dynamic client registration) granting read access to
@@ -71,9 +78,11 @@ open-source-native. This is the safe half and could ship independently of any im
 
 ### Built so far
 
-- `src/finwatch/broker/` — `plan_import` (pure: classify, normalize, resolve, dedupe by CIK) and
-  `apply_plan` (track, fill to the cap, report the remainder). Covered by `tests/test_broker_*.py`
-  with no network. **It currently has no production caller** — see "Blocked on".
+- `src/finwatch/broker/` — `plan_symbols` (pasted symbols), `plan_import` (aggregator positions,
+  with the instrument filter), and `apply_plan` (track, fill to the cap, report the remainder).
+  Covered by `tests/test_broker_*.py` with no network.
+- `POST /api/companies/import` plus the **Paste tickers** panel on the watchlist — the importer's
+  production caller.
 - Two rules the importer exists to enforce. *Classify before resolving*: a crypto position in `ETH`
   resolves cleanly against an unrelated equity in the SEC index, so instrument kind decides first,
   from structured vendor fields only. *Default deny*: an unrecognised kind, missing exchange, or

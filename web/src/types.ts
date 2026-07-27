@@ -41,6 +41,9 @@ export interface Certificate {
 export interface FilingDetail { filing: FilingDigestEntry; verified_numbers: IssuerMetrics | null; verification: Verification | null; withheld_reason: string | null; pipeline: PipelineStage[]; research: ResearchTrace | null; certificate_url: string | null; disclaimer: string; sample_data: boolean }
 export interface TrackedCompany { ticker: string; cik: string; newest_supported_filing: string | null; compressed_verified_read: string | null }
 export interface Companies { companies: TrackedCompany[] }
+export type ImportOutcome = "tracked" | "already_tracked" | "unsupported_instrument" | "not_found" | "ticker_identity_conflict" | "skipped_cap";
+export interface ImportRow { symbol: string; outcome: ImportOutcome; ticker: string | null }
+export interface ImportResult { rows: ImportRow[]; tracked_count: number; cap_reached: boolean }
 export interface Metrics { ticker: string; as_of: string; rows: MetricRow[]; empty: string | null; summary: string; before_first_filing: boolean }
 export interface Bootstrap { setup_required: boolean; sec_user_agent: string; account_email: string | null; period: string; model: string; provider: string | null; api_key_configured: boolean; analysis_configured: boolean }
 export interface AuthChallenge { challenge_id: string; expires_in: number }
