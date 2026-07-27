@@ -616,6 +616,15 @@ code,
   font-size: var(--text-serif-lg);
 }
 
+/* Positional anchor so three findings scan as a list rather than a wall. */
+.finding-index {
+  margin-right: 12px;
+  color: var(--color-faint-2);
+  font-family: var(--font-mono);
+  font-size: 0.62em;
+  vertical-align: 0.32em;
+}
+
 .pill.amber {
   color: var(--color-warn);
   border-color: rgba(166, 94, 36, 0.38);

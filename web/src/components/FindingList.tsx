@@ -11,8 +11,10 @@ export function trustedSecUrl(value: string): string | null {
 }
 
 export function FindingList({ findings }: { findings: Finding[] }) {
-  return <div className="finding-list">{findings.map(finding => <article className="finding" key={finding.finding_id}>
-    <div className="finding-heading"><h3>{finding.headline}</h3><SeverityBadge severity={finding.severity} /></div>
+  return <div className="finding-list">{findings.map((finding, position) => <article className="finding" key={finding.finding_id}>
+    {/* The index is positional, not model-authored: it gives the eye an anchor and makes
+        the at-most-three cap legible without adding anything to the finding contract. */}
+    <div className="finding-heading"><h3><span className="finding-index" aria-hidden="true">{position + 1}</span>{finding.headline}</h3><SeverityBadge severity={finding.severity} /></div>
     <div className="finding-evidence">{finding.evidence.map(evidence => {
       const citationUrl = trustedSecUrl(evidence.edgar_url);
       return <div className="evidence" key={evidence.claim_id}>
