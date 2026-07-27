@@ -4,18 +4,7 @@ import { api, ApiError } from "../api/client";
 import { Drawer } from "../components/Drawer";
 import { JobProgress } from "../components/JobProgress";
 import { useResource } from "../hooks/useResource";
-import type { TrackedCompany, Companies, Job, ImportOutcome, ImportResult } from "../types";
-
-// Fixed copy per outcome code. The API returns a closed vocabulary and never prose, so
-// the mapping lives here; an unrecognised code falls back rather than rendering raw.
-const IMPORT_OUTCOMES: Record<ImportOutcome, { label: string; tone: string }> = {
-  tracked: { label: "Added", tone: " added" },
-  already_tracked: { label: "Already tracked", tone: "" },
-  not_found: { label: "No SEC filer with this symbol", tone: "" },
-  unsupported_instrument: { label: "Not a US-listed company", tone: "" },
-  ticker_identity_conflict: { label: "Conflicts with an existing entry", tone: " blocked" },
-  skipped_cap: { label: "Watchlist full", tone: " blocked" },
-};
+import type { TrackedCompany, Companies, Job } from "../types";
 
 export function CompaniesPage() {
   const location = useLocation(); const navigate = useNavigate(); const panel = new URLSearchParams(location.search).get("panel");
@@ -28,34 +17,14 @@ export function CompaniesPage() {
   if (!resource.data) return <main className="page">{resource.loading ? <p className="loading">Loading companies…</p> : <div className="notice">{resource.error?.message}</div>}</main>;
   const rows = resource.data;
   const tracked = [...rows.companies].sort((left, right) => left.ticker.localeCompare(right.ticker));
-  return <main className="page"><header className="page-header"><div><p className="page-eyebrow">Watchlist</p><h1 className="page-title">Tracked companies</h1><p className="page-subtitle">Choose the businesses RipplX should watch across new SEC filings.</p></div><div className="actions"><button className="button" onClick={sync}><span aria-hidden="true">↻</span> Sync filings</button>{tracked.length > 0 && <><button className="button" onClick={() => navigate("?panel=import")}>Paste tickers</button><button className="button primary" onClick={() => navigate("?panel=add")}>Add ticker <span aria-hidden="true">＋</span></button></>}</div></header>{error && <div className="notice">{error}</div>}<JobProgress job={job} />
-    {!tracked.length ? <section className="empty-invitation company-invitation"><p className="section-kicker">Your front door</p><h2>Follow a company you already understand.</h2><p>Enter a US-listed ticker. RipplX resolves it against the SEC company index before adding it.</p><AddTickerForm onAdded={resource.refresh} introductory={false} /><p className="helper">Tracking several? <button type="button" className="text-link" onClick={() => navigate("?panel=import")}>Paste a list instead</button>.</p></section> : <section className="section"><div className="surface-header"><div><span className="section-kicker">Your watchlist</span><h2>{tracked.length} {tracked.length === 1 ? "company" : "companies"}</h2></div><span className="surface-meta">Newest 10-K/10-Q/8-K indexed per ticker</span></div><div className="company-list">{tracked.map(row => <CompanyRow key={row.ticker} row={row} onRemove={remove} />)}</div></section>}
+  return <main className="page"><header className="page-header"><div><p className="page-eyebrow">Watchlist</p><h1 className="page-title">Tracked companies</h1><p className="page-subtitle">Choose the businesses RipplX should watch across new SEC filings.</p></div><div className="actions"><button className="button" onClick={sync}><span aria-hidden="true">↻</span> Sync filings</button>{tracked.length > 0 && <button className="button primary" onClick={() => navigate("?panel=add")}>Add ticker <span aria-hidden="true">＋</span></button>}</div></header>{error && <div className="notice">{error}</div>}<JobProgress job={job} />
+    {!tracked.length ? <section className="empty-invitation company-invitation"><p className="section-kicker">Your front door</p><h2>Follow a company you already understand.</h2><p>Enter a US-listed ticker. RipplX resolves it against the SEC company index before adding it.</p><AddTickerForm onAdded={resource.refresh} introductory={false} /></section> : <section className="section"><div className="surface-header"><div><span className="section-kicker">Your watchlist</span><h2>{tracked.length} {tracked.length === 1 ? "company" : "companies"}</h2></div><span className="surface-meta">Newest 10-K/10-Q/8-K indexed per ticker</span></div><div className="company-list">{tracked.map(row => <CompanyRow key={row.ticker} row={row} onRemove={remove} />)}</div></section>}
     {panel === "add" && <Drawer title="Add ticker" onClose={closePanel}><AddTickerForm onAdded={() => { closePanel(); resource.refresh(); }} /></Drawer>}
-    {panel === "import" && <Drawer title="Paste tickers" onClose={closePanel}><PasteTickersForm onImported={resource.refresh} /></Drawer>}
   </main>;
 }
 
 function CompanyRow({ row, onRemove }: { row: TrackedCompany; onRemove: (ticker: string) => void }) {
   return <article className="holding-row"><Link to={`/companies/${row.ticker}`} className="holding-row-link"><div className="holding-copy"><div className="holding-title"><strong>{row.ticker}</strong><code>CIK {row.cik}</code></div><div className="row-meta">{row.compressed_verified_read ?? "No computed financials yet"}</div></div><div className="holding-last"><span>Newest 10-K/10-Q/8-K</span><strong>{row.newest_supported_filing ?? "—"}</strong></div><span className="row-arrow" aria-hidden="true">→</span></Link><button className="button ghost remove-button" onClick={() => onRemove(row.ticker)}>Remove</button></article>;
-}
-
-function PasteTickersForm({ onImported }: { onImported: () => void }) {
-  const [symbols, setSymbols] = useState(""); const [error, setError] = useState(""); const [saving, setSaving] = useState(false);
-  const [result, setResult] = useState<ImportResult | null>(null);
-  async function submit(event: FormEvent) {
-    event.preventDefault(); setSaving(true); setError(""); setResult(null);
-    try { setResult(await api<ImportResult>("/api/companies/import", { method: "POST", body: JSON.stringify({ symbols }) })); setSymbols(""); onImported(); }
-    catch (reason) { setError(reason instanceof ApiError ? reason.message : "These tickers could not be imported."); }
-    finally { setSaving(false); }
-  }
-  return <form className="form-grid" onSubmit={submit}>
-    <div className="analysis-intro"><div className="panel-icon" aria-hidden="true">≡</div><div><strong>Paste the tickers you hold</strong><p>Separate them with commas, spaces, or new lines. RipplX resolves each one against the SEC company index — nothing else about your account is asked for or stored.</p></div></div>
-    <div className="field"><label htmlFor="symbols">Ticker symbols</label><textarea id="symbols" className="input paste-input" required autoComplete="off" autoFocus placeholder={"AAPL, MSFT, GOOGL\nBRK.B"} value={symbols} onChange={event => setSymbols(event.target.value)} /><p className="helper">Up to 100 at a time, and up to 25 tracked companies in the hosted alpha.</p></div>
-    {error && <div className="field-error">{error}</div>}
-    <button className="button primary button-large" disabled={saving}>{saving ? "Importing…" : "Import tickers"}</button>
-    {result && <><div className="notice neutral">{result.tracked_count === 0 ? "No new companies were added." : `Added ${result.tracked_count} ${result.tracked_count === 1 ? "company" : "companies"}.`}{result.cap_reached ? " The watchlist is now full." : ""}</div>
-      <div className="import-log">{result.rows.map(row => { const outcome = IMPORT_OUTCOMES[row.outcome] ?? { label: row.outcome, tone: "" }; return <div className="import-row" key={row.symbol}><span className="import-symbol">{row.symbol}</span><span className={`import-outcome${outcome.tone}`}>{outcome.label}{row.ticker && row.ticker !== row.symbol ? ` as ${row.ticker}` : ""}</span></div>; })}</div></>}
-  </form>;
 }
 
 function AddTickerForm({ onAdded, introductory = true }: { onAdded: () => void; introductory?: boolean }) {

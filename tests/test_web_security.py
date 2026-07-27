@@ -586,36 +586,3 @@ def test_public_sample_prefix_never_widens_private_access(tmp_path, monkeypatch)
     assert anon.post("/api/public/sample/brief").status_code in {403, 405}
     # And it grants nothing outside the sample namespace.
     assert anon.get("/api/public/sample/../bootstrap").status_code in {401, 404}
-
-
-def test_ticker_import_is_csrf_protected_same_origin_and_scoped_to_one_user(
-    tmp_path, monkeypatch, offline_ticker_index
-):
-    """The bulk path must carry the same protections as the single-add route.
-
-    A bulk importer is a more attractive CSRF target than a one-ticker form: a single
-    forged request can rewrite a whole watchlist.
-    """
-    app, sender = _remote_app(tmp_path, monkeypatch)
-    alice, _ = _login(app, sender, "alice@example.com")
-    bob, _ = _login(app, sender, "bob@example.com")
-
-    body = {"symbols": "AAPL,MSFT"}
-    assert alice.post("/api/companies/import", json=body).status_code == 403       # no CSRF
-    foreign = alice.post(
-        "/api/companies/import",
-        json=body,
-        headers={**_csrf(alice), "Origin": "https://attacker.example"},
-    )
-    assert foreign.status_code == 403
-    assert foreign.json()["error"]["code"] == "origin_not_allowed"
-
-    accepted = alice.post("/api/companies/import", json=body, headers=_csrf(alice))
-    assert accepted.status_code == 200
-    assert accepted.json()["tracked_count"] == 2
-
-    # Alice's import is private; Bob's watchlist is untouched.
-    assert [row["ticker"] for row in alice.get("/api/companies").json()["companies"]] == [
-        "AAPL", "MSFT",
-    ]
-    assert bob.get("/api/companies").json()["companies"] == []

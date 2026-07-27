@@ -226,10 +226,8 @@ back off on 429/403; cache immutable filings. Filing text and EDGAR metadata are
 ## 5. User and operator surfaces
 
 The browser app is the launch surface. Hosted onboarding is public email-code login followed by a
-ticker; local mode remains auth-free. Tickers may be added one at a time or pasted as a list, which
-resolves each symbol against the SEC company index in one pass and reports a fixed outcome code for
-every symbol submitted. It does not ask for or return shares, cost basis, target weights, horizon,
-or thesis, and it accepts no brokerage credential, account export, or position quantity.
+ticker; local mode remains auth-free. It does not ask for or return shares, cost basis, target
+weights, horizon, or thesis.
 The watchlist reports the newest supported 10-K/10-Q/8-K indexed for an issuer; it never reports an
 unsupported form and never claims a filing was read.
 

@@ -15,6 +15,7 @@ from rich.console import Console
 
 from finwatch import __version__
 from finwatch.config import Config, ConfigError, load_config, load_dotenv
+from finwatch.db import TickerIdentityConflictError
 from finwatch.ingest import (
     DEFAULT_BACKFILL_QUARTERS,
     TickerNotFoundError,
@@ -126,6 +127,14 @@ def add(
         company = service.track_company(ticker)
     except TickerNotFoundError as exc:
         console.print(f"[red]{exc}[/]")
+        raise typer.Exit(code=1) from exc
+    except TickerIdentityConflictError as exc:
+        # A recycled symbol: SEC now maps it to a different issuer than the one on file.
+        # Fail closed rather than moving the ticker between issuers behind the user's back.
+        console.print(
+            f"[red]{exc.ticker} is already on file for CIK {exc.existing_cik}, but EDGAR now "
+            f"resolves it to CIK {exc.incoming_cik}.[/] Remove the stale entry first."
+        )
         raise typer.Exit(code=1) from exc
     finally:
         service.edgar.close()
@@ -331,7 +340,7 @@ def metrics(
         if company is None:
             try:
                 company = service.track_company(ticker_u)
-            except TickerNotFoundError as exc:
+            except (TickerNotFoundError, TickerIdentityConflictError) as exc:
                 console.print(f"[red]{exc}[/]")
                 raise typer.Exit(code=1) from exc
             console.print(

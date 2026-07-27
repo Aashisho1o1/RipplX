@@ -15,7 +15,6 @@ from urllib.parse import urlsplit
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.requests import Request
 
-from finwatch.broker import apply_plan, parse_symbol_list, plan_symbols
 from finwatch.config import Config
 from finwatch.db import (
     LOCAL_USER_ID,
@@ -28,7 +27,6 @@ from finwatch.db import (
 )
 from finwatch.demo import DEMO_SINCE, build_demo_db
 from finwatch.ingest import TickerNotFoundError, build_service
-from finwatch.ingest.tickers import build_ticker_index
 from finwatch.presentation import PresentationService
 from finwatch.web.auth import (
     CSRF_COOKIE_NAME,
@@ -169,15 +167,6 @@ class CompanyCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     ticker: str = Field(min_length=1, max_length=15, pattern=_TICKER_PATTERN)
-
-
-class TickerImport(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    # Free text, not a symbol list: whatever the user pasted. Separators and unusable
-    # tokens are sorted out by parse_symbol_list, and an unresolvable token is reported
-    # rather than rejecting the whole paste.
-    symbols: str = Field(min_length=1, max_length=2000)
 
 
 class SettingsUpdate(BaseModel):
@@ -803,61 +792,6 @@ def create_app(
             # Match on CIK: share classes collapse to one issuer, so the stored label
             # can legitimately differ from the symbol the caller submitted.
             return next(row for row in view.companies if row.cik == record.cik)
-
-    @app.post("/api/companies/import")
-    def import_companies(request: Request, payload: TickerImport):
-        """Track a pasted list of symbols in one pass.
-
-        Reaching the workspace cap is not a failure here: the issuers that fit are
-        tracked and the rest are named, so a long paste still delivers what it can. The
-        SEC ticker index is fetched once for the batch rather than per symbol.
-        """
-        principal = principal_for(request)
-        symbols = parse_symbol_list(payload.symbols)
-        if not symbols:
-            raise ApiProblem(
-                422, "no_symbols", "Enter at least one ticker symbol."
-            )
-        with app.state.company_add_lock:
-            with repo_context() as repo:
-                settings = resolve_settings(
-                    repo,
-                    app.state.secrets,
-                    user_id=principal.user_id,
-                    session_id=principal.session_id,
-                    remote=remote,
-                )
-                if not settings.sec_user_agent:
-                    raise ApiProblem(
-                        409,
-                        "missing_user_agent",
-                        "Configure the SEC User-Agent before adding a company.",
-                    )
-            config = Config(
-                sec_user_agent=settings.sec_user_agent,
-                db_path=app.state.db_path,
-                model=settings.model,
-            )
-            connection, service = build_service(config, conn=operational_connection())
-            try:
-                index = build_ticker_index(service.edgar.company_tickers())
-            except Exception as exc:  # noqa: BLE001 — EDGAR text is never display data
-                raise ApiProblem(
-                    503,
-                    "ticker_index_unavailable",
-                    "The SEC ticker index could not be read. Try again shortly.",
-                ) from exc
-            finally:
-                service.edgar.close()
-                connection.close()
-            with repo_context() as repo:
-                return apply_plan(
-                    repo,
-                    plan_symbols(symbols, index),
-                    user_id=principal.user_id,
-                    cap=MAX_TRACKED_TICKERS,
-                    now=datetime.now(UTC).isoformat(),
-                )
 
     @app.delete("/api/companies/{ticker}", status_code=204)
     def delete_company(
