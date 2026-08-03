@@ -1,4 +1,5 @@
 """Shared test fixtures: in-memory DB + fixture-backed EDGAR clients (no network)."""
+
 from __future__ import annotations
 
 import json
@@ -30,6 +31,14 @@ _LEAKY_ENV = (
     "FINWATCH_ALLOWED_HOSTS",
     "FINWATCH_EMAIL_FROM",
     "RESEND_API_KEY",
+    "STRIPE_SECRET_KEY",
+    "STRIPE_PRICE_ID",
+    "STRIPE_WEBHOOK_SECRET",
+    "POSTHOG_PROJECT_KEY",
+    "POSTHOG_HOST",
+    "SNAPTRADE_CLIENT_ID",
+    "SNAPTRADE_CONSUMER_KEY",
+    "FINWATCH_BROKER_ENCRYPTION_KEY",
 )
 
 

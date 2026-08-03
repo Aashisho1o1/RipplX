@@ -14,6 +14,8 @@ const bootstrap: Bootstrap = {
   provider: "openai",
   api_key_configured: true,
   analysis_configured: true,
+  billing_configured: false,
+  billing_status: "free",
 };
 
 const reviewed: FilingDigestEntry = {

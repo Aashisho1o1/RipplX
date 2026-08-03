@@ -106,17 +106,16 @@ silent, plausible error presented as verified.
 
 ## 1. Product definition
 
-**One-liner:** Filing intelligence for self-directed investors: track tickers, review the newest
-10-K/10-Q/8-K, see up to three AI-selected changes with exact SEC quotations, and inspect six
-deterministically computed XBRL metrics.
+**One-liner:** Evidence-grounded company research for self-directed investors: research before
+buying, monitor filings, detect downside, receive a weekly brief, and compare similar companies.
 
 **North-star user pain:**
 > “I own 12 stocks. I do not read every 8-K, 10-Q, and 10-K. I want to know when something
 > actually important changed.”
 
-**What this is not:** an investment advisor, portfolio manager, trading system, valuation suite,
-or historical backtester. The launch UI never emits a trade action, price target, P3 posture, or
-shadow signal. Educational output supports the user's own decision.
+**What this is not:** an investment advisor, portfolio manager, trading system, or historical
+backtester. Transparent reverse-DCF scenarios expose assumptions but never claim one correct value.
+The UI never emits a trade action, price target, P3 posture, or shadow signal.
 
 **Trust promise:**
 
@@ -129,6 +128,9 @@ shadow signal. Educational output supports the user's own decision.
   limited to provider/malformed-action breakdown or failed `FORM_SCOPE`/`CRITICAL_COVERAGE`.
 - Verification proves provenance, exactness, schema, and hygiene. It does **not** prove that the
   model's interpretation of importance is correct, so the UI labels findings as AI-selected.
+- Product features compose only verified projection data: deterministic downside lenses, optional
+  confirmed thesis monitoring, attention events, bounded follow-up tools, and SIC-derived peer
+  candidates cannot override a compiler verdict.
 
 Prefer deterministic over stochastic · fewer/sharper findings over noisy coverage · explicit
 `not_applicable`/`unavailable` over guessing · withholding over plausible unsupported output.
@@ -250,9 +252,10 @@ selects an accession or falls through to older history within that form.
 ## 6. SQLite and stored data
 
 Authoritative DDL is the one fresh schema in `src/finwatch/db/schema.sql`; there is no migration
-ladder. Schema v6 is a clean backup-and-reset boundary for attempt-linked `harness.v2` traces and
-`certificate.v2`; no v1 compatibility fallback exists. It stores public users, private user-company
-membership, and one private period preference per user. A reserved local user preserves CLI/local
+ladder. Schema v7 is a clean backup-and-reset boundary for attempt-linked `harness.v2` traces,
+`certificate.v2`, and private product state; no v1 compatibility fallback exists. It stores users,
+private company membership/profiles/theses/events/valuations/delivery records, billing identifiers,
+and reserved encrypted-broker state. A reserved local user preserves CLI/local
 behavior. Issuers, filings, SEC facts, analyses, computations, and verification remain shared
 public-data artifacts. Older schema versions fail closed with a backup-and-reset message.
 
@@ -313,7 +316,8 @@ effective `as_of`, and source inputs, including SEC `decimals`. Revenue, net inc
 count also carry `direction_delta`, conservative `direction_slack`, and `direction_basis`; missing
 rounding metadata never becomes zero slack. The browser DTO carries the source computation ID. The
 full formula catalog remains tested research code but is not called, persisted, or presented by the
-launch metrics service. Price, valuation, and holding/portfolio inputs are absent.
+launch metrics service. Valuation accepts an explicit timestamped user price downstream of verified
+inputs; holding/portfolio inputs remain absent.
 
 Presentation language stays narrower than the accounting facts: share-count changes are described
 only as increased, decreased, or flat—not inferred to be dilution or a buyback—and only when the
@@ -557,6 +561,7 @@ analysis replay · provider-native function calling · generic plugins/subagents
 | Launch pipeline and scheduling | `src/finwatch/pipeline/orchestrator.py`, `run.py`, `progress.py` |
 | Publication checks | `src/finwatch/verify/compiler.py`, `checks.py`, `verify/presentation.py` |
 | Canonical projection and renderer | `src/finwatch/presentation/`, `src/finwatch/digest/render.py` |
+| Research, risk, monitoring, valuation, providers | `src/finwatch/product/`, `PROVIDERS.md` |
 | Web/API/security | `src/finwatch/web/`, `web/` |
 | 12-case golden set | `src/finwatch/evals/golden_set/manifest.yaml` |
 

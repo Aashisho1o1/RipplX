@@ -144,9 +144,10 @@ def test_remote_api_uses_persistent_cookie_session_and_logout(tmp_path, monkeypa
     missing = client.get("/api/bootstrap")
     assert missing.status_code == 401
     assert missing.json()["error"]["code"] == "authentication_required"
-    assert client.get(
-        "/api/bootstrap", headers={"Authorization": f"Bearer {AUTH_SECRET}"}
-    ).status_code == 401
+    assert (
+        client.get("/api/bootstrap", headers={"Authorization": f"Bearer {AUTH_SECRET}"}).status_code
+        == 401
+    )
 
     client, verified = _login(app, sender)
     cookie_headers = verified.headers.get_list("set-cookie")
@@ -189,9 +190,10 @@ def test_remote_rejects_tampered_session_and_mutations_without_origin(tmp_path, 
     assert client.get("/api/bootstrap").status_code == 401
 
     no_origin = TestClient(app, base_url="https://alpha.example")
-    assert no_origin.post(
-        "/api/auth/request-code", json={"email": "other@example.com"}
-    ).status_code == 403
+    assert (
+        no_origin.post("/api/auth/request-code", json={"email": "other@example.com"}).status_code
+        == 403
+    )
 
 
 def test_remote_host_allowlist_applies_before_api_use(tmp_path, monkeypatch):
@@ -210,9 +212,9 @@ def test_remote_demo_uses_isolated_bundled_sample_data(tmp_path, monkeypatch):
     assert payload["tracked_tickers"] == ["AAPL", "DPLS", "MSFT", "TWKS"]
     assert len(payload["filings"]) == 3
     assert sum(len(filing["findings"]) for filing in payload["filings"]) == 4
-    assert payload["filings"][0]["findings"][0]["evidence"][0][
-        "edgar_url"
-    ].startswith("https://www.sec.gov/")
+    assert payload["filings"][0]["findings"][0]["evidence"][0]["edgar_url"].startswith(
+        "https://www.sec.gov/"
+    )
 
     connection = connect(app.state.db_path)
     try:
@@ -227,9 +229,7 @@ def test_remote_demo_uses_isolated_bundled_sample_data(tmp_path, monkeypatch):
                 added_at="2026-07-20T00:00:00Z",
             )
         )
-        repo.track_company(
-            "0000009999", user_id=user.id, at="2026-07-20T00:00:00Z"
-        )
+        repo.track_company("0000009999", user_id=user.id, at="2026-07-20T00:00:00Z")
     finally:
         connection.close()
 
@@ -257,13 +257,9 @@ def test_public_users_have_private_watchlists_preferences_filings_and_jobs(
     alice, _ = _login(app, sender, "alice@example.com")
     bob, _ = _login(app, sender, "bob@example.com")
 
-    added = alice.post(
-        "/api/companies", json={"ticker": "MSFT"}, headers=_csrf(alice)
-    )
+    added = alice.post("/api/companies", json={"ticker": "MSFT"}, headers=_csrf(alice))
     assert added.status_code == 201
-    assert [row["ticker"] for row in alice.get("/api/companies").json()["companies"]] == [
-        "MSFT"
-    ]
+    assert [row["ticker"] for row in alice.get("/api/companies").json()["companies"]] == ["MSFT"]
     assert bob.get("/api/companies").json()["companies"] == []
     assert alice.get("/api/brief").json()["tracked_tickers"] == ["MSFT"]
     assert bob.get("/api/brief").json()["tracked_tickers"] == []
@@ -273,6 +269,11 @@ def test_public_users_have_private_watchlists_preferences_filings_and_jobs(
     assert bob.get(f"/api/filings/{accession}").status_code == 404
     assert alice.get("/api/companies/MSFT/metrics").status_code == 200
     assert bob.get("/api/companies/MSFT/metrics").status_code == 404
+    assert alice.get("/api/companies/MSFT/research").status_code == 200
+    assert alice.get("/api/companies/MSFT/profile").status_code == 200
+    for private_path in ("research", "profile", "risks", "peers"):
+        assert bob.get(f"/api/companies/MSFT/{private_path}").status_code == 404
+    assert bob.get("/api/alerts").json() == {"events": []}
     for endpoint in ("sync", "analyze"):
         rejected = bob.post(
             f"/api/jobs/{endpoint}",
@@ -282,9 +283,9 @@ def test_public_users_have_private_watchlists_preferences_filings_and_jobs(
         assert rejected.status_code == 404
         assert rejected.json()["error"]["code"] == "company_not_found"
 
-    assert alice.put(
-        "/api/settings", json={"period": "30d"}, headers=_csrf(alice)
-    ).status_code == 200
+    assert (
+        alice.put("/api/settings", json={"period": "30d"}, headers=_csrf(alice)).status_code == 200
+    )
     assert alice.get("/api/bootstrap").json()["period"] == "30d"
     assert bob.get("/api/bootstrap").json()["period"] == "90d"
 
@@ -294,9 +295,7 @@ def test_public_users_have_private_watchlists_preferences_filings_and_jobs(
         alice_id = repo.get_user_by_email("alice@example.com").id
     finally:
         connection.close()
-    started = app.state.jobs.start(
-        "sync", lambda _job_id, _registry: False, owner_id=alice_id
-    )
+    started = app.state.jobs.start("sync", lambda _job_id, _registry: False, owner_id=alice_id)
     for _ in range(100):
         if app.state.jobs.get(started.id, owner_id=alice_id).state == "completed":
             break
@@ -351,17 +350,13 @@ def test_provider_keys_are_session_isolated_and_never_persisted(tmp_path, monkey
     assert alice.get("/api/bootstrap").json()["api_key_configured"] is True
     assert bob.get("/api/bootstrap").json()["api_key_configured"] is False
 
-    alice_session = app.state.session_codec.load(
-        alice.cookies.get(SESSION_COOKIE_NAME)
-    )
+    alice_session = app.state.session_codec.load(alice.cookies.get(SESSION_COOKIE_NAME))
     bob_session = app.state.session_codec.load(bob.cookies.get(SESSION_COOKIE_NAME))
     assert app.state.secrets.api_key(alice_session.session_id) == sentinel
     assert app.state.secrets.api_key(bob_session.session_id) is None
     assert sentinel.encode() not in (tmp_path / "db.sqlite").read_bytes()
 
-    assert alice.post(
-        "/api/auth/logout", headers=_csrf(alice)
-    ).status_code == 204
+    assert alice.post("/api/auth/logout", headers=_csrf(alice)).status_code == 204
     assert app.state.secrets.api_key(alice_session.session_id) is None
 
 
@@ -527,9 +522,7 @@ def test_production_schema_initializes_once_before_concurrent_requests(tmp_path,
 
     monkeypatch.setattr(web_app, "init_db", counted_init)
     monkeypatch.setattr(web_app, "connect", counted_connect)
-    app = web_app.create_app(
-        db_path=str(tmp_path / "db.sqlite"), web_dist=tmp_path / "missing"
-    )
+    app = web_app.create_app(db_path=str(tmp_path / "db.sqlite"), web_dist=tmp_path / "missing")
     client = TestClient(app)
 
     with ThreadPoolExecutor(max_workers=4) as pool:

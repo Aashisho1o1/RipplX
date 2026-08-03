@@ -1,10 +1,10 @@
 # finwatch
 
-**Evidence-backed SEC filing alerts for self-directed investors.**
+**Evidence-backed company research and filing monitoring for self-directed investors.**
 
-Add the tickers you follow. When a 10-K, 10-Q, or 8-K arrives, finwatch shows up to three
-important changes, the exact SEC evidence behind each change, and a small set of
-deterministically computed financial deltas.
+Research a company before buying, monitor it automatically, detect downside, receive a weekly
+brief, and compare similar companies. Every published filing finding remains tied to exact SEC
+evidence, and financial metrics remain deterministic.
 
 > "I own 12 stocks. I do not read every 8-K, 10-Q, and 10-K. I want to know when something
 > actually important changed."
@@ -14,11 +14,10 @@ buy, sell, hold, trim, or accumulate a security.
 
 ## Launch scope
 
-The current repository contains the launch cut of a larger research prototype. The user-facing
-loop is intentionally narrow:
+The current repository contains a lean commercial loop:
 
-1. Track a ticker. No shares, cost basis, target weight, investment horizon, or thesis is
-   collected during onboarding.
+1. Enter a ticker and open a Before You Buy Brief. No saved watch condition, payment, or brokerage connection is
+   required.
 2. Sync filings and SEC companyfacts from EDGAR.
 3. Analyze at most one filing per request: the newest supported filing for a selected ticker,
    or the newest supported filing across tracked tickers when no ticker is selected. You can narrow
@@ -31,6 +30,15 @@ loop is intentionally narrow:
    liquidity, share-count change, and a net-debt / (operating income + D&A) leverage proxy.
    Share-count direction is reported neutrally—not inferred to be a buyback or dilution. Stale,
    future-dated, or malformed source periods are shown as unavailable, never relabeled as current.
+6. Combine eight reproducible downside lenses and the six verified metrics in one Financial X-Ray.
+   Missing data stays `unavailable`.
+7. Monitor supported filings with one idempotent scheduled command, persist attention events, and
+   deliver urgent/same-week and weekly email summaries through Resend.
+8. Build a deterministic Stock Impact Snapshot from verified findings, risk lenses, and the user's
+   saved valuation. Show trailing P/E, P/FCF, FCF yield, and scenario percentage changes downstream
+   of the fixed starter metrics.
+9. Let users save up to five watch conditions, ask bounded evidence-grounded questions, and compare
+   user-editable SIC-derived peer candidates. Filing commitments remain optional supporting context.
 
 Numbers may appear only in deterministic metric rows sourced from SEC XBRL or inside exact SEC
 quotations. Structured direction claims are compiled against current-minus-prior metric deltas and
@@ -46,13 +54,13 @@ proves that its displayed evidence is exact and that displayed numbers come from
 it does not prove semantic entailment or make the model's interpretation deterministic. Both
 renderers label that boundary explicitly, and the concierge alpha manually reviews every result.
 
-The launch path does **not** execute or expose:
+The launch path still does **not** execute or expose:
 
 - P2 portfolio-impact or cross-holding analysis;
 - P3 signals, trade-action vocabulary, shadow logs, promotion policy, or track-record UI;
 - offline reverify or historical analysis replay;
-- portfolio accounting, position sizing, rebalancing, thesis checks, or extended valuation and
-  forensic-score suites; or
+- portfolio accounting, position sizing, rebalancing, or extended forensic-score suites;
+- personalized buy/hold/sell/trim instructions, price targets, or trading; or
 - open-ended provider/model routing (only the `openai/`, `openrouter/`, and `z-ai/` prefixes are
   accepted, each mapping to one fixed endpoint).
 
@@ -104,6 +112,13 @@ FINWATCH_DB=./data/finwatch.db
 FINWATCH_MODEL=z-ai/glm-5.2
 FINWATCH_SKEPTIC_MODEL=
 ZAI_API_KEY=
+OPENROUTER_API_KEY=
+OPENAI_API_KEY=
+STRIPE_SECRET_KEY=
+STRIPE_PRICE_ID=
+STRIPE_WEBHOOK_SECRET=
+POSTHOG_PROJECT_KEY=
+POSTHOG_HOST=https://us.i.posthog.com
 ```
 
 - `SEC_USER_AGENT` identifies the EDGAR client. The local browser can also collect it during
@@ -120,6 +135,9 @@ ZAI_API_KEY=
 - Instead of setting a provider key, a local user may enter one in Settings. That key exists
   only in the running Python process, is never written to SQLite or returned by the API, and is
   lost on restart. `FINWATCH_MODEL` must still be configured by the operator.
+- Stripe owns card data; RipplX stores only customer/subscription identifiers and status. PostHog is
+  optional, server-side, allowlisted, and receives no tickers, holdings, thesis text, valuation
+  inputs, filing text, or financial values. See `PROVIDERS.md`.
 
 Do not commit `.env`; it is ignored by Git. The demo needs none of these values.
 
@@ -208,8 +226,8 @@ the configured provider, so hosted onboarding never demands a key from each part
 operator key stays in process environment memory; the API reports only whether analysis is
 configured, never which key served a run.
 
-Schema v6 is a clean prototype break, not a migration. It introduces attempt-linked `harness.v2`
-and frozen `certificate.v2` semantics without carrying a v1 compatibility path. Before upgrading an existing Railway volume,
+Schema v7 is a clean prototype break, not a migration. It retains attempt-linked `harness.v2` and
+frozen `certificate.v2` semantics and adds private research/monitoring product state. Before upgrading an existing Railway volume,
 back up `/data`, stop the old deployment, recreate the database/volume, and deploy. Old schemas fail
 with an explicit backup-and-reset error. `.env` files are excluded from both Git and the Docker build
 context; keep a local copy mode-restricted (for example `chmod 600 .env`).
@@ -227,6 +245,8 @@ uv run finwatch add AAPL
 uv run finwatch ingest
 uv run finwatch analyze AAPL
 uv run finwatch digest
+uv run finwatch monitor
+uv run finwatch monitor --weekly
 uv run finwatch metrics AAPL
 ```
 

@@ -5,6 +5,7 @@ database is initialized from ``schema.sql``; a database created by an older finw
 schema is rejected (``SchemaVersionError``) so the new code never runs against a legacy
 layout. Back up the data directory and start fresh to upgrade.
 """
+
 from __future__ import annotations
 
 import importlib.resources
@@ -15,7 +16,7 @@ from pathlib import Path
 # Bump SCHEMA_VERSION whenever schema shape or an incompatible persisted contract changes.
 # APPLICATION_ID ("FWL1") marks a finwatch-lean database so a same-version file from
 # another tool is still rejected.
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 APPLICATION_ID = 0x46574C31
 
 
@@ -25,9 +26,7 @@ class SchemaVersionError(RuntimeError):
 
 def _schema_sql() -> str:
     return (
-        importlib.resources.files("finwatch.db")
-        .joinpath("schema.sql")
-        .read_text(encoding="utf-8")
+        importlib.resources.files("finwatch.db").joinpath("schema.sql").read_text(encoding="utf-8")
     )
 
 
@@ -86,7 +85,7 @@ def _install_or_verify_schema(conn: sqlite3.Connection) -> None:
         if existing is not None:
             raise SchemaVersionError(
                 "This non-empty database is not marked as the current finwatch schema. "
-                "Back up the directory and start fresh before deploying schema version 6."
+                "Back up the directory and start fresh before deploying schema version 7."
             )
         conn.executescript(
             f"BEGIN;\n{_schema_sql()}\n"

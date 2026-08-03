@@ -56,18 +56,27 @@ def test_holding_create_is_ticker_only_and_legacy_rows_do_not_leak_private_field
     )
     rows = client.get("/api/companies").json()["companies"]
     assert rows
-    assert {"shares", "cost_basis", "target_weight_pct", "horizon", "thesis"}.isdisjoint(
-        rows[0]
-    )
+    assert {"shares", "cost_basis", "target_weight_pct", "horizon", "thesis"}.isdisjoint(rows[0])
     assert client.patch("/api/companies/MSFT", json={"shares": 1}).status_code == 404
+
+
+def test_demo_company_index_uses_the_same_sample_scope_as_company_research(tmp_path):
+    client, _ = _client(tmp_path)
+
+    rows = client.get("/api/companies?demo=true").json()["companies"]
+
+    assert {row["ticker"] for row in rows} == {"AAPL", "DPLS", "MSFT", "TWKS"}
 
 
 def test_holding_create_fails_before_edgar_when_launch_cap_is_reached(tmp_path):
     client, db_path = _client(tmp_path)
-    assert client.put(
-        "/api/settings",
-        json={"sec_user_agent": "Test User test@example.com"},
-    ).status_code == 200
+    assert (
+        client.put(
+            "/api/settings",
+            json={"sec_user_agent": "Test User test@example.com"},
+        ).status_code
+        == 200
+    )
     conn = init_db(str(db_path))
     try:
         repo = Repo(conn)
@@ -114,6 +123,84 @@ def test_get_and_delete_path_params_reject_malformed_input(tmp_path):
     assert client.get("/api/filings/0000000001-24-000001").status_code == 404
 
 
+def test_company_research_assembles_risks_profile_metrics_and_questions(tmp_path):
+    db_path = tmp_path / "finwatch.db"
+    build_demo_db(str(db_path)).close()
+    client = TestClient(
+        create_app(db_path=str(db_path), web_dist=tmp_path / "missing-dist"),
+        headers=LOCAL_BROWSER_HEADERS,
+    )
+    response = client.get("/api/companies/MSFT/research")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ticker"] == "MSFT"
+    assert len(body["risks"]) == 8
+    assert {row["status"] for row in body["risks"]} <= {
+        "stable",
+        "watch",
+        "elevated",
+        "unavailable",
+    }
+    assert body["metrics"]["rows"]
+    assert body["thesis"] == {"items": []}
+    assert body["profile"]["monitoring_enabled"] is True
+    assert body["questions"]
+    assert body["impact"]["directional_pressure"] in {
+        "upside",
+        "downside",
+        "mixed",
+        "uncertain",
+    }
+
+    profile = client.put(
+        "/api/companies/MSFT/profile",
+        json={
+            "monitoring_enabled": False,
+            "notification_level": "weekly",
+            "peer_tickers": ["AAPL"],
+        },
+    )
+    assert profile.status_code == 200
+    assert profile.json()["notification_level"] == "weekly"
+    refreshed = client.get("/api/companies/MSFT/research").json()
+    assert refreshed["profile"]["monitoring_enabled"] is False
+    assert refreshed["manual_peer_tickers"] == ["AAPL"]
+
+    draft = client.post("/api/companies/MSFT/thesis/draft")
+    assert draft.status_code == 200
+    assert all(row["status"] == "draft" for row in draft.json()["items"])
+
+    demo_valuation = client.post(
+        "/api/companies/MSFT/valuation?demo=true",
+        json={
+            "price": 400,
+            "price_as_of": "2024-04-25",
+            "assumptions": {
+                "discount_rate": 0.10,
+                "terminal_growth": 0.025,
+                "conservative_growth": 0,
+                "base_growth": 0.05,
+                "optimistic_growth": 0.10,
+            },
+        },
+    )
+    assert demo_valuation.status_code == 200
+    assert demo_valuation.json()["formula_version"] == "reverse_dcf.v2"
+    assert all("change_percent" in row for row in demo_valuation.json()["scenarios"])
+
+
+def test_stripe_webhook_rejects_unsigned_payload_without_origin(tmp_path, monkeypatch):
+    monkeypatch.setenv("STRIPE_WEBHOOK_SECRET", "whsec_test")
+    client, _ = _client(tmp_path)
+    response = client.post(
+        "/api/webhooks/stripe",
+        content=b'{"type":"checkout.session.completed"}',
+        headers={"Stripe-Signature": "t=1,v1=bad"},
+    )
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "invalid_webhook"
+
+
 def test_bootstrap_setup_and_session_key_are_safe(tmp_path, monkeypatch):
     monkeypatch.delenv("SEC_USER_AGENT", raising=False)
     monkeypatch.setenv("FINWATCH_MODEL", "openai/test")
@@ -125,13 +212,15 @@ def test_bootstrap_setup_and_session_key_are_safe(tmp_path, monkeypatch):
         json={"sec_user_agent": "Test User test@example.com"},
     )
     assert response.status_code == 200
-    assert client.put(
-        "/api/settings/provider-key", json={"api_key": "secret-value"}
-    ).status_code == 204
+    assert (
+        client.put("/api/settings/provider-key", json={"api_key": "secret-value"}).status_code
+        == 204
+    )
     body = client.get("/api/bootstrap").json()
     assert body["setup_required"] is False
     assert body["api_key_configured"] is True
     assert body["model"] == "openai/test"
+    assert body["billing_status"] == "free"
     assert "secret-value" not in response.text
 
     conn = init_db(str(db_path))
@@ -165,13 +254,17 @@ def test_restart_keeps_portfolio_results_but_drops_session_key(tmp_path, monkeyp
         create_app(db_path=str(db_path), web_dist=tmp_path / "missing-dist"),
         headers=LOCAL_BROWSER_HEADERS,
     )
-    assert first.put(
-        "/api/settings",
-        json={"sec_user_agent": "Test User test@example.com"},
-    ).status_code == 200
-    assert first.put(
-        "/api/settings/provider-key", json={"api_key": "disposable-secret"}
-    ).status_code == 204
+    assert (
+        first.put(
+            "/api/settings",
+            json={"sec_user_agent": "Test User test@example.com"},
+        ).status_code
+        == 200
+    )
+    assert (
+        first.put("/api/settings/provider-key", json={"api_key": "disposable-secret"}).status_code
+        == 204
+    )
     assert first.get("/api/bootstrap").json()["api_key_configured"] is True
     assert len(first.get("/api/companies").json()["companies"]) == 4
 
@@ -217,13 +310,12 @@ def test_certificate_endpoint_returns_stable_attempt_linked_v2_artifact(tmp_path
 def test_analysis_captures_session_key_before_enqueue(tmp_path, monkeypatch):
     monkeypatch.setenv("SEC_USER_AGENT", "Test User test@example.com")
     monkeypatch.setenv("FINWATCH_MODEL", "openai/test")
-    app = create_app(
-        db_path=str(tmp_path / "finwatch.db"), web_dist=tmp_path / "missing-dist"
-    )
+    app = create_app(db_path=str(tmp_path / "finwatch.db"), web_dist=tmp_path / "missing-dist")
     client = TestClient(app, headers=LOCAL_BROWSER_HEADERS)
-    assert client.put(
-        "/api/settings/provider-key", json={"api_key": "first-session-key"}
-    ).status_code == 204
+    assert (
+        client.put("/api/settings/provider-key", json={"api_key": "first-session-key"}).status_code
+        == 204
+    )
     key_reads = iter(["first-session-key", None])
     app.state.secrets.api_key = lambda _session_id: next(key_reads)
     captured = {}
@@ -242,9 +334,10 @@ def test_analysis_captures_session_key_before_enqueue(tmp_path, monkeypatch):
 
     app.state.jobs.start = fake_start
     assert client.post("/api/jobs/analyze", json={}).status_code == 202
-    assert client.put(
-        "/api/settings/provider-key", json={"api_key": "replacement-key"}
-    ).status_code == 204
+    assert (
+        client.put("/api/settings/provider-key", json={"api_key": "replacement-key"}).status_code
+        == 204
+    )
 
     assert captured["api_key"] == "first-session-key"
     assert captured["owner_id"] == "local"
@@ -254,9 +347,9 @@ def test_jobs_reject_untracked_ticker_before_occupying_worker(tmp_path, monkeypa
     monkeypatch.setenv("SEC_USER_AGENT", "Test User test@example.com")
     monkeypatch.setenv("FINWATCH_MODEL", "openai/test")
     client, _ = _client(tmp_path)
-    assert client.put(
-        "/api/settings/provider-key", json={"api_key": "session-key"}
-    ).status_code == 204
+    assert (
+        client.put("/api/settings/provider-key", json={"api_key": "session-key"}).status_code == 204
+    )
 
     for endpoint in ("sync", "analyze"):
         response = client.post(f"/api/jobs/{endpoint}", json={"ticker": "MSFT"})
@@ -270,9 +363,7 @@ def test_demo_contract_has_no_shadow_surface(tmp_path):
     assert response.status_code == 200
     body = response.json()
     assert body["sample_data"] is True
-    assert body["filings"][0]["findings"][0]["evidence"][0]["edgar_url"].startswith(
-        "https://"
-    )
+    assert body["filings"][0]["findings"][0]["evidence"][0]["edgar_url"].startswith("https://")
     assert "shadow_signals" not in body
     assert "signals" not in client.get("/api/bootstrap").json()
 
@@ -364,9 +455,7 @@ def test_web_sync_computes_and_persists_verified_metrics(tmp_path):
             edgar=SimpleNamespace(companyfacts=lambda _cik: facts),
         )
 
-        computed = _compute_synced_metrics(
-            service, "0000789019", as_of="2024-08-05"
-        )
+        computed = _compute_synced_metrics(service, "0000789019", as_of="2024-08-05")
 
         assert computed > 0
         assert len(repo.list_computations("MSFT")) > before

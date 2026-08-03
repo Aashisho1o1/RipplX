@@ -1,4 +1,4 @@
--- finwatch lean schema (v6). One product path: track tickers → analyze the newest
+-- finwatch lean schema (v7). One product path: research a ticker → analyze the newest
 -- filing → six deterministic metrics → verified, canonical presentation. Installed
 -- once on a fresh database by db/database.py::init_db, which stamps application_id +
 -- user_version and refuses to open a database created by an older schema.
@@ -101,4 +101,115 @@ CREATE TABLE verification_results (
 CREATE TABLE digests (
   id INTEGER PRIMARY KEY, run_at TEXT NOT NULL, since TEXT, until TEXT,
   markdown_path TEXT NOT NULL, filings_json TEXT NOT NULL
+);
+
+-- Private product state. Public filing/fact history remains in the canonical tables
+-- above; these rows are always scoped by user_id at the repository boundary.
+CREATE TABLE company_profiles (
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  cik TEXT NOT NULL REFERENCES companies(cik) ON DELETE CASCADE,
+  monitoring_enabled INTEGER NOT NULL DEFAULT 1,
+  notification_level TEXT NOT NULL DEFAULT 'urgent',
+  thesis_json TEXT NOT NULL DEFAULT '{"items":[]}',
+  peer_ciks_json TEXT NOT NULL DEFAULT '[]',
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (user_id, cik)
+);
+
+CREATE TABLE risk_snapshots (
+  id INTEGER PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  cik TEXT NOT NULL REFERENCES companies(cik) ON DELETE CASCADE,
+  accession_number TEXT,
+  snapshot_key TEXT NOT NULL,
+  result_json TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  UNIQUE (user_id, cik, snapshot_key)
+);
+
+CREATE TABLE attention_events (
+  id INTEGER PRIMARY KEY,
+  event_key TEXT NOT NULL UNIQUE,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  cik TEXT NOT NULL REFERENCES companies(cik) ON DELETE CASCADE,
+  accession_number TEXT,
+  priority TEXT NOT NULL,
+  reason_codes_json TEXT NOT NULL,
+  risk_changes_json TEXT NOT NULL DEFAULT '[]',
+  thesis_impacts_json TEXT NOT NULL DEFAULT '[]',
+  created_at TEXT NOT NULL,
+  read_at TEXT
+);
+CREATE INDEX ix_attention_user_created ON attention_events(user_id, created_at DESC);
+
+CREATE TABLE management_promises (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  cik TEXT NOT NULL REFERENCES companies(cik) ON DELETE CASCADE,
+  accession_number TEXT NOT NULL,
+  section_key TEXT NOT NULL,
+  char_start INTEGER NOT NULL,
+  char_end INTEGER NOT NULL,
+  section_sha256 TEXT NOT NULL,
+  quote TEXT NOT NULL,
+  target_period TEXT,
+  target_metric TEXT,
+  status TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX ix_promises_user_cik ON management_promises(user_id, cik, created_at DESC);
+
+CREATE TABLE valuation_runs (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  cik TEXT NOT NULL REFERENCES companies(cik) ON DELETE CASCADE,
+  price REAL NOT NULL,
+  price_as_of TEXT NOT NULL,
+  assumptions_json TEXT NOT NULL,
+  output_json TEXT NOT NULL,
+  formula_version TEXT NOT NULL,
+  certificate_hash TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX ix_valuation_user_cik ON valuation_runs(user_id, cik, created_at DESC);
+
+CREATE TABLE notification_deliveries (
+  delivery_key TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  notification_type TEXT NOT NULL,
+  status TEXT NOT NULL,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  period_key TEXT NOT NULL,
+  sent_at TEXT,
+  error_code TEXT
+);
+
+CREATE TABLE billing_accounts (
+  user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  stripe_customer_id TEXT UNIQUE,
+  subscription_id TEXT,
+  status TEXT NOT NULL DEFAULT 'free',
+  price_id TEXT,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE broker_connections (
+  user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  provider TEXT NOT NULL,
+  external_user_id TEXT NOT NULL,
+  encrypted_user_secret TEXT NOT NULL,
+  status TEXT NOT NULL,
+  refreshed_at TEXT,
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE position_snapshots (
+  id INTEGER PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  provider TEXT NOT NULL,
+  as_of TEXT NOT NULL,
+  positions_json TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  UNIQUE (user_id, provider, as_of)
 );

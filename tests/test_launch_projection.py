@@ -183,6 +183,29 @@ def test_model_reported_confidence_and_gaps_do_not_override_compiler_passes(
         conn.close()
 
 
+def test_compiler_approved_direction_metadata_reaches_the_canonical_view():
+    conn = build_demo_db()
+    try:
+        repo = Repo(conn)
+        analysis = repo.latest_analysis(_DPLS, "P1")
+        assert analysis is not None
+        output = json.loads(analysis.output_json)
+        output["findings"][0]["metric_id"] = "revenue_growth"
+        output["findings"][0]["direction"] = "down"
+        filing = repo.get_filing(_DPLS)
+        assert filing is not None
+        view = load_filing_projection(repo, filing)
+        view.p1 = P1Output.model_validate(output)
+
+        entry = build_filing_entry(repo, view)
+
+        assert entry.withheld is False
+        assert entry.findings[0].metric_id == "revenue_growth"
+        assert entry.findings[0].direction == "down"
+    finally:
+        conn.close()
+
+
 def test_section_hash_drift_withholds_exact_browser_projection():
     conn = build_demo_db()
     try:

@@ -28,6 +28,8 @@ from finwatch.db import (
 from finwatch.demo import DEMO_SINCE, build_demo_db
 from finwatch.ingest import TickerNotFoundError, build_service
 from finwatch.presentation import PresentationService
+from finwatch.product import ProductService
+from finwatch.product.models import Thesis, ValuationAssumptions
 from finwatch.web.auth import (
     CSRF_COOKIE_NAME,
     CSRF_HEADER_NAME,
@@ -73,8 +75,7 @@ _JOB_ID_PATTERN = r"^[0-9a-f]{32}$"
 # under this prefix hardcodes the demo database and the reserved local-user scope.
 PUBLIC_SAMPLE_PREFIX = "/api/public/sample/"
 _REQUEST_TOO_LARGE_BODY = (
-    b'{"error":{"code":"request_too_large",'
-    b'"message":"Request body exceeds the 1 MiB limit."}}'
+    b'{"error":{"code":"request_too_large","message":"Request body exceeds the 1 MiB limit."}}'
 )
 
 
@@ -194,6 +195,34 @@ class JobRequest(BaseModel):
     form_type: Literal["10-K", "10-Q", "8-K"] | None = None
 
 
+class ProfileUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    monitoring_enabled: bool
+    notification_level: Literal["urgent", "this_week", "weekly", "off"]
+    peer_tickers: list[str] = Field(default_factory=list, max_length=6)
+
+
+class ThesisUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    thesis: Thesis
+
+
+class ValuationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    price: float = Field(gt=0, le=10_000_000)
+    price_as_of: date
+    assumptions: ValuationAssumptions = Field(default_factory=ValuationAssumptions)
+
+
+class FollowUpQuestion(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    question: str = Field(min_length=3, max_length=500)
+
+
 def _since_for_period(period: str) -> str:
     days = {"30d": 30, "60d": 60, "90d": 90, "180d": 180, "1y": 365}.get(period, 90)
     return (date.today() - timedelta(days=days)).isoformat()
@@ -252,6 +281,16 @@ def create_app(
     app.state.jobs = JobRegistry()
     app.state.company_add_lock = Lock()
     app.state.remote = remote
+    posthog_key = os.environ.get("POSTHOG_PROJECT_KEY", "").strip()
+    if posthog_key:
+        from finwatch.product.providers import SafeAnalytics
+
+        app.state.analytics = SafeAnalytics(
+            posthog_key,
+            host=os.environ.get("POSTHOG_HOST", "https://us.i.posthog.com"),
+        )
+    else:
+        app.state.analytics = None
     trusted_hosts = remote_allowed_hosts(allowed_hosts) if remote else list(LOCAL_ALLOWED_HOSTS)
     if remote:
         signing_secret = remote_auth_secret(auth_secret)
@@ -286,17 +325,17 @@ def create_app(
 
     def operational_connection():
         # Test-only in-memory databases cannot survive the startup connection close.
-        return init_db(app.state.db_path) if app.state.db_path == ":memory:" else connect(
-            app.state.db_path
+        return (
+            init_db(app.state.db_path)
+            if app.state.db_path == ":memory:"
+            else connect(app.state.db_path)
         )
 
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=trusted_hosts)
 
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=(
-            [] if remote else ["http://127.0.0.1:5173", "http://localhost:5173"]
-        ),
+        allow_origins=([] if remote else ["http://127.0.0.1:5173", "http://localhost:5173"]),
         allow_credentials=False,
         allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
         allow_headers=["Content-Type", CSRF_HEADER_NAME],
@@ -307,7 +346,7 @@ def create_app(
     app.add_middleware(RequestBodyLimitMiddleware, max_bytes=REQUEST_BODY_LIMIT_BYTES)
 
     public_auth_paths = frozenset(
-        {"/api/auth/request-code", "/api/auth/verify-code"}
+        {"/api/auth/request-code", "/api/auth/verify-code", "/api/webhooks/stripe"}
     )
 
     @app.middleware("http")
@@ -333,9 +372,7 @@ def create_app(
             return await call_next(request)
 
         try:
-            session = app.state.session_codec.load(
-                request.cookies.get(SESSION_COOKIE_NAME, "")
-            )
+            session = app.state.session_codec.load(request.cookies.get(SESSION_COOKIE_NAME, ""))
         except InvalidSessionError:
             return JSONResponse(
                 status_code=401,
@@ -387,7 +424,10 @@ def create_app(
 
     @app.middleware("http")
     async def same_origin_mutations(request, call_next):
-        if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
+        if (
+            request.method in {"POST", "PUT", "PATCH", "DELETE"}
+            and request.url.path != "/api/webhooks/stripe"
+        ):
             origin = request.headers.get("origin")
             if not origin:
                 return JSONResponse(
@@ -446,10 +486,7 @@ def create_app(
 
     @app.exception_handler(RequestValidationError)
     async def validation_error_handler(_request, exc: RequestValidationError):
-        fields = [
-            ".".join(str(part) for part in error.get("loc", ()))
-            for error in exc.errors()
-        ]
+        fields = [".".join(str(part) for part in error.get("loc", ())) for error in exc.errors()]
         return JSONResponse(
             status_code=422,
             content={
@@ -493,6 +530,11 @@ def create_app(
         """Project the bundled public sample with its reserved local-user watchlist."""
         return LOCAL_USER_ID if demo else principal.user_id
 
+    def capture(principal: RequestPrincipal, event: str, **properties: str) -> None:
+        analytics = app.state.analytics
+        if analytics is not None:
+            analytics.capture(principal.user_id, event, properties)
+
     def settings_payload(
         repo: Repo,
         principal: RequestPrincipal,
@@ -505,6 +547,11 @@ def create_app(
             remote=remote,
         )
         user = repo.get_user(principal.user_id) if remote else None
+        billing = (
+            ProductService(repo, user_id=principal.user_id).store.billing_account()
+            if remote
+            else None
+        )
         return {
             "setup_required": False if remote else not bool(settings.sec_user_agent),
             # The operator's SEC contact is not participant account data.
@@ -515,6 +562,10 @@ def create_app(
             "provider": provider_for_model(settings.model),
             "api_key_configured": settings.api_key_configured,
             "analysis_configured": bool(settings.model and settings.api_key_configured),
+            "billing_configured": bool(
+                os.environ.get("STRIPE_SECRET_KEY") and os.environ.get("STRIPE_PRICE_ID")
+            ),
+            "billing_status": billing.get("status", "free") if billing else "free",
         }
 
     def tracked_job_ticker(repo: Repo, user_id: str, ticker: str | None) -> str | None:
@@ -568,9 +619,7 @@ def create_app(
         issued = app.state.session_codec.issue(user.id)
         csrf_token = app.state.csrf_codec.issue(issued.identity)
         try:
-            previous = app.state.session_codec.load(
-                request.cookies.get(SESSION_COOKIE_NAME, "")
-            )
+            previous = app.state.session_codec.load(request.cookies.get(SESSION_COOKIE_NAME, ""))
         except InvalidSessionError:
             pass
         else:
@@ -616,9 +665,7 @@ def create_app(
             payload = settings_payload(repo, principal)
         if not remote or principal.expires_at is None:
             return payload
-        identity = app.state.session_codec.load(
-            request.cookies.get(SESSION_COOKIE_NAME, "")
-        )
+        identity = app.state.session_codec.load(request.cookies.get(SESSION_COOKIE_NAME, ""))
         response = JSONResponse(content=payload)
         response.set_cookie(
             CSRF_COOKIE_NAME,
@@ -649,9 +696,7 @@ def create_app(
                     remote=remote,
                 )
                 since_value = _since_for_period(settings.period)
-            return PresentationService(
-                repo, user_id=sample_scope(principal, demo)
-            ).brief(
+            return PresentationService(repo, user_id=sample_scope(principal, demo)).brief(
                 since=since_value,
                 sample_data=demo,
             )
@@ -664,9 +709,9 @@ def create_app(
     ):
         principal = principal_for(request)
         with repo_context(demo) as repo:
-            result = PresentationService(
-                repo, user_id=sample_scope(principal, demo)
-            ).filing(accession, sample_data=demo)
+            result = PresentationService(repo, user_id=sample_scope(principal, demo)).filing(
+                accession, sample_data=demo
+            )
             if result is None:
                 raise ApiProblem(404, "filing_not_found", "Filing not found.")
             return result
@@ -680,9 +725,9 @@ def create_app(
     ):
         principal = principal_for(request)
         with repo_context(demo) as repo:
-            result = PresentationService(
-                repo, user_id=sample_scope(principal, demo)
-            ).certificate(accession)
+            result = PresentationService(repo, user_id=sample_scope(principal, demo)).certificate(
+                accession
+            )
             if result is None:
                 raise ApiProblem(404, "certificate_not_found", "Certificate not found.")
             if not download:
@@ -698,10 +743,12 @@ def create_app(
             )
 
     @app.get("/api/companies")
-    def companies(request: Request):
+    def companies(request: Request, demo: bool = False):
         principal = principal_for(request)
-        with repo_context() as repo:
-            return PresentationService(repo, user_id=principal.user_id).companies()
+        with repo_context(demo) as repo:
+            return PresentationService(
+                repo, user_id=sample_scope(principal, demo)
+            ).companies()
 
     @app.post("/api/companies", status_code=201)
     def create_company(request: Request, payload: CompanyCreate):
@@ -765,9 +812,10 @@ def create_app(
                 already_tracked = bool(
                     repo.get_user_company(principal.user_id, record.cik)
                 )
-                if not already_tracked and repo.count_tracked_companies(
-                    principal.user_id
-                ) >= MAX_TRACKED_TICKERS:
+                if (
+                    not already_tracked
+                    and repo.count_tracked_companies(principal.user_id) >= MAX_TRACKED_TICKERS
+                ):
                     raise ApiProblem(
                         409,
                         "tracked_ticker_limit",
@@ -801,9 +849,7 @@ def create_app(
         principal = principal_for(request)
         with repo_context() as repo:
             company = repo.get_company_by_ticker(ticker)
-            if company is None or not repo.untrack_company(
-                company.cik, user_id=principal.user_id
-            ):
+            if company is None or not repo.untrack_company(company.cik, user_id=principal.user_id):
                 raise ApiProblem(404, "company_not_found", "Company not found.")
 
     @app.get("/api/companies/{ticker}/metrics")
@@ -816,14 +862,320 @@ def create_app(
         principal = principal_for(request)
         selected_date = as_of.isoformat() if as_of else date.today().isoformat()
         with repo_context(demo) as repo:
-            result = PresentationService(
-                repo, user_id=sample_scope(principal, demo)
-            ).metrics(
+            result = PresentationService(repo, user_id=sample_scope(principal, demo)).metrics(
                 ticker, as_of=selected_date
             )
             if result is None:
                 raise ApiProblem(404, "company_not_found", "Company not found.")
+            capture(
+                principal,
+                "research_opened",
+                surface="company",
+                state="demo" if demo else "live",
+            )
             return result
+
+    @app.get("/api/companies/{ticker}/research")
+    def company_research(
+        request: Request,
+        ticker: str = PathParam(pattern=_TICKER_PATTERN, max_length=15),
+        demo: bool = False,
+    ):
+        principal = principal_for(request)
+        with repo_context(demo) as repo:
+            result = ProductService(
+                repo, user_id=sample_scope(principal, demo)
+            ).before_you_buy(ticker)
+            if result is None:
+                raise ApiProblem(404, "company_not_found", "Company not found.")
+            return result
+
+    @app.get("/api/companies/{ticker}/risks")
+    def company_risks(
+        request: Request,
+        ticker: str = PathParam(pattern=_TICKER_PATTERN, max_length=15),
+    ):
+        principal = principal_for(request)
+        with repo_context() as repo:
+            result = ProductService(repo, user_id=principal.user_id).risk_radar(ticker)
+            if result is None:
+                raise ApiProblem(404, "company_not_found", "Company not found.")
+            return {"ticker": ticker.upper(), "lenses": result}
+
+    @app.get("/api/companies/{ticker}/profile")
+    def company_profile(
+        request: Request,
+        ticker: str = PathParam(pattern=_TICKER_PATTERN, max_length=15),
+    ):
+        principal = principal_for(request)
+        with repo_context() as repo:
+            result = ProductService(repo, user_id=principal.user_id).profile(ticker)
+            if result is None:
+                raise ApiProblem(404, "company_not_found", "Company not found.")
+            return result
+
+    @app.put("/api/companies/{ticker}/profile")
+    def update_company_profile(
+        request: Request,
+        payload: ProfileUpdate,
+        ticker: str = PathParam(pattern=_TICKER_PATTERN, max_length=15),
+    ):
+        principal = principal_for(request)
+        with repo_context() as repo:
+            service = ProductService(repo, user_id=principal.user_id)
+            profile = service.profile(ticker)
+            if profile is None:
+                raise ApiProblem(404, "company_not_found", "Company not found.")
+            peer_ciks = []
+            for peer_ticker in payload.peer_tickers:
+                peer = repo.get_company_by_ticker(peer_ticker)
+                if peer is None:
+                    raise ApiProblem(422, "peer_not_found", "A selected peer is unknown.")
+                if peer.cik != profile.cik and peer.cik not in peer_ciks:
+                    peer_ciks.append(peer.cik)
+            saved = service.save_profile(
+                ticker,
+                profile.model_copy(
+                    update={
+                        "monitoring_enabled": payload.monitoring_enabled,
+                        "notification_level": payload.notification_level,
+                        "peer_ciks": peer_ciks,
+                    }
+                ),
+            )
+            return saved
+
+    @app.put("/api/companies/{ticker}/thesis")
+    def update_company_thesis(
+        request: Request,
+        payload: ThesisUpdate,
+        ticker: str = PathParam(pattern=_TICKER_PATTERN, max_length=15),
+    ):
+        principal = principal_for(request)
+        with repo_context() as repo:
+            service = ProductService(repo, user_id=principal.user_id)
+            profile = service.profile(ticker)
+            if profile is None:
+                raise ApiProblem(404, "company_not_found", "Company not found.")
+            saved = service.save_profile(
+                ticker, profile.model_copy(update={"thesis": payload.thesis})
+            ).thesis
+            capture(principal, "thesis_saved", surface="company", state="saved")
+            return saved
+
+    @app.post("/api/companies/{ticker}/thesis/draft")
+    def draft_company_thesis(
+        request: Request,
+        ticker: str = PathParam(pattern=_TICKER_PATTERN, max_length=15),
+    ):
+        principal = principal_for(request)
+        with repo_context() as repo:
+            thesis = ProductService(repo, user_id=principal.user_id).draft_thesis(ticker)
+            if thesis is None:
+                raise ApiProblem(404, "company_not_found", "Company not found.")
+            return thesis
+
+    @app.post("/api/companies/{ticker}/valuation")
+    def calculate_company_valuation(
+        request: Request,
+        payload: ValuationRequest,
+        ticker: str = PathParam(pattern=_TICKER_PATTERN, max_length=15),
+        demo: bool = False,
+    ):
+        principal = principal_for(request)
+        with repo_context(demo) as repo:
+            result = ProductService(
+                repo, user_id=sample_scope(principal, demo)
+            ).calculate_valuation(
+                ticker,
+                price=payload.price,
+                price_as_of=payload.price_as_of.isoformat(),
+                assumptions=payload.assumptions,
+            )
+            if result is None:
+                raise ApiProblem(404, "company_not_found", "Company not found.")
+            capture(
+                principal,
+                "valuation_run",
+                surface="company",
+                outcome=result.status,
+            )
+            return result
+
+    @app.get("/api/companies/{ticker}/peers")
+    def company_peers(
+        request: Request,
+        ticker: str = PathParam(pattern=_TICKER_PATTERN, max_length=15),
+    ):
+        principal = principal_for(request)
+        with repo_context() as repo:
+            result = ProductService(repo, user_id=principal.user_id).peers(ticker)
+            if result is None:
+                raise ApiProblem(404, "company_not_found", "Company not found.")
+            return {"ticker": ticker.upper(), "peers": result}
+
+    @app.post("/api/companies/{ticker}/questions")
+    def ask_company_question(
+        request: Request,
+        payload: FollowUpQuestion,
+        ticker: str = PathParam(pattern=_TICKER_PATTERN, max_length=15),
+    ):
+        from finwatch.llm.router import LiteLLMClient
+        from finwatch.product.questions import QuestionHarness
+
+        principal = principal_for(request)
+        with repo_context() as repo:
+            settings = resolve_settings(
+                repo,
+                app.state.secrets,
+                user_id=principal.user_id,
+                session_id=principal.session_id,
+                remote=remote,
+            )
+            if not settings.model or not settings.api_key_configured:
+                raise ApiProblem(
+                    409,
+                    "analysis_not_configured",
+                    "Configure the analysis connection before asking a research question.",
+                )
+            api_key = app.state.secrets.api_key(principal.session_id)
+            service = ProductService(repo, user_id=principal.user_id)
+            if service.profile(ticker) is None:
+                raise ApiProblem(404, "company_not_found", "Company not found.")
+            return QuestionHarness(
+                service,
+                LiteLLMClient(settings.model, api_key=api_key),
+            ).run(ticker, payload.question)
+
+    @app.get("/api/alerts")
+    def alerts(request: Request):
+        principal = principal_for(request)
+        with repo_context() as repo:
+            events = ProductService(repo, user_id=principal.user_id).list_events()
+        capture(
+            principal,
+            "alert_opened",
+            surface="alerts",
+            state="empty" if not events else "populated",
+        )
+        return {"events": events}
+
+    @app.put("/api/alerts/{event_id}/read", status_code=204)
+    def mark_alert_read(request: Request, event_id: int = PathParam(ge=1)):
+        principal = principal_for(request)
+        with repo_context() as repo:
+            if not ProductService(repo, user_id=principal.user_id).mark_event_read(event_id):
+                raise ApiProblem(404, "alert_not_found", "Alert not found.")
+        return Response(status_code=204)
+
+    @app.post("/api/billing/checkout")
+    def billing_checkout(request: Request):
+        from finwatch.product.providers import ProviderError, StripeClient
+
+        principal = principal_for(request)
+        secret = os.environ.get("STRIPE_SECRET_KEY", "").strip()
+        price_id = os.environ.get("STRIPE_PRICE_ID", "").strip()
+        if not secret or not price_id:
+            raise ApiProblem(503, "billing_unavailable", "Billing is not configured.")
+        with repo_context() as repo:
+            user = repo.get_user(principal.user_id)
+            if user is None or user.email.endswith(".invalid"):
+                raise ApiProblem(409, "email_required", "Sign in before starting checkout.")
+            store = ProductService(repo, user_id=principal.user_id).store
+            account = store.billing_account()
+            base = str(request.base_url).rstrip("/")
+            try:
+                url = StripeClient(secret).checkout(
+                    user_id=principal.user_id,
+                    email=user.email,
+                    customer_id=account.get("stripe_customer_id") if account else None,
+                    price_id=price_id,
+                    success_url=f"{base}/research?subscription=active",
+                    cancel_url=f"{base}/settings",
+                )
+            except ProviderError:
+                raise ApiProblem(
+                    503, "billing_provider_failed", "Billing could not be started."
+                ) from None
+            capture(principal, "checkout_started", surface="settings", state="created")
+            return {"url": url}
+
+    @app.post("/api/billing/portal")
+    def billing_portal(request: Request):
+        from finwatch.product.providers import ProviderError, StripeClient
+
+        principal = principal_for(request)
+        secret = os.environ.get("STRIPE_SECRET_KEY", "").strip()
+        if not secret:
+            raise ApiProblem(503, "billing_unavailable", "Billing is not configured.")
+        with repo_context() as repo:
+            account = ProductService(
+                repo, user_id=principal.user_id
+            ).store.billing_account()
+            if not account or not account.get("stripe_customer_id"):
+                raise ApiProblem(409, "subscription_not_found", "No subscription was found.")
+            try:
+                url = StripeClient(secret).portal(
+                    customer_id=account["stripe_customer_id"],
+                    return_url=f"{str(request.base_url).rstrip('/')}/settings",
+                )
+            except ProviderError:
+                raise ApiProblem(
+                    503, "billing_provider_failed", "Billing could not be opened."
+                ) from None
+            return {"url": url}
+
+    @app.post("/api/webhooks/stripe", status_code=204)
+    async def stripe_webhook(request: Request):
+        from finwatch.product.providers import ProviderError, verify_stripe_signature
+        from finwatch.product.store import ProductStore
+
+        secret = os.environ.get("STRIPE_WEBHOOK_SECRET", "").strip()
+        if not secret:
+            raise ApiProblem(503, "billing_unavailable", "Billing is not configured.")
+        raw = await request.body()
+        try:
+            event = verify_stripe_signature(
+                raw, request.headers.get("Stripe-Signature", ""), secret
+            )
+        except ProviderError:
+            raise ApiProblem(400, "invalid_webhook", "Webhook verification failed.") from None
+        event_type = event.get("type")
+        obj = event.get("data", {}).get("object", {})
+        if not isinstance(obj, dict):
+            return Response(status_code=204)
+        with repo_context() as repo:
+            user_id = obj.get("client_reference_id")
+            customer_id = obj.get("customer")
+            if not isinstance(user_id, str) and isinstance(customer_id, str):
+                row = repo.conn.execute(
+                    "SELECT user_id FROM billing_accounts WHERE stripe_customer_id = ?",
+                    (customer_id,),
+                ).fetchone()
+                user_id = row["user_id"] if row else None
+            if not isinstance(user_id, str) or repo.get_user(user_id) is None:
+                return Response(status_code=204)
+            subscription_id = obj.get("subscription") or (
+                obj.get("id") if str(event_type).startswith("customer.subscription.") else None
+            )
+            raw_status = obj.get("status")
+            status = raw_status if raw_status in {
+                "active", "trialing", "past_due", "unpaid", "canceled", "incomplete"
+            } else "active" if event_type == "checkout.session.completed" else "free"
+            price = None
+            items = obj.get("items", {}).get("data", [])
+            if isinstance(items, list) and items and isinstance(items[0], dict):
+                price = items[0].get("price", {}).get("id")
+            ProductStore(repo, user_id).save_billing(
+                customer_id=customer_id if isinstance(customer_id, str) else None,
+                subscription_id=(
+                    subscription_id if isinstance(subscription_id, str) else None
+                ),
+                status=status,
+                price_id=price if isinstance(price, str) else None,
+                updated_at=datetime.now(UTC).isoformat(),
+            )
+        return Response(status_code=204)
 
     @app.get("/api/settings")
     def get_settings(request: Request):
@@ -898,9 +1250,7 @@ def create_app(
                     partial = partial or bool(result.error)
                     metrics_failed = False
                     try:
-                        _compute_synced_metrics(
-                            service, cik, as_of=date.today().isoformat()
-                        )
+                        _compute_synced_metrics(service, cik, as_of=date.today().isoformat())
                     except Exception:  # noqa: BLE001 - preserve successful ingest work
                         partial = True
                         metrics_failed = True
@@ -961,8 +1311,7 @@ def create_app(
             if skeptic_model.split("/", 1)[0] != model.split("/", 1)[0]:
                 raise RuntimeError("Generator and Skeptic must use the same configured provider.")
             skeptic = (
-                LiteLLMClient(skeptic_model, api_key=api_key)
-                if skeptic_model != model else llm
+                LiteLLMClient(skeptic_model, api_key=api_key) if skeptic_model != model else llm
             )
             orchestrator = build_orchestrator(
                 repo,
@@ -1007,8 +1356,7 @@ def create_app(
                     if not synced:
                         reason = "no_filings_synced"
                     elif selected_form is not None and not any(
-                        base_form(candidate.form_type) == selected_form
-                        for candidate in synced
+                        base_form(candidate.form_type) == selected_form for candidate in synced
                     ):
                         reason = "form_not_synced"
                     else:
@@ -1024,8 +1372,7 @@ def create_app(
                 else:
                     company = repo.get_company(filing.cik)
                     filing_key = (
-                        f"{company.ticker if company else filing.cik} "
-                        f"{filing.accession_number}"
+                        f"{company.ticker if company else filing.cik} {filing.accession_number}"
                     )
 
                     def progress(stage, state, _message, diagnostics, key=filing_key):
@@ -1049,6 +1396,7 @@ def create_app(
 
                     def fetch(url):
                         return edgar.fetch_primary_doc(url).decode("utf-8", "replace")
+
                     result = process_filing(
                         orchestrator,
                         repo,
@@ -1061,9 +1409,7 @@ def create_app(
                         job_id,
                         JobItem(
                             key=f"{result.ticker} {result.accession}",
-                            state="completed"
-                            if result.ok and not result.withheld
-                            else "failed",
+                            state="completed" if result.ok and not result.withheld else "failed",
                             message="",
                             verdict=result.verdict,
                         ),

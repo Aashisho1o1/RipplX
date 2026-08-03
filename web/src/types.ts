@@ -5,7 +5,7 @@ export type WithheldKind = "gate" | "pipeline_failed";
 export type FilingOutcome = "published" | "no_findings" | "findings_dropped" | "withheld_gate" | "pipeline_failed" | "not_analyzed";
 
 export interface Evidence { claim_id: string; accession: string; section_key: string; char_start: number; char_end: number; quote: string; section_sha256: string; edgar_url: string }
-export interface Finding { finding_id: string; headline: string; severity: Severity; evidence: Evidence[] }
+export interface Finding { finding_id: string; headline: string; severity: Severity; metric_id?: string | null; direction?: "up" | "down" | "flat" | null; evidence: Evidence[] }
 export interface FilingDigestEntry { accession: string; ticker: string; form: string; filed: string; edgar_url: string; findings: Finding[]; withheld: boolean; withheld_reason: string | null; withheld_kind: WithheldKind | null; outcome: FilingOutcome; dropped_finding_count: number }
 export interface MetricInput { concept: string; taxonomy: string; value: string; unit: string; period: string; accession: string }
 export interface MetricDerivation { expression: string; formula_version: string; inputs: MetricInput[] }
@@ -42,6 +42,25 @@ export interface FilingDetail { filing: FilingDigestEntry; verified_numbers: Iss
 export interface TrackedCompany { ticker: string; cik: string; newest_supported_filing: string | null; compressed_verified_read: string | null }
 export interface Companies { companies: TrackedCompany[] }
 export interface Metrics { ticker: string; as_of: string; rows: MetricRow[]; empty: string | null; summary: string; before_first_filing: boolean }
-export interface Bootstrap { setup_required: boolean; sec_user_agent: string; account_email: string | null; period: string; model: string; provider: string | null; api_key_configured: boolean; analysis_configured: boolean }
+export interface Bootstrap { setup_required: boolean; sec_user_agent: string; account_email: string | null; period: string; model: string; provider: string | null; api_key_configured: boolean; analysis_configured: boolean; billing_configured: boolean; billing_status: string }
 export interface AuthChallenge { challenge_id: string; expires_in: number }
 export interface Job { id: string; kind: "sync" | "analysis"; state: "queued" | "running" | "completed" | "partial" | "failed"; created_at: string; items: { key: string; state: string; message: string; verdict: string | null; stage: string | null; reason: string | null; diagnostics: Record<string, unknown> }[]; error: string | null }
+
+export type RiskStatus = "stable" | "watch" | "elevated" | "unavailable";
+export interface ProductEvidence { kind: "metric" | "filing" | "thesis" | "promise"; reference_id: string; accession: string | null; section_key: string | null; char_start: number | null; char_end: number | null; quote: string | null; section_sha256: string | null }
+export interface RiskLens { lens: string; status: RiskStatus; reason_codes: string[]; explanation: string; metric_ids: string[]; evidence: ProductEvidence[]; comparison_period: string | null; freshness: string | null }
+export type ThesisStatus = "draft" | "confirmed" | "supported" | "weakened" | "broken" | "unclear" | "retired";
+export interface ThesisItem { item_id: string; kind: "reason" | "risk" | "assumption" | "kill_criterion" | "next_evidence"; text: string; status: ThesisStatus; lens: string | null }
+export interface Thesis { items: ThesisItem[] }
+export interface ProductProfile { ticker: string; cik: string; monitoring_enabled: boolean; notification_level: "urgent" | "this_week" | "weekly" | "off"; thesis: Thesis; peer_ciks: string[]; updated_at: string }
+export interface AttentionEvent { event_id: number | null; event_key: string; ticker: string; cik: string; accession: string | null; priority: "urgent" | "this_week" | "routine"; reason_codes: string[]; risk_changes: string[]; thesis_impacts: string[]; created_at: string; read_at: string | null }
+export interface ManagementPromise { promise_id: string; ticker: string; accession: string; section_key: string; char_start: number; char_end: number; section_sha256: string; quote: string; target_period: string | null; target_metric: string | null; status: "open" | "met" | "missed" | "unclear" | "retired" }
+export interface PeerComparison { ticker: string; name: string | null; sic_code: string | null; reason: string; caveat: string; risk_statuses: Record<string, RiskStatus>; metrics: Record<string, string> }
+export interface ValuationAssumptions { discount_rate: number; terminal_growth: number; conservative_growth: number; base_growth: number; optimistic_growth: number }
+export interface ValuationRun { run_id: string; ticker: string; price: number; price_as_of: string; status: "computed" | "unavailable"; label: "Demanding" | "Balanced" | "Undemanding" | "Unavailable"; explanation: string; assumptions: ValuationAssumptions; scenarios: { name: "conservative" | "base" | "optimistic"; growth: number; implied_value_per_share: number; change_percent: number | null }[]; reverse_dcf_growth: number | null; trailing_pe: number | null; price_to_fcf: number | null; fcf_yield: number | null; inputs: ProductEvidence[]; formula_version: string; certificate_hash: string; created_at: string }
+export interface ChangeImpact { finding_id: string; headline: string; driver: "revenue" | "earnings" | "cash_flow" | "balance_sheet" | "per_share" | "operations"; effect: "upside" | "downside" | "mixed" | "uncertain"; implication: string; evidence: ProductEvidence[] }
+export interface StockImpact { directional_pressure: "upside" | "downside" | "mixed" | "uncertain"; summary: string; priced_in: string; watch_next: string; reason_codes: string[]; changes: ChangeImpact[]; formula_version: string }
+export interface CompanyResearch { ticker: string; cik: string; company_name: string | null; as_of: string; attention: AttentionEvent[]; risks: RiskLens[]; business_summary: string | null; business_evidence: ProductEvidence | null; recent_filings: FilingDigestEntry[]; metrics: Metrics; valuation: ValuationRun | null; impact: StockImpact; profile: ProductProfile; thesis: Thesis; promises: ManagementPromise[]; peers: PeerComparison[]; manual_peer_tickers: string[]; questions: string[]; certificate_urls: string[]; disclaimer: string }
+export interface FollowUpObservation { observation_id: string; tool: string; text: string; evidence: ProductEvidence[] }
+export interface FollowUpAnswer { ticker: string; question: string; conclusion: "supported" | "mixed" | "insufficient"; answer: string; observations: FollowUpObservation[]; tools_used: string[]; limitation: string | null }
+export interface Alerts { events: AttentionEvent[] }

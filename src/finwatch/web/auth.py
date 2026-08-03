@@ -151,8 +151,10 @@ def normalize_email(value: str) -> str:
     ):
         raise InvalidEmailError("Enter a valid email address.")
     labels = domain.split(".")
-    if len(domain) > 253 or len(labels) < 2 or any(
-        not _EMAIL_DOMAIN_LABEL_RE.fullmatch(label) for label in labels
+    if (
+        len(domain) > 253
+        or len(labels) < 2
+        or any(not _EMAIL_DOMAIN_LABEL_RE.fullmatch(label) for label in labels)
     ):
         raise InvalidEmailError("Enter a valid email address.")
     return email
@@ -194,9 +196,7 @@ class EmailOtpManager:
         self._email_sender = email_sender
         self._clock = clock
         self._code_factory = code_factory or (lambda: f"{secrets.randbelow(1_000_000):06d}")
-        self._challenge_id_factory = challenge_id_factory or (
-            lambda: secrets.token_urlsafe(24)
-        )
+        self._challenge_id_factory = challenge_id_factory or (lambda: secrets.token_urlsafe(24))
         self._lock = threading.Lock()
         self._challenges: dict[str, _StoredChallenge] = {}
         self._active_by_email: dict[str, str] = {}
@@ -233,15 +233,11 @@ class EmailOtpManager:
     def _check_rate_limit_locked(self, email: str, now: float) -> None:
         sends = self._email_sends.get(email)
         if sends and now - sends[-1] < OTP_EMAIL_COOLDOWN_SECONDS:
-            raise OtpRateLimitError(
-                self._retry_after(sends[-1] + OTP_EMAIL_COOLDOWN_SECONDS, now)
-            )
+            raise OtpRateLimitError(self._retry_after(sends[-1] + OTP_EMAIL_COOLDOWN_SECONDS, now))
         if sends and len(sends) >= OTP_EMAIL_HOURLY_LIMIT:
             raise OtpRateLimitError(self._retry_after(sends[0] + _HOUR_SECONDS, now))
         if len(self._global_sends) >= OTP_GLOBAL_HOURLY_LIMIT:
-            raise OtpRateLimitError(
-                self._retry_after(self._global_sends[0] + _HOUR_SECONDS, now)
-            )
+            raise OtpRateLimitError(self._retry_after(self._global_sends[0] + _HOUR_SECONDS, now))
 
     def _new_challenge_id_locked(self) -> str:
         for _ in range(4):
@@ -300,9 +296,7 @@ class EmailOtpManager:
         with self._lock:
             now = _clock_value(self._clock)
             self._prune_locked(now)
-            if not isinstance(challenge_id, str) or not _CHALLENGE_ID_RE.fullmatch(
-                challenge_id
-            ):
+            if not isinstance(challenge_id, str) or not _CHALLENGE_ID_RE.fullmatch(challenge_id):
                 raise OtpVerificationError()
             challenge = self._challenges.get(challenge_id)
             if challenge is None:
@@ -316,9 +310,7 @@ class EmailOtpManager:
                 challenge.email,
                 candidate if well_formed else "000000",
             )
-            valid = well_formed and hmac.compare_digest(
-                expected, challenge.code_digest
-            )
+            valid = well_formed and hmac.compare_digest(expected, challenge.code_digest)
             if valid:
                 email = challenge.email
                 self._remove_challenge_locked(challenge_id)
@@ -359,14 +351,29 @@ class ResendEmailSender:
         recipient = normalize_email(recipient)
         if not re.fullmatch(r"[0-9]{6}", code):
             raise ValueError("A six-digit sign-in code is required.")
-        payload = {
-            "from": self._from_address,
-            "to": [recipient],
-            "subject": "Your RipplX sign-in code",
-            "text": (
+        self.send_message(
+            recipient,
+            subject="Your RipplX sign-in code",
+            text=(
                 f"Your RipplX sign-in code is {code}.\n\n"
                 "It expires in 10 minutes. If you did not request it, ignore this email."
             ),
+        )
+
+    def send_message(self, recipient: str, *, subject: str, text: str) -> None:
+        """Send one plain-text product message through the same narrow provider client."""
+        recipient = normalize_email(recipient)
+        subject = subject.strip()
+        text = text.strip()
+        if not subject or len(subject) > 200 or "\r" in subject or "\n" in subject:
+            raise ValueError("A valid single-line email subject is required.")
+        if not text or len(text) > 50_000:
+            raise ValueError("A bounded plain-text email body is required.")
+        payload = {
+            "from": self._from_address,
+            "to": [recipient],
+            "subject": subject,
+            "text": text,
         }
         try:
             if self._client is None:
@@ -424,9 +431,7 @@ class SessionCodec:
             user_id=user_id,
             expires_at=expires_at,
         )
-        token = self._serializer.dumps(
-            {"sid": session_id, "uid": user_id, "exp": expires_at}
-        )
+        token = self._serializer.dumps({"sid": session_id, "uid": user_id, "exp": expires_at})
         return IssuedSession(token=token, identity=identity)
 
     def load(self, token: str) -> SessionIdentity:

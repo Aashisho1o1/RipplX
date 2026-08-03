@@ -51,6 +51,8 @@ app = typer.Typer(
     no_args_is_help=True,
     add_completion=False,
 )
+
+
 def _version_callback(value: bool) -> None:
     if value:
         console.print(f"finwatch {__version__}")
@@ -243,9 +245,7 @@ def ingest(
     quarters = backfill if backfill is not None else DEFAULT_BACKFILL_QUARTERS
     try:
         if not service.repo.list_tracked_ciks():
-            console.print(
-                "No tracked companies yet. Add one with [bold]finwatch add TICKER[/]."
-            )
+            console.print("No tracked companies yet. Add one with [bold]finwatch add TICKER[/].")
             return
         summary = service.ingest_all(backfill_quarters=quarters)
     finally:
@@ -266,6 +266,64 @@ def ingest(
     console.print(
         f"[bold]Ingest complete:[/] {summary.companies} companies, "
         f"{summary.filings} filings, {summary.xbrl_facts} XBRL facts."
+    )
+
+
+@app.command()
+def monitor(
+    weekly: bool = typer.Option(
+        False, "--weekly", help="Also send the deduplicated weekly watchlist brief."
+    ),
+) -> None:
+    """Run one idempotent scheduled monitoring cycle using the existing worker path."""
+    from datetime import date
+
+    from finwatch.db import Repo, init_db
+    from finwatch.product.monitoring import (
+        build_attention_events,
+        deliver_attention_event,
+        deliver_weekly_briefs,
+    )
+    from finwatch.web.auth import ResendEmailSender
+
+    cfg = _config_or_exit()
+    _require_model(cfg)
+    connection, service = build_service(cfg)
+    try:
+        service.ingest_all(backfill_quarters=DEFAULT_BACKFILL_QUARTERS)
+        ciks = sorted(set(service.repo.list_tracked_ciks()))
+    finally:
+        service.edgar.close()
+        connection.close()
+    for cik in ciks:
+        _run_pipeline(cfg, cik=cik)
+
+    conn = init_db(cfg.db_path)
+    repo = Repo(conn)
+    try:
+        events = build_attention_events(repo)
+        api_key = os.environ.get("RESEND_API_KEY", "").strip()
+        from_address = os.environ.get("FINWATCH_EMAIL_FROM", "").strip()
+        delivered = 0
+        weekly_sent = 0
+        if api_key and from_address:
+            email = ResendEmailSender(api_key=api_key, from_address=from_address)
+
+            def send(recipient: str, subject: str, text: str) -> None:
+                email.send_message(recipient, subject=subject, text=text)
+
+            delivered = sum(deliver_attention_event(repo, event, send) for event in events)
+            if weekly:
+                weekly_sent = deliver_weekly_briefs(
+                    repo, send, week_key=date.today().strftime("%G-W%V")
+                )
+        elif weekly or any(row.priority != "routine" for row in events):
+            console.print("[yellow]Notifications were recorded but email is not configured.[/]")
+    finally:
+        conn.close()
+    console.print(
+        f"[green]✓[/] Monitoring cycle complete: {len(events)} attention events, "
+        f"{delivered} immediate emails, {weekly_sent} weekly briefs."
     )
 
 
@@ -343,9 +401,7 @@ def metrics(
             except (TickerNotFoundError, TickerIdentityConflictError) as exc:
                 console.print(f"[red]{exc}[/]")
                 raise typer.Exit(code=1) from exc
-            console.print(
-                f"[dim]{company.ticker} was not tracked — added to tracked tickers.[/]"
-            )
+            console.print(f"[dim]{company.ticker} was not tracked — added to tracked tickers.[/]")
         result = service.ingest_one(company.cik, backfill_quarters=quarters)
         if result.error:
             console.print(f"[yellow]![/] ingest note for {company.ticker}: {result.error}")

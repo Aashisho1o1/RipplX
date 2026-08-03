@@ -73,6 +73,12 @@ src/finwatch/
 │   ├── canonical.py          trusted SEC identity + exact evidence DTO
 │   ├── models.py             browser/Markdown pydantic contracts
 │   └── service.py            sole database→user-content projection
+├── product/
+│   ├── service.py            research brief, deterministic risk, valuation, peers, events
+│   ├── questions.py          bounded evidence-grounded follow-up tool loop
+│   ├── monitoring.py         idempotent attention/email/weekly delivery
+│   ├── providers.py          narrow Stripe and allowlisted PostHog clients
+│   └── store.py              owner-scoped private product state
 ├── digest/render.py          pure Markdown serialization of BriefView
 ├── web/
 │   ├── app.py                FastAPI, auth/origin/body limits, service wiring
@@ -141,6 +147,12 @@ PresentationService BriefView/FilingDetailView
           ├─► FastAPI JSON ─► React
           ├─► render_brief_markdown() ─► Markdown
           └─► owner-scoped frozen certificate.v2
+
+ProductService composes that verified projection into a Before You Buy Brief, a combined Financial
+X-Ray, a deterministic Stock Impact Snapshot, transparent `reverse_dcf.v2` scenarios and valuation
+ratios, saved watch conditions, peer candidates, and attention events. It cannot promote or rewrite
+a filing finding. The question harness may select only server-issued observations from bounded
+tools; the final answer is rendered deterministically.
 ```
 
 No user-visible content path reads P2, P3, signal logs, dormant claim graphs, extended metrics, or
@@ -301,9 +313,10 @@ The deployment model is one process/container, one SQLite file, and one in-proce
 - `create_app()` synchronously installs or verifies the exact file-backed schema once. Requests and
   jobs call `connect()`, never schema installation. Demo databases are separate.
 - Operational connections enable foreign keys, WAL, and a 5-second busy timeout.
-- Schema v6 has `users`, private `user_companies`, and private `user_preferences`. A reserved local
-  user preserves auth-free CLI/local behavior. Issuer identity, filings, facts, analyses, metrics,
-  and verification remain shared public-data artifacts.
+- Schema v7 adds private profiles/theses, risk snapshots, attention events, promises, valuation
+  runs, notification dedupe, billing identifiers, and reserved encrypted-broker state. A reserved
+  local user preserves auth-free CLI/local behavior. Issuer identity, filings, facts, analyses,
+  metrics, and verification remain shared public-data artifacts.
 - XBRL replacement, filing-section/FTS replacement, computation batches, and verification-report
   replacement are atomic and roll back on failure. P1/trace insertion and final attempt
   verification/status publication are also transactional.
@@ -311,7 +324,7 @@ The deployment model is one process/container, one SQLite file, and one in-proce
 - Jobs are owner-tagged process-memory state and disappear on restart. There is no durable queue,
   leasing, distributed worker, or multi-instance consistency claim.
 
-There is no migration ladder. Schema v6 rejects an older database with a backup-and-reset message;
+There is no migration ladder. Schema v7 rejects an older database with a backup-and-reset message;
 v1 traces and certificates are not adapted, and Git history is the compatibility archive.
 
 ---
@@ -363,14 +376,15 @@ compare models for development; production still runs one configured OpenAI-back
 
 ---
 
-## 10. Dormant research boundary
+## 10. Focused product boundary
 
-The following are intentionally disconnected from `build_orchestrator()`, FastAPI routes, browser
-types/pages, digest rendering, and launch CLI controls:
+The focused product layer is downstream of the verified filing projection. It adds research,
+monitoring, Financial X-Ray risk lenses, transparent valuation, saved watch-condition state, peers,
+and bounded questions without changing the compiler. The following remain intentionally disconnected:
 
-- `P2Explainer`, P2 prompt/schema, portfolio/cross-holding/thesis analysis;
+- `P2Explainer`, P2 prompt/schema, and portfolio/cross-holding analysis;
 - P3 prompt/schema/rationale, `signals/matrix.py`, adapters, shadow logging, track-record UI;
-- extended metrics, Stooq/price paths, valuation/position/rebalance inputs;
+- extended metrics, Stooq/price paths, position/rebalance inputs;
 - historical analysis replay, offline reverify, partial-stage user reruns;
 - legacy claim-graph, portfolio fields, shadow tables, and FTS search as product features.
 

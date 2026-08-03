@@ -36,6 +36,8 @@ class FindingView(BaseModel):
     finding_id: str = Field(min_length=1, max_length=128)
     headline: str = Field(min_length=1, max_length=240)
     severity: Severity
+    metric_id: str | None = None
+    direction: Literal["up", "down", "flat"] | None = None
     evidence: list[EvidenceView] = Field(min_length=1, max_length=3)
 
 

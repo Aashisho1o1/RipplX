@@ -178,6 +178,8 @@ def build_filing_entry(repo: Repo, view: FilingProjection) -> FilingDigestEntry:
                     finding_id=candidate.finding_id,
                     headline=candidate.headline,
                     severity=candidate.severity.upper(),
+                    metric_id=(candidate.metric_id.value if candidate.metric_id else None),
+                    direction=candidate.direction,
                     evidence=evidence,
                 )
             )

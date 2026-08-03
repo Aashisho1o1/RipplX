@@ -11,6 +11,8 @@ import { FilingPage } from "./pages/FilingPage";
 import { CompaniesPage } from "./pages/CompaniesPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { SetupPage } from "./pages/SetupPage";
+import { AlertsPage } from "./pages/AlertsPage";
+import { ResearchPage } from "./pages/ResearchPage";
 import type { AuthChallenge, Bootstrap } from "./types";
 
 function RoutedApp() {
@@ -38,7 +40,7 @@ function RoutedApp() {
     return <main className="setup"><p className={resource.loading ? "loading" : "notice"}>{resource.loading ? "Starting RipplX…" : resource.error?.message ?? "RipplX could not start."}</p></main>;
   }
   const demoPreview = resource.data.setup_required && demo;
-  return <BootstrapContext.Provider value={{ bootstrap: resource.data, refresh: resource.refresh }}><Routes>{resource.data.setup_required && !demoPreview && <Route path="*" element={<SetupPage onComplete={resource.refresh} />} />} {(!resource.data.setup_required || demoPreview) && <Route element={<AppShell />}><Route path="/brief" element={<BriefPage />} /><Route path="/about" element={<AboutPage />} /><Route path="/signin" element={<SignInScreen onSignedIn={resource.refresh} />} /><Route path="/companies" element={<CompaniesPage />} /><Route path="/settings" element={<SettingsPage />} /><Route path="/filings/:accession" element={<FilingPage />} /><Route path="/companies/:ticker" element={<CompanyPage />} /><Route path="*" element={<Navigate to="/brief" replace />} /></Route>}</Routes></BootstrapContext.Provider>;
+  return <BootstrapContext.Provider value={{ bootstrap: resource.data, refresh: resource.refresh }}><Routes>{resource.data.setup_required && !demoPreview && <Route path="*" element={<SetupPage onComplete={resource.refresh} />} />} {(!resource.data.setup_required || demoPreview) && <Route element={<AppShell />}><Route path="/today" element={<BriefPage />} /><Route path="/brief" element={<Navigate to={`/today${location.search}`} replace />} /><Route path="/research" element={<ResearchPage />} /><Route path="/about" element={<AboutPage />} /><Route path="/signin" element={<SignInScreen onSignedIn={resource.refresh} />} /><Route path="/companies" element={<CompaniesPage />} /><Route path="/alerts" element={<AlertsPage />} /><Route path="/settings" element={<SettingsPage />} /><Route path="/filings/:accession" element={<FilingPage />} /><Route path="/companies/:ticker" element={<CompanyPage />} /><Route path="*" element={<Navigate to={`/today${location.search}`} replace />} /></Route>}</Routes></BootstrapContext.Provider>;
 }
 
 function SignInScreen({ onSignedIn }: { onSignedIn: () => void }) {
