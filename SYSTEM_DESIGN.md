@@ -84,7 +84,7 @@ src/finwatch/
 │   ├── app.py                FastAPI, auth/origin/body limits, service wiring
 │   ├── auth.py               public email OTP + signed session/CSRF primitives
 │   ├── jobs.py               one-worker owner-scoped safe job registry
-│   ├── runtime.py            per-user settings + session-keyed memory secrets
+│   ├── runtime.py            per-user settings + operator model configuration
 │   └── security.py           remote signing/email/host configuration policy
 ├── db/                       one fresh SQLite schema + repositories
 ├── evals/                    12-case accession-pinned golden set/harness
@@ -257,8 +257,8 @@ bound above.
 10. **Production model contract** — `FINWATCH_MODEL` and optional `FINWATCH_SKEPTIC_MODEL` must use
    the same supported `openai/`, `openrouter/`, or `z-ai/` provider prefix — each mapping to one
    fixed endpoint — and production credential discovery recognizes `OPENAI_API_KEY` /
-   `OPENROUTER_API_KEY` / `ZAI_API_KEY` plus the process-memory browser key. Model bake-off
-   flexibility is developer tooling, not runtime provider routing.
+   `OPENROUTER_API_KEY` / `ZAI_API_KEY` from the server environment. Browser users are never asked
+   for credentials. Model bake-off flexibility is developer tooling, not runtime provider routing.
 
 11. **Certificate contract** — completed `verified` and completed-withheld `analyzed` attempts may
    expose `certificate.v2`; failed or pending attempts may not. Every hashed field comes from the
@@ -346,19 +346,17 @@ HSTS. The ASGI body limiter rejects declared and streamed bodies over 1 MiB. Dec
 stop at 64 MiB before cache writes. Job responses discard exception/provider strings and diagnostics
 and expose only fixed safe messages; unhandled request errors use a generic JSON contract.
 
-Sessions are stateless: logout deletes the browser cookie and its in-memory provider key, while a
-copied cookie remains valid until expiry or signing-secret rotation. This is the explicit consequence
+Sessions are stateless: logout deletes the browser cookie, while a copied cookie remains valid until
+expiry or signing-secret rotation. This is the explicit consequence
 of keeping a persistent session registry out of the prototype.
 
 Server-side ownership checks scope watchlists, briefs, filing/metric access, preferences, actions,
 and job polling. Cross-user resource requests return 404. Hosted ticker registration is serialized
 and capped at 25 tracked tickers per workspace; the instance retains one global worker.
 
-Hosted participant API keys exist only in `RuntimeSecrets`, keyed by opaque session ID and captured
-before a job is enqueued. They are never placed in SQLite, cookies, browser storage, job DTOs, logs,
-or API responses; expired-session entries are pruned from memory. A participant's session key wins;
-otherwise a hosted run uses the operator's server-side key for the configured provider, which stays
-in process environment memory and is never returned by the API. SQLite stores account
+Hosted analysis uses only the operator's server-side key for the configured provider. It stays in
+process environment memory and is never placed in SQLite, cookies, browser storage, job DTOs, logs,
+or API responses. SQLite stores account
 emails, private ticker membership/preferences, an optional local operator SEC User-Agent, and public
 filing artifacts in plaintext; filesystem/container access is the data-at-rest boundary.
 

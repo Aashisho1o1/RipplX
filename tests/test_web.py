@@ -201,9 +201,10 @@ def test_stripe_webhook_rejects_unsigned_payload_without_origin(tmp_path, monkey
     assert response.json()["error"]["code"] == "invalid_webhook"
 
 
-def test_bootstrap_setup_and_session_key_are_safe(tmp_path, monkeypatch):
+def test_bootstrap_setup_and_operator_key_are_safe(tmp_path, monkeypatch):
     monkeypatch.delenv("SEC_USER_AGENT", raising=False)
     monkeypatch.setenv("FINWATCH_MODEL", "openai/test")
+    monkeypatch.setenv("OPENAI_API_KEY", "operator-secret-value")
     client, db_path = _client(tmp_path)
     assert client.get("/api/bootstrap").json()["setup_required"] is True
 
@@ -212,23 +213,19 @@ def test_bootstrap_setup_and_session_key_are_safe(tmp_path, monkeypatch):
         json={"sec_user_agent": "Test User test@example.com"},
     )
     assert response.status_code == 200
-    assert (
-        client.put("/api/settings/provider-key", json={"api_key": "secret-value"}).status_code
-        == 204
-    )
     body = client.get("/api/bootstrap").json()
     assert body["setup_required"] is False
     assert body["api_key_configured"] is True
     assert body["model"] == "openai/test"
     assert body["billing_status"] == "free"
-    assert "secret-value" not in response.text
+    assert "operator-secret-value" not in response.text
 
     conn = init_db(str(db_path))
     try:
         settings = dict(conn.execute("SELECT key, value FROM settings").fetchall())
     finally:
         conn.close()
-    assert "secret-value" not in settings.values()
+    assert "operator-secret-value" not in settings.values()
     assert client.put("/api/settings", json={"model_extract": "anthropic/other"}).status_code == 422
 
 
@@ -244,8 +241,8 @@ def test_only_openai_environment_credentials_configure_production(tmp_path, monk
     assert bootstrap["api_key_configured"] is False
 
 
-def test_restart_keeps_portfolio_results_but_drops_session_key(tmp_path, monkeypatch):
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+def test_restart_keeps_portfolio_results_and_operator_analysis(tmp_path, monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "operator-key")
     monkeypatch.setenv("FINWATCH_MODEL", "openai/test")
 
     db_path = tmp_path / "finwatch.db"
@@ -261,10 +258,6 @@ def test_restart_keeps_portfolio_results_but_drops_session_key(tmp_path, monkeyp
         ).status_code
         == 200
     )
-    assert (
-        first.put("/api/settings/provider-key", json={"api_key": "disposable-secret"}).status_code
-        == 204
-    )
     assert first.get("/api/bootstrap").json()["api_key_configured"] is True
     assert len(first.get("/api/companies").json()["companies"]) == 4
 
@@ -275,7 +268,7 @@ def test_restart_keeps_portfolio_results_but_drops_session_key(tmp_path, monkeyp
     bootstrap = restarted.get("/api/bootstrap").json()
     assert bootstrap["sec_user_agent"] == "Test User test@example.com"
     assert bootstrap["model"] == "openai/test"
-    assert bootstrap["api_key_configured"] is False
+    assert bootstrap["api_key_configured"] is True
     assert len(restarted.get("/api/companies").json()["companies"]) == 4
     filing = restarted.get("/api/filings/0001683168-24-004848")
     assert filing.status_code == 200
@@ -307,17 +300,12 @@ def test_certificate_endpoint_returns_stable_attempt_linked_v2_artifact(tmp_path
     assert len(payload["certificate_sha256"]) == 64
 
 
-def test_analysis_captures_session_key_before_enqueue(tmp_path, monkeypatch):
+def test_analysis_captures_operator_key_before_enqueue(tmp_path, monkeypatch):
     monkeypatch.setenv("SEC_USER_AGENT", "Test User test@example.com")
     monkeypatch.setenv("FINWATCH_MODEL", "openai/test")
+    monkeypatch.setenv("OPENAI_API_KEY", "operator-key")
     app = create_app(db_path=str(tmp_path / "finwatch.db"), web_dist=tmp_path / "missing-dist")
     client = TestClient(app, headers=LOCAL_BROWSER_HEADERS)
-    assert (
-        client.put("/api/settings/provider-key", json={"api_key": "first-session-key"}).status_code
-        == 204
-    )
-    key_reads = iter(["first-session-key", None])
-    app.state.secrets.api_key = lambda _session_id: next(key_reads)
     captured = {}
 
     def fake_start(kind, work, *, owner_id):
@@ -334,22 +322,16 @@ def test_analysis_captures_session_key_before_enqueue(tmp_path, monkeypatch):
 
     app.state.jobs.start = fake_start
     assert client.post("/api/jobs/analyze", json={}).status_code == 202
-    assert (
-        client.put("/api/settings/provider-key", json={"api_key": "replacement-key"}).status_code
-        == 204
-    )
 
-    assert captured["api_key"] == "first-session-key"
+    assert captured["api_key"] == "operator-key"
     assert captured["owner_id"] == "local"
 
 
 def test_jobs_reject_untracked_ticker_before_occupying_worker(tmp_path, monkeypatch):
     monkeypatch.setenv("SEC_USER_AGENT", "Test User test@example.com")
     monkeypatch.setenv("FINWATCH_MODEL", "openai/test")
+    monkeypatch.setenv("OPENAI_API_KEY", "operator-key")
     client, _ = _client(tmp_path)
-    assert (
-        client.put("/api/settings/provider-key", json={"api_key": "session-key"}).status_code == 204
-    )
 
     for endpoint in ("sync", "analyze"):
         response = client.post(f"/api/jobs/{endpoint}", json={"ticker": "MSFT"})

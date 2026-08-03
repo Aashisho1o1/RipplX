@@ -266,9 +266,8 @@ Replace-style writes for XBRL, filing sections/FTS, and verifier results are tra
 
 Sensitive local data includes account emails, private tracked-ticker membership/preferences, the
 persisted local SEC User-Agent/contact email, and filing/metric data. SQLite and the data volume are
-plaintext; filesystem/container access is the data-at-rest boundary. Participant provider keys are
-session-keyed process memory only, and the operator's shared key stays in process environment
-memory; neither is ever a SQLite field, cookie, log line, or API response.
+plaintext; filesystem/container access is the data-at-rest boundary. The operator's provider key
+stays in process environment memory and is never a SQLite field, cookie, log line, or API response.
 
 ---
 
@@ -389,11 +388,10 @@ fixed endpoint — `z-ai/<model>` routes to Zhipu GLM through z.ai's OpenAI-comp
 (`https://api.z.ai/api/coding/paas/v4/`, the endpoint a GLM Coding Plan key is authorized for), which
 supports the JSON-object response format so the provider enforces valid JSON. Arbitrary providers and caller-supplied base-URL overrides
 stay out of the launch path. Broader provider/model flexibility inside dormant developer utilities is
-not a production configuration promise. Keys may come from the environment or browser session
-memory. The operator may configure one server-side key for the configured provider so hosted
-onboarding never demands a key from each participant; a participant's own session key takes
-precedence when present. Keys must never be logged, persisted, placed in cookies/browser storage,
-or returned, and the API reports only whether analysis is configured — never which key served it.
+not a production configuration promise. The operator configures one server-side key for the
+selected provider, so onboarding never demands a key from participants. The key must never be
+logged, persisted, placed in cookies/browser storage, or returned, and the API reports only whether
+analysis is configured.
 
 ---
 
@@ -515,9 +513,9 @@ use a generic JSON contract. Decoded EDGAR responses
 are capped at 64 MiB before cache writes. There is no durable queue, multi-instance coordination,
 team/role model, or persistent session registry.
 
-Sessions are stateless. Logout removes the browser cookie and that session's in-memory provider key,
-but a copied signed cookie remains valid until its 30-day expiry or signing-secret rotation. This is
-an accepted prototype consequence of omitting a persistent session registry.
+Sessions are stateless. Logout removes the browser cookie, but a copied signed cookie remains valid
+until its 30-day expiry or signing-secret rotation. This is an accepted prototype consequence of
+omitting a persistent session registry.
 
 Back up the SQLite data directory before upgrades. `/healthz` is public and intentionally shallow;
 it proves process liveness, not EDGAR/model/database end-to-end health.

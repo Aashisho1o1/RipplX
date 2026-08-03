@@ -132,9 +132,8 @@ POSTHOG_HOST=https://us.i.posthog.com
 - `OPENAI_API_KEY`, `OPENROUTER_API_KEY`, or `ZAI_API_KEY` (matching the model prefix) is the
   production provider credential read from the environment. A key for the wrong provider is
   reported as not configured rather than failing mid-run.
-- Instead of setting a provider key, a local user may enter one in Settings. That key exists
-  only in the running Python process, is never written to SQLite or returned by the API, and is
-  lost on restart. `FINWATCH_MODEL` must still be configured by the operator.
+- RipplX supplies this credential server-side. The browser never asks users for a provider key,
+  and the API reports only whether analysis is available.
 - Stripe owns card data; RipplX stores only customer/subscription identifiers and status. PostHog is
   optional, server-side, allowlisted, and receives no tickers, holdings, thesis text, valuation
   inputs, filing text, or financial values. See `PROVIDERS.md`.
@@ -159,8 +158,8 @@ non-root user, and stores SQLite at `/data/finwatch.db`.
 Hosted signup is public: a visitor enters any valid email address, receives a six-digit code, and
 gets a private workspace. There is no invite list or password. Login codes live for ten minutes in
 the one server process; the signed login cookie lasts 30 days. Watchlists, preferences, and jobs are
-user-scoped; provider keys are session-scoped. Public SEC filings, XBRL facts, and verified analyses
-are reused across workspaces.
+user-scoped. The operator-managed provider key never reaches the browser. Public SEC filings, XBRL
+facts, and verified analyses are reused across workspaces.
 
 Create a `.env` file on the deployment host:
 
@@ -177,9 +176,8 @@ FINWATCH_EMAIL_FROM=RipplX <login@your-verified-domain.example>
 On Railway, set the same six values in the service Variables tab, mount a persistent volume at
 `/data`, and set `FINWATCH_ALLOWED_HOSTS` to the exact Railway/custom-domain hostname. Set the
 provider key matching `FINWATCH_MODEL` (`ZAI_API_KEY`, `OPENAI_API_KEY`, or `OPENROUTER_API_KEY`) so
-hosted onboarding does not demand a key from every participant; that key stays in process
-environment memory and is never returned by the API. A participant who supplies their own key in
-Settings takes precedence for their session.
+hosted onboarding never demands a key from a participant; that key stays in process environment
+memory and is never returned by the API.
 
 Generate the cookie-signing secret without placing it in shell history:
 
@@ -206,7 +204,7 @@ Required remote controls:
 - `FINWATCH_ALLOWED_HOSTS` must contain the exact public hostname, without scheme or path. Use a
   comma-separated list only when the same instance genuinely has multiple trusted hostnames.
 - `SEC_USER_AGENT` is the operator's EDGAR contact and is never exposed as the participant email.
-- Terminate TLS in front of the container. Hosted cookies are `Secure`, and provider keys must not
+- Terminate TLS in front of the container. Hosted cookies are `Secure`, and the provider key must not
   cross a plaintext public connection.
 - Keep the service at one instance. Jobs live in process memory and are lost on restart; SQLite
   is a single-node store. Stop the instance before a raw filesystem copy/snapshot of `/data`, test
@@ -214,17 +212,12 @@ Required remote controls:
 - Each workspace is capped at 25 tracked tickers. The process still runs one job globally at a time.
 - `GET /healthz` is intentionally public and returns only service health. Interactive API docs
   are disabled in remote mode.
-- Sessions are stateless. Logout removes this browser's cookie and in-memory provider key, but a
+- Sessions are stateless. Logout removes this browser's cookie, but a
   copied cookie is not centrally revocable; it remains valid until its expiry or signing-secret
   rotation. This is an accepted public-alpha limitation with no persistent session registry.
 
-A hosted browser user may add the provider key matching `FINWATCH_MODEL` in Settings. That key is
-isolated by browser session, captured when a job is submitted, never stored in SQLite/cookies or
-returned by the API, pruned when the session expires, and lost when the process restarts. When a
-participant supplies no key of their own, the run falls back to the operator's server-side key for
-the configured provider, so hosted onboarding never demands a key from each participant. The
-operator key stays in process environment memory; the API reports only whether analysis is
-configured, never which key served a run.
+The operator key stays in process environment memory. The API reports only whether analysis is
+configured, never the credential itself, and the browser never displays a provider-key field.
 
 Schema v7 is a clean prototype break, not a migration. It retains attempt-linked `harness.v2` and
 frozen `certificate.v2` semantics and adds private research/monitoring product state. Before upgrading an existing Railway volume,
@@ -280,7 +273,7 @@ authoritative command list.
 - SQLite and the `/data` volume are plaintext unless the operator supplies filesystem or volume
   encryption. They contain account emails, private ticker membership/preferences, SEC data,
   generated analyses, and the SEC User-Agent. They do not contain login codes, session cookies, or
-  participant provider keys. Schema upgrades require a fresh database rather than carrying legacy
+  provider keys. Schema upgrades require a fresh database rather than carrying legacy
   prototype fields forward.
 
 The disclaimer remains part of every canonical digest:

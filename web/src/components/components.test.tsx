@@ -2,6 +2,7 @@ import { cleanup, fireEvent, render, screen, within } from "@testing-library/rea
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AppShell } from "./AppShell";
+import { AnalysisPanel } from "./AnalysisPanel";
 import { FilingItemCard } from "./FilingItemCard";
 import { FilingTypePicker } from "./FilingTypePicker";
 import { FindingList } from "./FindingList";
@@ -161,10 +162,22 @@ describe("shell navigation", () => {
     window.history.pushState({}, "", "/about?demo=1");
     render(<MemoryRouter initialEntries={["/about?demo=1"]}><AppShell /></MemoryRouter>);
     expect(screen.getByRole("link", { name: /RipplX/ })).toHaveAttribute("href", "/brief?demo=1");
+    expect(screen.getByRole("link", { name: /About/ })).toHaveAttribute("href", "/about?demo=1");
+    expect(screen.queryByRole("link", { name: /Companies/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /Alerts/ })).not.toBeInTheDocument();
   });
 
   it("returns a signed-in user to their own brief, not the sample", () => {
     render(<MemoryRouter initialEntries={["/about"]}><AppShell /></MemoryRouter>);
     expect(screen.getByRole("link", { name: /RipplX/ })).toHaveAttribute("href", "/brief");
+  });
+});
+
+describe("managed analysis", () => {
+  it("never asks an early user to provide an API key", () => {
+    render(<AnalysisPanel configured={false} onAnalyze={vi.fn()} />);
+    expect(screen.getByRole("heading", { name: "Analysis is temporarily unavailable" })).toBeInTheDocument();
+    expect(screen.getByText(/You never need to provide an API key/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Configure analysis/ })).not.toBeInTheDocument();
   });
 });

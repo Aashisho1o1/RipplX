@@ -18,7 +18,6 @@ from finwatch.demo import build_demo_db  # noqa: E402
 from finwatch.web.app import REQUEST_BODY_LIMIT_BYTES, create_app
 from finwatch.web.auth import CSRF_COOKIE_NAME, SESSION_COOKIE_NAME
 from finwatch.web.jobs import JobItem, JobRegistry
-from finwatch.web.runtime import RuntimeSecrets
 
 AUTH_SECRET = "a" * 32
 
@@ -314,8 +313,9 @@ def test_operator_environment_key_enables_hosted_analysis_without_exposing_it(
     reported as anything richer than the configured/not-configured boolean.
     """
     operator_key = "operator-key-must-not-be-exposed"
-    monkeypatch.setenv("OPENAI_API_KEY", operator_key)
     app, sender = _remote_app(tmp_path, monkeypatch)
+    monkeypatch.setenv("FINWATCH_MODEL", "z-ai/glm-5.2")
+    monkeypatch.setenv("ZAI_API_KEY", operator_key)
     alice, _ = _login(app, sender, "alice@example.com")
 
     bootstrap = alice.get("/api/bootstrap")
@@ -323,51 +323,56 @@ def test_operator_environment_key_enables_hosted_analysis_without_exposing_it(
     # A participant who supplied no key of their own can still analyze.
     assert payload["api_key_configured"] is True
     assert payload["analysis_configured"] is True
+    assert payload["provider"] == "z.ai"
     # ...but the operator's credential never crosses the API boundary, and the source
     # of the key is not disclosed either.
     assert operator_key not in bootstrap.text
     assert "api_key_source" not in payload
     assert operator_key.encode() not in (tmp_path / "db.sqlite").read_bytes()
+    assert (
+        alice.put(
+            "/api/settings/provider-key",
+            json={"api_key": "user-key"},
+            headers=_csrf(alice),
+        ).status_code
+        == 404
+    )
 
+    principal = app.state.session_codec.load(alice.cookies.get(SESSION_COOKIE_NAME))
+    connection = connect(str(tmp_path / "db.sqlite"))
+    try:
+        repo = Repo(connection)
+        repo.upsert_company(
+            Company(cik="0000789019", ticker="MSFT", name="Microsoft", added_at="now")
+        )
+        repo.track_company("0000789019", user_id=principal.user_id, at="now")
+    finally:
+        connection.close()
 
-def test_provider_keys_are_session_isolated_and_never_persisted(tmp_path, monkeypatch):
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    app, sender = _remote_app(tmp_path, monkeypatch)
-    alice, _ = _login(app, sender, "alice@example.com")
-    bob, _ = _login(app, sender, "bob@example.com")
+    captured = {}
 
-    initial = alice.get("/api/bootstrap").json()
-    assert initial["api_key_configured"] is False
-    assert "api_key_source" not in initial
-    sentinel = "alice-session-provider-secret"
-    response = alice.put(
-        "/api/settings/provider-key",
-        json={"api_key": sentinel},
+    def fake_question(self, ticker, question):
+        captured["api_key"] = self.llm._api_key
+        return {
+            "ticker": ticker,
+            "question": question,
+            "conclusion": "insufficient",
+            "answer": "No verified evidence was selected.",
+            "observations": [],
+            "tools_used": [],
+            "limitation": "No unsupported answer was substituted.",
+        }
+
+    monkeypatch.setattr(
+        "finwatch.product.questions.QuestionHarness.run", fake_question
+    )
+    question = alice.post(
+        "/api/companies/MSFT/questions",
+        json={"question": "What changed?"},
         headers=_csrf(alice),
     )
-    assert response.status_code == 204
-    assert sentinel not in response.text
-    assert alice.get("/api/bootstrap").json()["api_key_configured"] is True
-    assert bob.get("/api/bootstrap").json()["api_key_configured"] is False
-
-    alice_session = app.state.session_codec.load(alice.cookies.get(SESSION_COOKIE_NAME))
-    bob_session = app.state.session_codec.load(bob.cookies.get(SESSION_COOKIE_NAME))
-    assert app.state.secrets.api_key(alice_session.session_id) == sentinel
-    assert app.state.secrets.api_key(bob_session.session_id) is None
-    assert sentinel.encode() not in (tmp_path / "db.sqlite").read_bytes()
-
-    assert alice.post("/api/auth/logout", headers=_csrf(alice)).status_code == 204
-    assert app.state.secrets.api_key(alice_session.session_id) is None
-
-
-def test_provider_key_is_pruned_when_its_session_expires():
-    now = [1_000.0]
-    secrets = RuntimeSecrets(clock=lambda: now[0])
-    secrets.set_api_key("session", "secret", expires_at=1_010)
-    assert secrets.api_key("session") == "secret"
-
-    now[0] = 1_010.0
-    assert secrets.api_key("session") is None
+    assert question.status_code == 200
+    assert captured["api_key"] == operator_key
 
 
 def test_local_api_remains_auth_free(tmp_path):

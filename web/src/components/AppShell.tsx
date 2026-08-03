@@ -22,7 +22,7 @@ export function AppShell() {
       <div className="nav-list">
         <span className="nav-label">{demo ? "Sample" : "Workspace"}</span>
         {railLinks.map(link => <NavLink key={link.to} to={`${link.to}${demoSuffix}`} className={({ isActive }) => `nav-link${isActive ? " active" : ""}`}><span className="nav-glyph">{link.glyph}</span><span className="nav-copy">{link.label}<small>{link.sublabel}</small></span><span className="nav-arrow" aria-hidden="true">›</span></NavLink>)}
-        <NavLink to="/about" className={({ isActive }) => `nav-link${isActive ? " active" : ""}`}><span className="nav-glyph">{demo ? "02" : "03"}</span><span className="nav-copy">About<small>How it works</small></span><span className="nav-arrow" aria-hidden="true">›</span></NavLink>
+        <NavLink to={`/about${demoSuffix}`} className={({ isActive }) => `nav-link${isActive ? " active" : ""}`}><span className="nav-glyph">{demo ? "02" : "03"}</span><span className="nav-copy">About<small>How it works</small></span><span className="nav-arrow" aria-hidden="true">›</span></NavLink>
       </div>
       <div className="rail-trust"><p><strong>Trust-first analysis</strong><small>Exact SEC evidence.<br />Deterministic checks.</small></p></div>
       <div className="nav-foot">{demo

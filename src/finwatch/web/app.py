@@ -52,7 +52,6 @@ from finwatch.web.jobs import JobConflictError, JobItem, JobRegistry
 from finwatch.web.runtime import (
     LOCAL_SESSION_ID,
     SETTING_USER_AGENT,
-    RuntimeSecrets,
     environment_api_key,
     provider_for_model,
     resolve_settings,
@@ -177,12 +176,6 @@ class SettingsUpdate(BaseModel):
     period: Literal["30d", "60d", "90d", "180d", "1y"] | None = None
 
 
-class ProviderKeyUpdate(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    api_key: str = Field(min_length=1, max_length=512)
-
-
 class JobRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -277,7 +270,6 @@ def create_app(
         openapi_url=None if remote else "/openapi.json",
     )
     app.state.db_path = resolved_db
-    app.state.secrets = RuntimeSecrets()
     app.state.jobs = JobRegistry()
     app.state.company_add_lock = Lock()
     app.state.remote = remote
@@ -541,9 +533,7 @@ def create_app(
     ) -> dict[str, Any]:
         settings = resolve_settings(
             repo,
-            app.state.secrets,
             user_id=principal.user_id,
-            session_id=principal.session_id,
             remote=remote,
         )
         user = repo.get_user(principal.user_id) if remote else None
@@ -618,12 +608,6 @@ def create_app(
             repo.update_user_last_login(user.id, at=now)
         issued = app.state.session_codec.issue(user.id)
         csrf_token = app.state.csrf_codec.issue(issued.identity)
-        try:
-            previous = app.state.session_codec.load(request.cookies.get(SESSION_COOKIE_NAME, ""))
-        except InvalidSessionError:
-            pass
-        else:
-            app.state.secrets.clear_session(previous.session_id)
         response = Response(status_code=204)
         response.set_cookie(
             SESSION_COOKIE_NAME,
@@ -647,8 +631,6 @@ def create_app(
 
     @app.post("/api/auth/logout", status_code=204)
     def logout(request: Request):
-        principal = principal_for(request)
-        app.state.secrets.clear_session(principal.session_id)
         response = Response(status_code=204)
         response.delete_cookie(
             SESSION_COOKIE_NAME, path="/", secure=True, httponly=True, samesite="lax"
@@ -690,9 +672,7 @@ def create_app(
             else:
                 settings = resolve_settings(
                     repo,
-                    app.state.secrets,
                     user_id=principal.user_id,
-                    session_id=principal.session_id,
                     remote=remote,
                 )
                 since_value = _since_for_period(settings.period)
@@ -759,9 +739,7 @@ def create_app(
             with repo_context() as repo:
                 settings = resolve_settings(
                     repo,
-                    app.state.secrets,
                     user_id=principal.user_id,
-                    session_id=principal.session_id,
                     remote=remote,
                 )
                 if not settings.sec_user_agent:
@@ -1027,18 +1005,16 @@ def create_app(
         with repo_context() as repo:
             settings = resolve_settings(
                 repo,
-                app.state.secrets,
                 user_id=principal.user_id,
-                session_id=principal.session_id,
                 remote=remote,
             )
             if not settings.model or not settings.api_key_configured:
                 raise ApiProblem(
                     409,
                     "analysis_not_configured",
-                    "Configure the analysis connection before asking a research question.",
+                    "Analysis is temporarily unavailable.",
                 )
-            api_key = app.state.secrets.api_key(principal.session_id)
+            api_key = environment_api_key(settings.model)
             service = ProductService(repo, user_id=principal.user_id)
             if service.profile(ticker) is None:
                 raise ApiProblem(404, "company_not_found", "Company not found.")
@@ -1206,28 +1182,11 @@ def create_app(
                 repo.set_user_period(principal.user_id, payload.period)
             return settings_payload(repo, principal)
 
-    @app.put("/api/settings/provider-key", status_code=204)
-    def set_provider_key(request: Request, payload: ProviderKeyUpdate):
-        principal = principal_for(request)
-        app.state.secrets.set_api_key(
-            principal.session_id,
-            payload.api_key,
-            expires_at=principal.expires_at,
-        )
-        return Response(status_code=204)
-
-    @app.delete("/api/settings/provider-key", status_code=204)
-    def clear_provider_key(request: Request):
-        principal = principal_for(request)
-        app.state.secrets.clear_session(principal.session_id)
-        return Response(status_code=204)
-
     def sync_work(user_id: str, ticker: str | None):
         def work(job_id: str, registry: JobRegistry) -> bool:
             with repo_context() as repo:
                 settings = resolve_settings(
                     repo,
-                    app.state.secrets,
                     user_id=user_id,
                     remote=remote,
                 )
@@ -1438,27 +1397,21 @@ def create_app(
     @app.post("/api/jobs/analyze", status_code=202)
     def start_analysis(request: Request, payload: JobRequest):
         principal = principal_for(request)
-        session_api_key = app.state.secrets.api_key(principal.session_id)
         with repo_context() as repo:
             ticker = tracked_job_ticker(repo, principal.user_id, payload.ticker)
             settings = resolve_settings(
                 repo,
-                app.state.secrets,
                 user_id=principal.user_id,
-                session_id=principal.session_id,
                 remote=remote,
             )
         if not settings.sec_user_agent:
             raise ApiProblem(
                 409, "missing_user_agent", "Configure the SEC User-Agent first."
             )
-        # A participant's own session key wins; otherwise fall back to the operator's
-        # server-side key for the configured provider. The key itself never leaves the
-        # process — it is handed straight to the job's LLM client.
-        run_api_key = session_api_key or environment_api_key(settings.model)
+        run_api_key = environment_api_key(settings.model)
         if not settings.model or not run_api_key:
             raise ApiProblem(
-                409, "model_not_configured", "Configure the analysis model and API key first."
+                409, "model_not_configured", "Analysis is temporarily unavailable."
             )
         try:
             return app.state.jobs.start(
