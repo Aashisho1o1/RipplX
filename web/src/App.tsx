@@ -1,5 +1,5 @@
 import { useCallback, useState, type FormEvent } from "react";
-import { BrowserRouter, Link, Navigate, Route, Routes, useLocation } from "react-router-dom";
+import { BrowserRouter, Link, Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { api, ApiError, readPath } from "./api/client";
 import { AppShell } from "./components/AppShell";
 import { BootstrapContext } from "./context/BootstrapContext";
@@ -44,6 +44,7 @@ function RoutedApp() {
 }
 
 function SignInScreen({ onSignedIn }: { onSignedIn: () => void }) {
+  const navigate = useNavigate();
   const [email, setEmail] = useState("");
   const [code, setCode] = useState("");
   const [challenge, setChallenge] = useState<AuthChallenge | null>(null);
@@ -74,6 +75,7 @@ function SignInScreen({ onSignedIn }: { onSignedIn: () => void }) {
         body: JSON.stringify({ challenge_id: challenge.challenge_id, code }),
       });
       onSignedIn();
+      navigate("/today", { replace: true });
     } catch (reason) {
       setError(reason instanceof ApiError ? reason.message : "That sign-in code was not accepted.");
     } finally { setLoading(false); }

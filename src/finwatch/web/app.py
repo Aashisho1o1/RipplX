@@ -1581,6 +1581,28 @@ def create_app(
                 since=DEMO_SINCE, sample_data=True
             )
 
+    @app.get(f"{PUBLIC_SAMPLE_PREFIX}companies")
+    def public_sample_companies():
+        with repo_context(True) as repo:
+            return PresentationService(repo, user_id=LOCAL_USER_ID).companies()
+
+    @app.get(f"{PUBLIC_SAMPLE_PREFIX}alerts")
+    def public_sample_alerts():
+        with repo_context(True) as repo:
+            return {
+                "events": ProductService(repo, user_id=LOCAL_USER_ID).list_events()
+            }
+
+    @app.get(f"{PUBLIC_SAMPLE_PREFIX}companies/{{ticker}}/research")
+    def public_sample_company_research(
+        ticker: str = PathParam(pattern=_TICKER_PATTERN, max_length=15),
+    ):
+        with repo_context(True) as repo:
+            result = ProductService(repo, user_id=LOCAL_USER_ID).before_you_buy(ticker)
+            if result is None:
+                raise ApiProblem(404, "company_not_found", "Company not found.")
+            return result
+
     @app.get(f"{PUBLIC_SAMPLE_PREFIX}filings/{{accession}}")
     def public_sample_filing(accession: str = PathParam(pattern=_ACCESSION_PATTERN)):
         with repo_context(True) as repo:

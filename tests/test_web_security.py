@@ -565,6 +565,17 @@ def test_public_sample_is_readable_without_an_account_and_leaks_no_operator_stat
 
     brief = anon.get("/api/public/sample/brief")
     assert brief.status_code == 200 and brief.json()["sample_data"] is True
+    companies = anon.get("/api/public/sample/companies")
+    assert companies.status_code == 200
+    assert {row["ticker"] for row in companies.json()["companies"]} == {
+        "AAPL",
+        "DPLS",
+        "MSFT",
+        "TWKS",
+    }
+    assert anon.get("/api/public/sample/companies/MSFT/research").status_code == 200
+    alerts = anon.get("/api/public/sample/alerts")
+    assert alerts.status_code == 200 and isinstance(alerts.json()["events"], list)
     accession = brief.json()["filings"][0]["accession"]
     assert anon.get(f"/api/public/sample/filings/{accession}").status_code == 200
     # The certificate is the artifact that best demonstrates the gate; it must be

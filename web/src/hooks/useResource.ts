@@ -5,7 +5,21 @@ export function useResource<T>(load: (signal: AbortSignal) => Promise<T>, depend
   const [error, setError] = useState<Error | null>(null);
   const [loading, setLoading] = useState(true);
   const [revision, setRevision] = useState(0);
-  const refresh = useCallback(() => { setRevision(value => value + 1); }, []);
+  const refresh = useCallback(() => {
+    setError(null);
+    setLoading(true);
+    setRevision(value => value + 1);
+  }, []);
+
+  // A dependency change can cross an authorization boundary (for example, public
+  // sample data -> a private signed-in route). Never render data from the previous
+  // scope while the new request is in flight.
+  useEffect(() => {
+    setData(null);
+    setError(null);
+  // The caller owns the dependency list, matching the load effect below.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, dependencies);
 
   useEffect(() => {
     const controller = new AbortController();

@@ -1,6 +1,6 @@
 import { useCallback, useState, type FormEvent } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
-import { api, ApiError } from "../api/client";
+import { api, ApiError, readPath } from "../api/client";
 import { useResource } from "../hooks/useResource";
 import type { Companies, TrackedCompany } from "../types";
 
@@ -12,7 +12,7 @@ export function ResearchPage() {
   const [ticker, setTicker] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
-  const resource = useResource(useCallback((signal: AbortSignal) => api<Companies>(`/api/companies${demo ? "?demo=true" : ""}`, { signal }), [demo]), [demo]);
+  const resource = useResource(useCallback((signal: AbortSignal) => api<Companies>(readPath(demo, "companies"), { signal }), [demo]), [demo]);
 
   async function research(event: FormEvent) {
     event.preventDefault();

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
-import { api, ApiError } from "../api/client";
+import { api, ApiError, readPath } from "../api/client";
 import { AnalysisPanel } from "../components/AnalysisPanel";
 import { DeepResearchPanel } from "../components/DeepResearchPanel";
 import { DisclaimerFooter } from "../components/DisclaimerFooter";
@@ -19,7 +19,7 @@ export function CompanyPage() {
   const demo = new URLSearchParams(location.search).get("demo") === "1"; const panel = new URLSearchParams(location.search).get("panel");
   const demoSuffix = demo ? "?demo=1" : "";
   const { bootstrap } = useBootstrap();
-  const load = useCallback((signal: AbortSignal) => api<CompanyResearch>(`/api/companies/${ticker}/research${demo ? "?demo=true" : ""}`, { signal }), [ticker, demo]);
+  const load = useCallback((signal: AbortSignal) => api<CompanyResearch>(readPath(demo, `companies/${ticker}/research`), { signal }), [ticker, demo]);
   const resource = useResource(load, [ticker, demo]);
   const [job, setJob] = useState<Job | null>(null); const [error, setError] = useState("");
   const [price, setPrice] = useState(""); const [valuation, setValuation] = useState<ValuationRun | null>(null);

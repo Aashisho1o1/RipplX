@@ -163,8 +163,8 @@ describe("shell navigation", () => {
     render(<MemoryRouter initialEntries={["/about?demo=1"]}><AppShell /></MemoryRouter>);
     expect(screen.getByRole("link", { name: /RipplX/ })).toHaveAttribute("href", "/brief?demo=1");
     expect(screen.getByRole("link", { name: /About/ })).toHaveAttribute("href", "/about?demo=1");
-    expect(screen.queryByRole("link", { name: /Companies/ })).not.toBeInTheDocument();
-    expect(screen.queryByRole("link", { name: /Alerts/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Companies/ })).toHaveAttribute("href", "/companies?demo=1");
+    expect(screen.getByRole("link", { name: /Alerts/ })).toHaveAttribute("href", "/alerts?demo=1");
   });
 
   it("returns a signed-in user to their own brief, not the sample", () => {
