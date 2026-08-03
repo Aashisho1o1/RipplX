@@ -25,7 +25,12 @@ from finwatch.db import (
     connect,
     init_db,
 )
-from finwatch.demo import DEMO_SINCE, build_demo_db
+from finwatch.demo import (
+    DEMO_SINCE,
+    PUBLIC_SHOWCASE_USER_ID,
+    build_demo_db,
+    public_showcase_refreshed_at,
+)
 from finwatch.ingest import TickerNotFoundError, build_service
 from finwatch.presentation import PresentationService
 from finwatch.product import ProductService
@@ -70,8 +75,9 @@ MAX_TRACKED_TICKERS = 25
 _TICKER_PATTERN = r"^[A-Za-z][A-Za-z0-9.-]*$"
 _ACCESSION_PATTERN = r"^\d{10}-\d{2}-\d{6}$"
 _JOB_ID_PATTERN = r"^[0-9a-f]{32}$"
-# Unauthenticated, GET-only, read-only routes serving the bundled sample. Everything
-# under this prefix hardcodes the demo database and the reserved local-user scope.
+# Unauthenticated, GET-only, read-only routes serving the public SEC showcase. They
+# use the reserved showcase owner and fall back to the bundled zero-key fixtures until
+# an operator has atomically published a cached live refresh.
 PUBLIC_SAMPLE_PREFIX = "/api/public/sample/"
 _REQUEST_TOO_LARGE_BODY = (
     b'{"error":{"code":"request_too_large","message":"Request body exceeds the 1 MiB limit."}}'
@@ -509,7 +515,12 @@ def create_app(
 
     @contextmanager
     def repo_context(demo: bool = False):
-        connection = build_demo_db() if demo else operational_connection()
+        connection = operational_connection()
+        if demo:
+            live_repo = Repo(connection)
+            if public_showcase_refreshed_at(live_repo) is None:
+                connection.close()
+                connection = build_demo_db()
         try:
             yield Repo(connection)
         finally:
@@ -519,8 +530,8 @@ def create_app(
         return request.state.principal
 
     def sample_scope(principal: RequestPrincipal, demo: bool) -> str:
-        """Project the bundled public sample with its reserved local-user watchlist."""
-        return LOCAL_USER_ID if demo else principal.user_id
+        """Project public SEC artifacts only through the reserved showcase owner."""
+        return PUBLIC_SHOWCASE_USER_ID if demo else principal.user_id
 
     def capture(principal: RequestPrincipal, event: str, **properties: str) -> None:
         analytics = app.state.analytics
@@ -556,6 +567,8 @@ def create_app(
                 os.environ.get("STRIPE_SECRET_KEY") and os.environ.get("STRIPE_PRICE_ID")
             ),
             "billing_status": billing.get("status", "free") if billing else "free",
+            "showcase_source": None,
+            "showcase_updated_at": None,
         }
 
     def tracked_job_ticker(repo: Repo, user_id: str, ticker: str | None) -> str | None:
@@ -668,7 +681,11 @@ def create_app(
         principal = principal_for(request)
         with repo_context(demo) as repo:
             if demo:
-                since_value = DEMO_SINCE
+                since_value = (
+                    _since_for_period("1y")
+                    if public_showcase_refreshed_at(repo)
+                    else DEMO_SINCE
+                )
             else:
                 settings = resolve_settings(
                     repo,
@@ -1548,12 +1565,11 @@ def create_app(
             raise ApiProblem(404, "job_not_found", "Job not found.")
         return job
 
-    # ---- public sample -----------------------------------------------------
-    # Read-only projections of the bundled fixtures, reachable without an account so a
-    # first-time visitor can inspect a real verified brief, its exact evidence, and its
-    # certificate. These deliberately do NOT call principal_for: the demo database and
-    # the reserved local-user scope are hardcoded, so there is no caller-supplied value
-    # that can point them at participant data. Declared before the /api catch-all.
+    # ---- public SEC showcase -----------------------------------------------
+    # Read-only projections of a reserved showcase owner, reachable without an account.
+    # A completed operator refresh reads cached shared SEC artifacts from the production
+    # database; otherwise the zero-key bundled fixture is used. These deliberately do NOT
+    # call principal_for, and no anonymous request can trigger EDGAR or model work.
 
     @app.get(f"{PUBLIC_SAMPLE_PREFIX}bootstrap")
     def public_sample_bootstrap():
@@ -1563,34 +1579,43 @@ def create_app(
         and which model is selected. That is not public information, and an anonymous
         caller has no session for it to describe.
         """
-        return {
-            "setup_required": False,
-            "sec_user_agent": "",
-            "account_email": None,
-            "period": "90d",
-            "model": "",
-            "provider": None,
-            "api_key_configured": False,
-            "analysis_configured": False,
-        }
+        with repo_context(True) as repo:
+            refreshed_at = public_showcase_refreshed_at(repo)
+            return {
+                "setup_required": False,
+                "sec_user_agent": "",
+                "account_email": None,
+                "period": "90d",
+                "model": "",
+                "provider": None,
+                "api_key_configured": False,
+                "analysis_configured": False,
+                "billing_configured": False,
+                "billing_status": "free",
+                "showcase_source": "sec_cache" if refreshed_at else "bundled_fixture",
+                "showcase_updated_at": refreshed_at,
+            }
 
     @app.get(f"{PUBLIC_SAMPLE_PREFIX}brief")
     def public_sample_brief():
         with repo_context(True) as repo:
-            return PresentationService(repo, user_id=LOCAL_USER_ID).brief(
-                since=DEMO_SINCE, sample_data=True
+            since = _since_for_period("1y") if public_showcase_refreshed_at(repo) else DEMO_SINCE
+            return PresentationService(repo, user_id=PUBLIC_SHOWCASE_USER_ID).brief(
+                since=since, sample_data=True
             )
 
     @app.get(f"{PUBLIC_SAMPLE_PREFIX}companies")
     def public_sample_companies():
         with repo_context(True) as repo:
-            return PresentationService(repo, user_id=LOCAL_USER_ID).companies()
+            return PresentationService(repo, user_id=PUBLIC_SHOWCASE_USER_ID).companies()
 
     @app.get(f"{PUBLIC_SAMPLE_PREFIX}alerts")
     def public_sample_alerts():
         with repo_context(True) as repo:
             return {
-                "events": ProductService(repo, user_id=LOCAL_USER_ID).list_events()
+                "events": ProductService(
+                    repo, user_id=PUBLIC_SHOWCASE_USER_ID
+                ).list_events()
             }
 
     @app.get(f"{PUBLIC_SAMPLE_PREFIX}companies/{{ticker}}/research")
@@ -1598,7 +1623,9 @@ def create_app(
         ticker: str = PathParam(pattern=_TICKER_PATTERN, max_length=15),
     ):
         with repo_context(True) as repo:
-            result = ProductService(repo, user_id=LOCAL_USER_ID).before_you_buy(ticker)
+            result = ProductService(
+                repo, user_id=PUBLIC_SHOWCASE_USER_ID
+            ).before_you_buy(ticker)
             if result is None:
                 raise ApiProblem(404, "company_not_found", "Company not found.")
             return result
@@ -1606,7 +1633,7 @@ def create_app(
     @app.get(f"{PUBLIC_SAMPLE_PREFIX}filings/{{accession}}")
     def public_sample_filing(accession: str = PathParam(pattern=_ACCESSION_PATTERN)):
         with repo_context(True) as repo:
-            result = PresentationService(repo, user_id=LOCAL_USER_ID).filing(
+            result = PresentationService(repo, user_id=PUBLIC_SHOWCASE_USER_ID).filing(
                 accession, sample_data=True
             )
             if result is None:
@@ -1618,7 +1645,7 @@ def create_app(
         accession: str = PathParam(pattern=_ACCESSION_PATTERN),
     ):
         with repo_context(True) as repo:
-            result = PresentationService(repo, user_id=LOCAL_USER_ID).certificate(
+            result = PresentationService(repo, user_id=PUBLIC_SHOWCASE_USER_ID).certificate(
                 accession
             )
             if result is None:
@@ -1631,7 +1658,7 @@ def create_app(
         as_of: str | None = None,
     ):
         with repo_context(True) as repo:
-            result = PresentationService(repo, user_id=LOCAL_USER_ID).metrics(
+            result = PresentationService(repo, user_id=PUBLIC_SHOWCASE_USER_ID).metrics(
                 ticker, as_of=as_of
             )
             if result is None:

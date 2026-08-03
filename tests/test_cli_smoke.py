@@ -21,7 +21,17 @@ def test_version():
 
 
 def test_every_command_exposes_help():
-    for cmd in ("init", "add", "analyze", "ingest", "monitor", "digest", "eval", "demo"):
+    for cmd in (
+        "init",
+        "add",
+        "analyze",
+        "ingest",
+        "refresh-showcase",
+        "monitor",
+        "digest",
+        "eval",
+        "demo",
+    ):
         result = runner.invoke(app, [cmd, "--help"])
         assert result.exit_code == 0, f"{cmd} --help failed: {result.output}"
     assert runner.invoke(app, ["shadow", "report", "--help"]).exit_code != 0

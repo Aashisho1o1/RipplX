@@ -1,6 +1,8 @@
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { BootstrapContext } from "../context/BootstrapContext";
+import type { Bootstrap } from "../types";
 import { AppShell } from "./AppShell";
 import { AnalysisPanel } from "./AnalysisPanel";
 import { FilingItemCard } from "./FilingItemCard";
@@ -8,6 +10,29 @@ import { FilingTypePicker } from "./FilingTypePicker";
 import { FindingList } from "./FindingList";
 import { MetricTable } from "./MetricTable";
 import { JobProgress } from "./JobProgress";
+
+const bootstrap: Bootstrap = {
+  setup_required: false,
+  sec_user_agent: "",
+  account_email: null,
+  period: "90d",
+  model: "",
+  provider: null,
+  api_key_configured: false,
+  analysis_configured: false,
+  billing_configured: false,
+  billing_status: "free",
+  showcase_source: "bundled_fixture",
+  showcase_updated_at: null,
+};
+
+function renderShell(route: string) {
+  return render(
+    <BootstrapContext.Provider value={{ bootstrap, refresh: vi.fn() }}>
+      <MemoryRouter initialEntries={[route]}><AppShell /></MemoryRouter>
+    </BootstrapContext.Provider>,
+  );
+}
 
 afterEach(cleanup);
 
@@ -160,7 +185,7 @@ describe("shell navigation", () => {
   it("makes the wordmark a link home and keeps the visitor in the sample", () => {
     // Reaching About used to be a one-way trip: nothing led back except editing the URL.
     window.history.pushState({}, "", "/about?demo=1");
-    render(<MemoryRouter initialEntries={["/about?demo=1"]}><AppShell /></MemoryRouter>);
+    renderShell("/about?demo=1");
     expect(screen.getByRole("link", { name: /RipplX/ })).toHaveAttribute("href", "/brief?demo=1");
     expect(screen.getByRole("link", { name: /About/ })).toHaveAttribute("href", "/about?demo=1");
     expect(screen.getByRole("link", { name: /Companies/ })).toHaveAttribute("href", "/companies?demo=1");
@@ -168,7 +193,7 @@ describe("shell navigation", () => {
   });
 
   it("returns a signed-in user to their own brief, not the sample", () => {
-    render(<MemoryRouter initialEntries={["/about"]}><AppShell /></MemoryRouter>);
+    renderShell("/about");
     expect(screen.getByRole("link", { name: /RipplX/ })).toHaveAttribute("href", "/brief");
   });
 });

@@ -25,7 +25,7 @@ export function AnalysisPanel({
       <h3>Analysis is temporarily unavailable</h3>
       <p>RipplX manages the model connection. You never need to provide an API key. Verified SEC syncing and XBRL numbers remain available while the connection is restored.</p>
       <div className="actions stacked-mobile">
-        {onDemo && <button className="button" onClick={onDemo}>Open the sample brief</button>}
+        {onDemo && <button className="button" onClick={onDemo}>Open the SEC showcase</button>}
       </div>
     </div>;
   }

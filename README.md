@@ -81,6 +81,28 @@ It exercises deterministic preprocessing, evidence-backed extraction, the starte
 verification, and the same canonical presentation DTO consumed by the browser and Markdown
 renderer.
 
+## Public SEC showcase
+
+Hosted visitors can inspect a read-only SEC showcase before signing in. Normal page loads read only
+cached database artifacts and never contact EDGAR or an LLM. An operator refreshes the curated set
+through the existing ingestion, metrics, analysis, and verification path:
+
+```bash
+uv run finwatch refresh-showcase
+# or choose one to five issuers
+uv run finwatch refresh-showcase --ticker AAPL --ticker MSFT
+```
+
+The default set is AAPL, MSFT, and NVDA. Publication is atomic: the old showcase remains visible
+unless every selected issuer has a completed newest supported filing. If no successful refresh has
+been published, the public routes automatically use the bundled zero-key SEC fixtures. The operator
+refresh requires `SEC_USER_AGENT`, `FINWATCH_MODEL`, and that model's server-side credential; none
+of those values are requested from or exposed to visitors.
+
+This prototype deliberately has no market-price provider. SEC filings and companyfacts supply the
+financial source data; valuation remains explicit and user-directed by entering a price to evaluate.
+The valuation run records its date and assumptions rather than labeling that input as a live quote.
+
 ## Run locally
 
 Requirements: Python 3.11 or newer, [uv](https://docs.astral.sh/uv/), and Node.js 22 for building

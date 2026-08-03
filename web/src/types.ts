@@ -42,7 +42,7 @@ export interface FilingDetail { filing: FilingDigestEntry; verified_numbers: Iss
 export interface TrackedCompany { ticker: string; cik: string; newest_supported_filing: string | null; compressed_verified_read: string | null }
 export interface Companies { companies: TrackedCompany[] }
 export interface Metrics { ticker: string; as_of: string; rows: MetricRow[]; empty: string | null; summary: string; before_first_filing: boolean }
-export interface Bootstrap { setup_required: boolean; sec_user_agent: string; account_email: string | null; period: string; model: string; provider: string | null; api_key_configured: boolean; analysis_configured: boolean; billing_configured: boolean; billing_status: string }
+export interface Bootstrap { setup_required: boolean; sec_user_agent: string; account_email: string | null; period: string; model: string; provider: string | null; api_key_configured: boolean; analysis_configured: boolean; billing_configured: boolean; billing_status: string; showcase_source?: "sec_cache" | "bundled_fixture" | null; showcase_updated_at?: string | null }
 export interface AuthChallenge { challenge_id: string; expires_in: number }
 export interface Job { id: string; kind: "sync" | "analysis" | "research"; state: "queued" | "running" | "completed" | "partial" | "failed"; created_at: string; items: { key: string; state: string; message: string; verdict: string | null; stage: string | null; reason: string | null; diagnostics: Record<string, unknown> }[]; error: string | null }
 

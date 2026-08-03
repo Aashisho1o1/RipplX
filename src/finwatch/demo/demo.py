@@ -19,7 +19,7 @@ import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 
-from finwatch.db import Company, Filing, Repo, init_db
+from finwatch.db import Company, Filing, Repo, User, init_db
 from finwatch.llm.router import LAUNCH_MAX_OUTPUT_TOKENS, LLMResponse
 from finwatch.llm.stages import P1Extractor
 from finwatch.metrics.service import MetricsService
@@ -33,6 +33,9 @@ _MSFT_CIK = "0000789019"
 _MSFT_ACCN = "0000950170-24-048288"
 _MODEL = "demo/recorded"
 _NOW = "2024-08-05T00:00:00+00:00"
+PUBLIC_SHOWCASE_USER_ID = "public-showcase"
+PUBLIC_SHOWCASE_SETTING = "web.public_showcase_refreshed_at"
+DEFAULT_SHOWCASE_TICKERS = ("AAPL", "MSFT", "NVDA")
 # Production computes the starter metrics as of *today*, never as of the filing date
 # (`_compute_synced_metrics(..., as_of=date.today())`). The demo previously used each
 # case's `filed` date, which excluded the bundled fixtures' own newer facts under the
@@ -131,6 +134,50 @@ _COMPANIES = [
 _BUNDLED_FACTS = {_MSFT_CIK: "companyfacts_MSFT.json", "0000320193": "companyfacts_AAPL.json"}
 
 
+def ensure_public_showcase_user(repo: Repo, *, at: str) -> None:
+    """Create the reserved non-login owner used by anonymous showcase projections."""
+    if repo.get_user(PUBLIC_SHOWCASE_USER_ID) is None:
+        repo.create_user(
+            User(
+                id=PUBLIC_SHOWCASE_USER_ID,
+                email="public-showcase@finwatch.invalid",
+                created_at=at,
+                last_login_at=at,
+            )
+        )
+
+
+def publish_public_showcase(repo: Repo, ciks: list[str], *, refreshed_at: str) -> None:
+    """Atomically publish one complete curated SEC watchlist after a successful refresh."""
+    selected = list(dict.fromkeys(ciks))
+    if not selected:
+        raise ValueError("the public showcase requires at least one company")
+    missing = [cik for cik in selected if repo.get_company(cik) is None]
+    if missing:
+        raise ValueError(f"unknown showcase CIK: {missing[0]}")
+    ensure_public_showcase_user(repo, at=refreshed_at)
+    with repo.conn:
+        repo.conn.execute(
+            "DELETE FROM user_companies WHERE user_id = ?", (PUBLIC_SHOWCASE_USER_ID,)
+        )
+        repo.conn.executemany(
+            "INSERT INTO user_companies (user_id, cik, tracked_at) VALUES (?, ?, ?)",
+            [(PUBLIC_SHOWCASE_USER_ID, cik, refreshed_at) for cik in selected],
+        )
+        repo.conn.execute(
+            "INSERT INTO settings (key, value) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (PUBLIC_SHOWCASE_SETTING, refreshed_at),
+        )
+
+
+def public_showcase_refreshed_at(repo: Repo) -> str | None:
+    refreshed_at = repo.get_setting(PUBLIC_SHOWCASE_SETTING)
+    if not refreshed_at or not repo.list_tracked_ciks(PUBLIC_SHOWCASE_USER_ID):
+        return None
+    return refreshed_at
+
+
 def _companyfacts(cik: str) -> dict:
     """Bundled real SEC facts for the large-cap cases; empty-but-valid otherwise.
 
@@ -149,9 +196,11 @@ def build_demo_db(db_path: str = ":memory:") -> sqlite3.Connection:
     """Build a DB with the launch demo run persisted. Defaults to in-memory."""
     conn = init_db(db_path)
     repo = Repo(conn)
+    ensure_public_showcase_user(repo, at=_NOW)
     for c in _COMPANIES:
         repo.upsert_company(c)
         repo.track_company(c.cik, at=_NOW)
+        repo.track_company(c.cik, at=_NOW, user_id=PUBLIC_SHOWCASE_USER_ID)
 
     def now_fn() -> str:
         return _NOW

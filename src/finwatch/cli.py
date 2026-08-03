@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import sys
+from typing import Annotated
 
 import typer
 from rich.console import Console
@@ -266,6 +267,104 @@ def ingest(
     console.print(
         f"[bold]Ingest complete:[/] {summary.companies} companies, "
         f"{summary.filings} filings, {summary.xbrl_facts} XBRL facts."
+    )
+
+
+@app.command()
+def refresh_showcase(
+    ticker: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--ticker",
+            help="Curated ticker to publish; repeat for up to five (default: AAPL, MSFT, NVDA).",
+        ),
+    ] = None,
+) -> None:
+    """Refresh the cached public showcase from SEC data and the production analysis path."""
+    from datetime import UTC, date, datetime
+
+    from finwatch.db import Company, Repo, init_db
+    from finwatch.demo import (
+        DEFAULT_SHOWCASE_TICKERS,
+        publish_public_showcase,
+    )
+    from finwatch.metrics.service import MetricsService
+    from finwatch.preprocess.forms import ANALYZABLE_FORMS, base_form
+
+    cfg = _config_or_exit()
+    _require_model(cfg)
+    selected = list(dict.fromkeys(value.strip().upper() for value in (ticker or [])))
+    if not selected:
+        selected = list(DEFAULT_SHOWCASE_TICKERS)
+    if len(selected) > 5 or any(
+        len(value) > 15
+        or not value
+        or not value[0].isalpha()
+        or any(char not in "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-" for char in value)
+        for value in selected
+    ):
+        console.print("[red]Choose one to five valid ticker symbols.[/]")
+        raise typer.Exit(code=1)
+
+    connection, service = build_service(cfg)
+    ciks: list[str] = []
+    try:
+        for symbol in selected:
+            record = service.resolve_identity(symbol)
+            now = datetime.now(UTC).isoformat()
+            service.repo.upsert_company(
+                Company(cik=record.cik, ticker=record.ticker, name=record.title, added_at=now)
+            )
+            result = service.ingest_one(record.cik)
+            if result.error:
+                raise RuntimeError(f"SEC refresh did not complete for {record.ticker}")
+            MetricsService(
+                service.repo,
+                lambda cik: service.edgar.companyfacts(cik),
+            ).compute_and_store(record.cik, as_of=date.today().isoformat())
+            ciks.append(record.cik)
+    except (TickerNotFoundError, TickerIdentityConflictError, RuntimeError) as exc:
+        console.print(f"[red]Showcase refresh stopped:[/] {exc}")
+        raise typer.Exit(code=1) from exc
+    finally:
+        service.edgar.close()
+        connection.close()
+
+    for cik in ciks:
+        results = _run_pipeline(cfg, cik=cik)
+        if results and not all(result.ok for result in results):
+            console.print("[red]Showcase refresh stopped:[/] filing analysis did not complete.")
+            raise typer.Exit(code=1)
+
+    connection = init_db(cfg.db_path)
+    try:
+        repo = Repo(connection)
+        for cik in ciks:
+            supported = [
+                filing
+                for filing in repo.list_filings(cik)
+                if base_form(filing.form_type) in ANALYZABLE_FORMS
+            ]
+            newest = max(
+                supported,
+                key=lambda filing: (filing.filed_at, filing.accession_number),
+                default=None,
+            )
+            if newest is None or newest.status not in {"verified", "analyzed"}:
+                company = repo.get_company(cik)
+                label = company.ticker if company else cik
+                console.print(
+                    f"[red]Showcase refresh stopped:[/] {label} has no completed newest filing."
+                )
+                raise typer.Exit(code=1)
+        refreshed_at = datetime.now(UTC).isoformat()
+        publish_public_showcase(repo, ciks, refreshed_at=refreshed_at)
+    finally:
+        connection.close()
+
+    console.print(
+        f"[green]✓[/] Public SEC showcase refreshed: {', '.join(selected)}. "
+        "Anonymous visitors read this cached result; page loads never contact EDGAR."
     )
 
 

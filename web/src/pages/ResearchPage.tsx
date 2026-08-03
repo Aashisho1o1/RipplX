@@ -21,7 +21,7 @@ export function ResearchPage() {
     setError(""); setLoading(true);
     try {
       const known = resource.data?.companies.some(row => row.ticker === selected);
-      if (!known && demo) throw new ApiError("demo_company_unavailable", "That ticker is not included in the bundled demo.", 404);
+      if (!known && demo) throw new ApiError("demo_company_unavailable", "That ticker is not included in the public SEC showcase.", 404);
       if (!known) await api<TrackedCompany>("/api/companies", { method: "POST", body: JSON.stringify({ ticker: selected }) });
       navigate(`/companies/${selected}${demoSuffix}`);
     } catch (reason) {

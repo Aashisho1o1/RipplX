@@ -93,6 +93,8 @@ it("lands a signed-out visitor on the sample instead of a sign-in form", async (
       return Promise.resolve(new Response(JSON.stringify({
         setup_required: false, sec_user_agent: "", account_email: null, period: "90d",
         model: "", provider: null, api_key_configured: false, analysis_configured: false,
+        billing_configured: false, billing_status: "free", showcase_source: "sec_cache",
+        showcase_updated_at: "2026-08-03T12:00:00+00:00",
       }), { status: 200, headers: { "Content-Type": "application/json" } }));
     }
     if (url.includes("/api/public/sample/brief")) {
@@ -114,4 +116,5 @@ it("lands a signed-out visitor on the sample instead of a sign-in form", async (
   expect(await screen.findByText("Sample answer")).toBeInTheDocument();
   expect(screen.queryByRole("heading", { name: "Sign in to RipplX" })).not.toBeInTheDocument();
   expect(screen.getByRole("link", { name: "Sign in" })).toHaveAttribute("href", "/signin");
+  expect(screen.getByText(/Cached SEC showcase · refreshed Aug 3, 2026/)).toBeInTheDocument();
 });

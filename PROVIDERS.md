@@ -12,6 +12,10 @@ change a compiler verdict or block unrelated SEC research.
 | PostHog | Small product-usage events | Hashed user ID and allowlisted short labels only | No separate local event store | Optional and nonblocking. Autocapture and session replay are not used. Financial/auth content is rejected by tests. |
 | SnapTrade | Optional read-only brokerage connection | Not enabled in this build | Schema is reserved, but no secret is admitted | Activation is blocked until an audited encryption-at-rest dependency protects `userSecret`. Research remains fully usable without it. |
 
+There is no market-price provider in the SEC-only prototype. Valuation uses a price deliberately
+entered by the user, records its date and assumptions, and never presents that input as a live quote.
+Provider selection, licensing, freshness guarantees, and cost remain a later product decision.
+
 ## Hard exclusions
 
 - PostHog never receives tickers, holdings, cost basis, thesis content, valuation inputs, filing

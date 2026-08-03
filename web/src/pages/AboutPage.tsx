@@ -101,9 +101,9 @@ export function AboutPage() {
     <section className="empty-invitation">
       <p className="section-kicker">Start here</p>
       <h2>See it on a real filing.</h2>
-      <p>The sample brief runs bundled public SEC filings through the same pipeline, with no account and no API key.</p>
+      <p>The public showcase reads cached SEC filings and XBRL facts, with a bundled SEC fallback when no operator refresh is available. Opening it never triggers a live external request.</p>
       <div className="actions">
-        <Link className="button primary" to="/brief?demo=1">Open the sample brief</Link>
+        <Link className="button primary" to="/brief?demo=1">Open the SEC showcase</Link>
         <Link className="button" to="/companies">Track your own ticker</Link>
       </div>
     </section>

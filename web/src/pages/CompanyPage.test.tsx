@@ -164,7 +164,7 @@ describe("company decision brief", () => {
     const unavailable = { ...research.valuation!, status: "unavailable" as const, label: "Unavailable" as const, explanation: "Required SEC inputs are unreliable.", scenarios: [], reverse_dcf_growth: null, trailing_pe: null, price_to_fcf: null, fcf_yield: null };
     const fetcher = vi.fn().mockImplementation((_input: RequestInfo | URL, init?: RequestInit) => Promise.resolve(new Response(JSON.stringify(init?.method === "POST" ? unavailable : emptyBrief), { status: 200, headers: { "Content-Type": "application/json" } })));
     renderCompany(fetcher);
-    fireEvent.change(await screen.findByLabelText("Current price"), { target: { value: "400" } });
+    fireEvent.change(await screen.findByLabelText("Price you want to evaluate"), { target: { value: "400" } });
 
     fireEvent.click(screen.getByRole("button", { name: "Calculate scenarios" }));
 

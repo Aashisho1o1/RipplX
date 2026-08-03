@@ -2,12 +2,14 @@
 from __future__ import annotations
 
 from datetime import date
+from types import SimpleNamespace
 
 import httpx
 from typer.testing import CliRunner
 
 from finwatch.cli import app
 from finwatch.db import Repo, init_db
+from finwatch.demo import PUBLIC_SHOWCASE_USER_ID, public_showcase_refreshed_at
 from finwatch.ingest import EdgarClient, IngestService
 
 runner = CliRunner()
@@ -65,3 +67,51 @@ def test_cli_ingest_renders_per_cik_errors(monkeypatch, tmp_path, mock_transport
     assert result.exit_code == 0
     assert "AAPL" in result.output and "MSFT" in result.output
     assert "Ingest complete" in result.output
+
+
+def test_refresh_showcase_publishes_only_after_completed_offline_analysis(
+    monkeypatch, tmp_path, mock_transport
+):
+    db_path = str(tmp_path / "finwatch.db")
+
+    def fake_build_service(cfg, conn=None):
+        connection = init_db(cfg.db_path)
+        edgar = EdgarClient(
+            "UA test@example.com",
+            client=httpx.Client(transport=mock_transport),
+            sleep=lambda _seconds: None,
+        )
+        return connection, IngestService(
+            Repo(connection), edgar, as_of=date(2024, 12, 1)
+        )
+
+    def fake_run_pipeline(cfg, *, cik):
+        connection = init_db(cfg.db_path)
+        try:
+            repo = Repo(connection)
+            newest = max(
+                repo.list_filings(cik),
+                key=lambda filing: (filing.filed_at, filing.accession_number),
+            )
+            repo.set_filing_status(newest.accession_number, "verified", processed_at="t")
+        finally:
+            connection.close()
+        return [SimpleNamespace(ok=True)]
+
+    monkeypatch.setenv("SEC_USER_AGENT", "UA test@example.com")
+    monkeypatch.setenv("FINWATCH_DB", db_path)
+    monkeypatch.setenv("FINWATCH_MODEL", "openai/test")
+    monkeypatch.setattr("finwatch.cli.build_service", fake_build_service)
+    monkeypatch.setattr("finwatch.cli._run_pipeline", fake_run_pipeline)
+
+    result = runner.invoke(app, ["refresh-showcase", "--ticker", "AAPL"])
+
+    assert result.exit_code == 0, result.output
+    assert "Public SEC showcase refreshed: AAPL" in result.output
+    connection = init_db(db_path)
+    try:
+        repo = Repo(connection)
+        assert repo.list_tracked_ciks(PUBLIC_SHOWCASE_USER_ID) == [CIK]
+        assert public_showcase_refreshed_at(repo)
+    finally:
+        connection.close()

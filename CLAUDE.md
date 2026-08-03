@@ -237,14 +237,18 @@ weights, horizon, or thesis.
 The watchlist reports the newest supported 10-K/10-Q/8-K indexed for an issuer; it never reports an
 unsupported form and never claims a filing was read.
 
-The browser also serves a read-only sample brief at `?demo=1` in both local and hosted mode. It is
-built from bundled public SEC fixtures by the real pipeline with recorded model output, lives in a
-throwaway in-memory database created per request, and is always projected as the reserved local user
-so it can never read or mix with a participant's own data.
+The browser also serves a read-only public SEC showcase at `?demo=1` in both local and hosted mode.
+An operator can atomically publish a curated, cached SEC refresh with `refresh-showcase`; anonymous
+page loads read shared public filing/computation artifacts only through a reserved non-login owner
+and never contact EDGAR or a model. Until a successful refresh exists, the same routes fall back to
+bundled public SEC fixtures run through the real pipeline with recorded model output in a throwaway
+in-memory database. Neither path can read or mix with a participant's private membership or state.
 
-Current CLI commands are `init`, `serve`, `add`, `analyze`, `ingest`, `process`, `metrics`,
-`digest`, `eval`, and `demo`. Treat the CLI as operator/developer tooling, not a second product.
-`eval` is internal model-evaluation tooling. `demo` must remain zero-key and fast.
+Current CLI commands are `init`, `serve`, `add`, `analyze`, `ingest`, `refresh-showcase`, `process`,
+`metrics`, `digest`, `eval`, and `demo`. Treat the CLI as operator/developer tooling, not a second
+product. `refresh-showcase` is the bounded operator-only SEC cache refresh; it publishes the new
+curated set only after every selected issuer's newest supported filing has completed. `eval` is
+internal model-evaluation tooling. `demo` and the showcase fallback must remain zero-key and fast.
 
 Analysis and process commands use the same newest-only production runner. There is no `verify`,
 `reverify`, `shadow report`, signal flag, replay mode, accession selector, or analysis limit control

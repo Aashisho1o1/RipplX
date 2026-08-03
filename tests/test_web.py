@@ -9,7 +9,11 @@ pytest.importorskip("fastapi")
 from fastapi.testclient import TestClient  # noqa: E402
 
 from finwatch.db import Company, Repo, init_db
-from finwatch.demo import build_demo_db
+from finwatch.demo import (
+    PUBLIC_SHOWCASE_USER_ID,
+    build_demo_db,
+    publish_public_showcase,
+)
 from finwatch.web.app import CompanyCreate, JobRequest, _compute_synced_metrics, create_app
 
 LOCAL_BROWSER_HEADERS = {"Origin": "http://testserver"}
@@ -66,6 +70,68 @@ def test_demo_company_index_uses_the_same_sample_scope_as_company_research(tmp_p
     rows = client.get("/api/companies?demo=true").json()["companies"]
 
     assert {row["ticker"] for row in rows} == {"AAPL", "DPLS", "MSFT", "TWKS"}
+
+
+def test_public_showcase_falls_back_to_bundled_sec_fixtures(tmp_path):
+    client, _ = _client(tmp_path)
+
+    bootstrap = client.get("/api/public/sample/bootstrap")
+    companies = client.get("/api/public/sample/companies")
+
+    assert bootstrap.status_code == 200
+    assert bootstrap.json()["showcase_source"] == "bundled_fixture"
+    assert bootstrap.json()["showcase_updated_at"] is None
+    assert {row["ticker"] for row in companies.json()["companies"]} == {
+        "AAPL",
+        "DPLS",
+        "MSFT",
+        "TWKS",
+    }
+
+
+def test_public_showcase_prefers_isolated_atomically_published_sec_cache(tmp_path):
+    client, db_path = _client(tmp_path)
+    connection = init_db(str(db_path))
+    try:
+        repo = Repo(connection)
+        repo.upsert_company(
+            Company(cik="0000000042", ticker="LIVE", name="Live Cache", added_at="t")
+        )
+        publish_public_showcase(
+            repo,
+            ["0000000042"],
+            refreshed_at="2026-08-03T12:00:00+00:00",
+        )
+        assert repo.list_tracked_ciks() == []
+        assert repo.list_tracked_ciks(PUBLIC_SHOWCASE_USER_ID) == ["0000000042"]
+    finally:
+        connection.close()
+
+    bootstrap = client.get("/api/public/sample/bootstrap").json()
+    public_rows = client.get("/api/public/sample/companies").json()["companies"]
+    private_rows = client.get("/api/companies").json()["companies"]
+
+    assert bootstrap["showcase_source"] == "sec_cache"
+    assert bootstrap["showcase_updated_at"] == "2026-08-03T12:00:00+00:00"
+    assert [row["ticker"] for row in public_rows] == ["LIVE"]
+    assert private_rows == []
+
+
+def test_failed_showcase_publication_keeps_the_previous_curated_set(tmp_path):
+    _, db_path = _client(tmp_path)
+    connection = init_db(str(db_path))
+    try:
+        repo = Repo(connection)
+        repo.upsert_company(Company(cik="1", ticker="OLD", added_at="t"))
+        publish_public_showcase(repo, ["1"], refreshed_at="old")
+
+        with pytest.raises(ValueError, match="unknown showcase CIK"):
+            publish_public_showcase(repo, ["2"], refreshed_at="new")
+
+        assert repo.list_tracked_ciks(PUBLIC_SHOWCASE_USER_ID) == ["1"]
+        assert repo.get_setting("web.public_showcase_refreshed_at") == "old"
+    finally:
+        connection.close()
 
 
 def test_holding_create_fails_before_edgar_when_launch_cap_is_reached(tmp_path):

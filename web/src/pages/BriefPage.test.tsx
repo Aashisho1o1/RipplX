@@ -111,12 +111,12 @@ describe("brief truth states", () => {
       }],
     }] }] }), "/brief?demo=1");
     expect(await screen.findByText("Risk language changed")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Exit sample" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Exit showcase" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Sync filings from SEC/ })).toBeInTheDocument();
     cleanup();
 
     renderBrief(brief({ sample_data: true }), "/brief?demo=1");
-    expect(await screen.findByRole("button", { name: "Exit sample" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Exit showcase" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Sync filings from SEC/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Analyze newest filing/ })).not.toBeInTheDocument();
   });
