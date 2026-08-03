@@ -2,7 +2,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { BootstrapContext } from "../context/BootstrapContext";
-import type { Bootstrap, CompanyResearch } from "../types";
+import type { Bootstrap, CompanyResearch, Job } from "../types";
 import { CompanyPage } from "./CompanyPage";
 
 const bootstrap: Bootstrap = {
@@ -172,5 +172,36 @@ describe("company decision brief", () => {
     expect(screen.getByText(/static demo keeps this optional model pass off/i)).toBeInTheDocument();
     expect(screen.getByText("Required SEC inputs are unreliable.")).toBeInTheDocument();
     expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+
+  it("continues a research launch from filing analysis into connected research", async () => {
+    const analysisJob: Job = {
+      id: "1".repeat(32), kind: "analysis", state: "running", created_at: "t",
+      items: [], error: null,
+    };
+    const queuedResearch = {
+      run_id: "2".repeat(32), ticker: "ACME", cik: research.cik, status: "queued",
+      input_hash: "3".repeat(64), report: null, trace: null,
+      created_at: "2026-08-03T00:00:00Z", completed_at: null,
+    };
+    const fetcher = vi.fn().mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/companies/ACME/research" && !init?.method) return Promise.resolve(new Response(JSON.stringify(research), { status: 200, headers: { "Content-Type": "application/json" } }));
+      if (url === `/api/jobs/${analysisJob.id}`) return Promise.resolve(new Response(JSON.stringify({ ...analysisJob, state: "completed" }), { status: 200, headers: { "Content-Type": "application/json" } }));
+      if (url === "/api/companies/ACME/research-runs" && init?.method === "POST") return Promise.resolve(new Response(JSON.stringify(queuedResearch), { status: 202, headers: { "Content-Type": "application/json" } }));
+      if (url === `/api/research-runs/${queuedResearch.run_id}`) return Promise.resolve(new Response(JSON.stringify(queuedResearch), { status: 200, headers: { "Content-Type": "application/json" } }));
+      throw new Error(`Unexpected request: ${init?.method ?? "GET"} ${url}`);
+    });
+    vi.stubGlobal("fetch", fetcher);
+    render(
+      <BootstrapContext.Provider value={{ bootstrap, refresh: vi.fn() }}>
+        <MemoryRouter initialEntries={[{ pathname: "/companies/ACME", state: { initialJob: analysisJob, autoResearch: true } }]}>
+          <Routes><Route path="/companies/:ticker" element={<CompanyPage />} /></Routes>
+        </MemoryRouter>
+      </BootstrapContext.Provider>,
+    );
+
+    expect(await screen.findByText("Connecting evidence…", {}, { timeout: 3000 })).toBeInTheDocument();
+    expect(fetcher.mock.calls.some(([url, init]) => String(url) === "/api/companies/ACME/research-runs" && (init as RequestInit | undefined)?.method === "POST")).toBe(true);
   });
 });

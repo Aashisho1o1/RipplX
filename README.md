@@ -16,28 +16,29 @@ buy, sell, hold, trim, or accumulate a security.
 
 The current repository contains a lean commercial loop:
 
-1. Enter a ticker and open a Before You Buy Brief. No saved watch condition, payment, or brokerage connection is
-   required.
-2. Sync filings and SEC companyfacts from EDGAR.
-3. Analyze at most one filing per request: the newest supported filing for a selected ticker,
+1. Enter a ticker. The Research Company action resolves it, syncs filings and SEC companyfacts,
+   computes verified metrics, and opens the Before You Buy Brief. When analysis is configured it
+   also starts the newest-filing analysis and then connected research in the background. No saved
+   watch condition, payment, or brokerage connection is required.
+2. Analyze at most one filing per request: the newest supported filing for a selected ticker,
    or the newest supported filing across tracked tickers when no ticker is selected. You can narrow
    the run to the newest 10-K, 10-Q, or 8-K. An already terminal newest filing is a no-op; the
    system never falls through to older filings within the selected scope.
-4. Research the filing through a bounded allowlisted tool loop, then publish zero to three
+3. Research the filing through a bounded allowlisted tool loop, then publish zero to three
    qualitative findings. Every finding must carry an exact quotation with accession, section,
    server-derived character offsets, section hash, and an HTTPS SEC link.
-5. Show only the starter metrics: revenue growth, net-income trend, operating cash flow,
+4. Show only the starter metrics: revenue growth, net-income trend, operating cash flow,
    liquidity, share-count change, and a net-debt / (operating income + D&A) leverage proxy.
    Share-count direction is reported neutrally—not inferred to be a buyback or dilution. Stale,
    future-dated, or malformed source periods are shown as unavailable, never relabeled as current.
-6. Combine eight reproducible downside lenses and the six verified metrics in one Financial X-Ray.
+5. Combine eight reproducible downside lenses and the six verified metrics in one Financial X-Ray.
    Missing data stays `unavailable`.
-7. Monitor supported filings with one idempotent scheduled command, persist attention events, and
+6. Monitor supported filings with one idempotent scheduled command, persist attention events, and
    deliver urgent/same-week and weekly email summaries through Resend.
-8. Build a deterministic Stock Impact Snapshot from verified findings, risk lenses, and the user's
+7. Build a deterministic Stock Impact Snapshot from verified findings, risk lenses, and the user's
    saved valuation. Show trailing P/E, P/FCF, FCF yield, and scenario percentage changes downstream
    of the fixed starter metrics.
-9. Let users save up to five watch conditions, ask bounded evidence-grounded questions, and compare
+8. Let users save up to five watch conditions, ask bounded evidence-grounded questions, and compare
    user-editable SIC-derived peer candidates. Filing commitments remain optional supporting context.
 
 Numbers may appear only in deterministic metric rows sourced from SEC XBRL or inside exact SEC

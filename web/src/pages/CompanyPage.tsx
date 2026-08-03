@@ -13,15 +13,18 @@ import type { CompanyResearch, FilingType, FollowUpAnswer, Job, ProductProfile, 
 
 const defaultAssumptions: ValuationAssumptions = { discount_rate: 0.10, terminal_growth: 0.025, conservative_growth: 0, base_growth: 0.05, optimistic_growth: 0.10 };
 const thesisStatuses: ThesisStatus[] = ["draft", "confirmed", "supported", "weakened", "broken", "unclear", "retired"];
+interface CompanyRouteState { initialJob?: Job; autoResearch?: boolean; notice?: string }
 
 export function CompanyPage() {
   const { ticker = "" } = useParams(); const location = useLocation(); const navigate = useNavigate();
+  const routeState = location.state as CompanyRouteState | null;
   const demo = new URLSearchParams(location.search).get("demo") === "1"; const panel = new URLSearchParams(location.search).get("panel");
   const demoSuffix = demo ? "?demo=1" : "";
   const { bootstrap } = useBootstrap();
   const load = useCallback((signal: AbortSignal) => api<CompanyResearch>(readPath(demo, `companies/${ticker}/research`), { signal }), [ticker, demo]);
   const resource = useResource(load, [ticker, demo]);
-  const [job, setJob] = useState<Job | null>(null); const [error, setError] = useState("");
+  const [job, setJob] = useState<Job | null>(routeState?.initialJob ?? null); const [error, setError] = useState(routeState?.notice ?? "");
+  const [autoResearch, setAutoResearch] = useState(Boolean(routeState?.autoResearch));
   const [price, setPrice] = useState(""); const [valuation, setValuation] = useState<ValuationRun | null>(null);
   const [valuationAssumptions, setValuationAssumptions] = useState(defaultAssumptions);
   const [thesis, setThesis] = useState<Thesis>({ items: [] }); const [savingThesis, setSavingThesis] = useState(false);
@@ -29,7 +32,7 @@ export function CompanyPage() {
   const [question, setQuestion] = useState(""); const [answer, setAnswer] = useState<FollowUpAnswer | null>(null); const [asking, setAsking] = useState(false);
   const [deepResearch, setDeepResearch] = useState<ResearchRun | null>(null);
   useEffect(() => { if (resource.data) { setThesis(resource.data.thesis); setValuation(resource.data.valuation); setProfile(resource.data.profile); setManualPeers(resource.data.manual_peer_tickers); setDeepResearch(resource.data.deep_research); } }, [resource.data]);
-  useEffect(() => { if (!job || !["queued", "running"].includes(job.state)) return; const timer = window.setInterval(() => api<Job>(`/api/jobs/${job.id}`).then(next => { setJob(next); if (!["queued", "running"].includes(next.state)) resource.refresh(); }).catch(() => setError("Job status was lost after a restart.")), 700); return () => window.clearInterval(timer); }, [job, resource.refresh]);
+  useEffect(() => { if (!job || !["queued", "running"].includes(job.state)) return; const timer = window.setInterval(() => api<Job>(`/api/jobs/${job.id}`).then(next => { setJob(next); if (!["queued", "running"].includes(next.state)) { resource.refresh(); if (autoResearch && next.kind === "analysis" && next.state !== "failed") { setAutoResearch(false); api<ResearchRun>(`/api/companies/${ticker}/research-runs`, { method: "POST" }).then(setDeepResearch).catch(reason => setError(reason instanceof ApiError ? reason.message : "Connected research could not start.")); } } }).catch(() => setError("Job status was lost after a restart.")), 700); return () => window.clearInterval(timer); }, [job, resource.refresh, autoResearch, ticker]);
   useEffect(() => { if (!deepResearch || !["queued", "running"].includes(deepResearch.status)) return; const timer = window.setInterval(() => api<ResearchRun>(`/api/research-runs/${deepResearch.run_id}`).then(next => { setDeepResearch(next); if (!["queued", "running"].includes(next.status)) resource.refresh(); }).catch(() => setError("Research status was lost after a restart.")), 900); return () => window.clearInterval(timer); }, [deepResearch, resource.refresh]);
 
   async function start(kind: "sync" | "analyze", formType: FilingType = "latest") { setError(""); try { setJob(await api<Job>(`/api/jobs/${kind}`, { method: "POST", body: JSON.stringify({ ticker, ...(formType === "latest" ? {} : { form_type: formType }) }) })); } catch (reason) { setError(reason instanceof ApiError ? reason.message : "Operation could not start."); } }

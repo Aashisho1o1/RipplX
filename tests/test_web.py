@@ -1,5 +1,6 @@
 import inspect
 import json
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -14,6 +15,7 @@ from finwatch.demo import (
     build_demo_db,
     publish_public_showcase,
 )
+from finwatch.ingest import EdgarClient
 from finwatch.web.app import CompanyCreate, JobRequest, _compute_synced_metrics, create_app
 
 LOCAL_BROWSER_HEADERS = {"Origin": "http://testserver"}
@@ -70,6 +72,59 @@ def test_demo_company_index_uses_the_same_sample_scope_as_company_research(tmp_p
     rows = client.get("/api/companies?demo=true").json()["companies"]
 
     assert {row["ticker"] for row in rows} == {"AAPL", "DPLS", "MSFT", "TWKS"}
+
+
+def test_before_you_buy_sync_populates_filings_and_verified_numbers(
+    tmp_path, monkeypatch, offline_ticker_index
+):
+    fixtures = Path(__file__).parent / "fixtures"
+    submissions = json.loads(
+        (fixtures / "submissions_CIK0000320193.json").read_text(encoding="utf-8")
+    )
+    companyfacts = json.loads(
+        (
+            Path(__file__).parents[1]
+            / "src"
+            / "finwatch"
+            / "demo"
+            / "data"
+            / "companyfacts_AAPL.json"
+        ).read_text(encoding="utf-8")
+    )
+    monkeypatch.setenv("SEC_USER_AGENT", "Test User test@example.com")
+    monkeypatch.setattr(
+        EdgarClient,
+        "submissions",
+        lambda _self, _cik, force_refresh=True: submissions,
+    )
+    monkeypatch.setattr(
+        EdgarClient,
+        "companyfacts",
+        lambda _self, _cik, force_refresh=True: companyfacts,
+    )
+    client, _ = _client(tmp_path)
+
+    added = client.post("/api/companies", json={"ticker": "AAPL"})
+    assert added.status_code == 201
+    assert added.json()["newest_supported_filing"] is None
+    assert added.json()["compressed_verified_read"] is None
+
+    started = client.post("/api/jobs/sync", json={"ticker": "AAPL"})
+    assert started.status_code == 202
+    job_id = started.json()["id"]
+    terminal = started.json()
+    for _ in range(200):
+        terminal = client.get(f"/api/jobs/{job_id}").json()
+        if terminal["state"] not in {"queued", "running"}:
+            break
+        time.sleep(0.005)
+
+    assert terminal["state"] == "completed"
+    brief = client.get("/api/companies/AAPL/research")
+    assert brief.status_code == 200
+    assert brief.json()["recent_filings"]
+    assert brief.json()["metrics"]["rows"]
+    assert any(row["state"] == "computed" for row in brief.json()["metrics"]["rows"])
 
 
 def test_public_showcase_falls_back_to_bundled_sec_fixtures(tmp_path):

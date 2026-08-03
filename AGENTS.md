@@ -234,6 +234,10 @@ back off on 429/403; cache immutable filings. Filing text and EDGAR metadata are
 The browser app is the launch surface. Hosted onboarding is public email-code login followed by a
 ticker; local mode remains auth-free. It does not ask for or return shares, cost basis, target
 weights, horizon, or thesis.
+The Research Company action is an end-to-end launch path: it resolves and tracks the ticker, waits
+for SEC filing/companyfacts sync and verified metric computation, then opens the populated company
+brief while configured filing analysis and connected research continue through the existing bounded
+jobs. It must never navigate a newly added ticker directly to an unexplained empty report.
 The watchlist reports the newest supported 10-K/10-Q/8-K indexed for an issuer; it never reports an
 unsupported form and never claims a filing was read.
 
