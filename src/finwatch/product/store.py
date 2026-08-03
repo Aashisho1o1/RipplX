@@ -9,6 +9,8 @@ from finwatch.product.models import (
     AttentionEvent,
     CompanyProfile,
     ManagementPromise,
+    ResearchRun,
+    ResearchStatus,
     RiskRadarResult,
     Thesis,
     ValuationRun,
@@ -223,6 +225,125 @@ class ProductStore:
             (self.user_id, company.cik),
         ).fetchone()
         return None if row is None else ValuationRun.model_validate_json(row["output_json"])
+
+    def begin_research_run(
+        self, company: Company, *, run_id: str, input_hash: str, now: str
+    ) -> ResearchRun:
+        self.repo.conn.execute(
+            """INSERT INTO research_runs
+                 (id, user_id, cik, status, input_hash, created_at)
+               VALUES (?, ?, ?, 'queued', ?, ?)""",
+            (run_id, self.user_id, company.cik, input_hash, now),
+        )
+        self.repo.conn.commit()
+        return ResearchRun(
+            run_id=run_id,
+            ticker=company.ticker,
+            cik=company.cik,
+            status="queued",
+            input_hash=input_hash,
+            created_at=now,
+        )
+
+    def set_research_running(self, run_id: str) -> bool:
+        cursor = self.repo.conn.execute(
+            """UPDATE research_runs SET status = 'running'
+                 WHERE id = ? AND user_id = ? AND status = 'queued'""",
+            (run_id, self.user_id),
+        )
+        self.repo.conn.commit()
+        return cursor.rowcount > 0
+
+    def finish_research_run(
+        self,
+        run_id: str,
+        *,
+        status: ResearchStatus,
+        report_json: str,
+        trace_json: str,
+        now: str,
+    ) -> bool:
+        if status not in {"completed", "partial"}:
+            raise ValueError("a completed research artifact must be completed or partial")
+        cursor = self.repo.conn.execute(
+            """UPDATE research_runs
+                  SET status = ?, artifact_json = ?, trace_json = ?, completed_at = ?
+                WHERE id = ? AND user_id = ? AND status IN ('queued', 'running')""",
+            (status, report_json, trace_json, now, run_id, self.user_id),
+        )
+        self.repo.conn.commit()
+        return cursor.rowcount > 0
+
+    def fail_research_run(self, run_id: str, *, now: str) -> bool:
+        cursor = self.repo.conn.execute(
+            """UPDATE research_runs
+                  SET status = 'failed', artifact_json = NULL, trace_json = NULL,
+                      completed_at = ?
+                WHERE id = ? AND user_id = ? AND status IN ('queued', 'running')""",
+            (now, run_id, self.user_id),
+        )
+        self.repo.conn.commit()
+        return cursor.rowcount > 0
+
+    def research_run(self, run_id: str) -> ResearchRun | None:
+        row = self.repo.conn.execute(
+            """SELECT r.*, c.ticker FROM research_runs r
+                 JOIN companies c ON c.cik = r.cik
+                WHERE r.id = ? AND r.user_id = ?""",
+            (run_id, self.user_id),
+        ).fetchone()
+        return self._research_row(row)
+
+    def latest_research_run(self, company: Company) -> ResearchRun | None:
+        row = self.repo.conn.execute(
+            """SELECT r.*, c.ticker FROM research_runs r
+                 JOIN companies c ON c.cik = r.cik
+                WHERE r.user_id = ? AND r.cik = ?
+                ORDER BY r.created_at DESC, r.id DESC LIMIT 1""",
+            (self.user_id, company.cik),
+        ).fetchone()
+        return self._research_row(row)
+
+    def matching_research_run(self, company: Company, *, input_hash: str) -> ResearchRun | None:
+        row = self.repo.conn.execute(
+            """SELECT r.*, c.ticker FROM research_runs r
+                 JOIN companies c ON c.cik = r.cik
+                WHERE r.user_id = ? AND r.cik = ? AND r.input_hash = ?
+                  AND r.status IN ('queued', 'running', 'completed', 'partial')
+                ORDER BY r.created_at DESC, r.id DESC LIMIT 1""",
+            (self.user_id, company.cik, input_hash),
+        ).fetchone()
+        return self._research_row(row)
+
+    @staticmethod
+    def _research_row(row) -> ResearchRun | None:
+        if row is None:
+            return None
+        try:
+            return ResearchRun.model_validate(
+                {
+                    "run_id": row["id"],
+                    "ticker": row["ticker"],
+                    "cik": row["cik"],
+                    "status": row["status"],
+                    "input_hash": row["input_hash"],
+                    "report": json.loads(row["artifact_json"]) if row["artifact_json"] else None,
+                    "trace": json.loads(row["trace_json"]) if row["trace_json"] else None,
+                    "created_at": row["created_at"],
+                    "completed_at": row["completed_at"],
+                }
+            )
+        except (json.JSONDecodeError, TypeError, ValueError):
+            # Corrupt persisted state never crosses the product boundary as research.
+            return ResearchRun(
+                run_id=row["id"],
+                ticker=row["ticker"],
+                cik=row["cik"],
+                status="failed",
+                input_hash=row["input_hash"],
+                created_at=row["created_at"],
+                completed_at=row["completed_at"],
+            )
 
     def peers(self, company: Company, profile: CompanyProfile) -> list[Company]:
         known = {

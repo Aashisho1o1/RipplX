@@ -55,6 +55,7 @@ const research: CompanyResearch = {
   manual_peer_tickers: [],
   questions: ["What is the biggest verified downside right now?"],
   certificate_urls: ["/api/filings/a-1/certificate"],
+  deep_research: null,
   disclaimer: "Educational decision support only.",
 };
 
@@ -68,7 +69,8 @@ afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 describe("company decision brief", () => {
   it("combines impact, financial health, valuation, changes, and watch conditions", async () => {
     renderCompany();
-    expect(await screen.findByText(/Stock impact snapshot/)).toBeInTheDocument();
+    expect(await screen.findByText(/What deserves attention/)).toBeInTheDocument();
+    expect(screen.getByText(/Connected research/)).toBeInTheDocument();
     expect(screen.getByText(/Financial X-Ray/)).toBeInTheDocument();
     expect(await screen.findByText("18.2×")).toBeInTheDocument();
     expect(screen.getByText("21.4×")).toBeInTheDocument();
@@ -78,6 +80,83 @@ describe("company decision brief", () => {
     expect(screen.getByText("This may weaken future cash flows if it persists.")).toBeInTheDocument();
     expect(screen.getByText("Saved watch conditions")).toBeInTheDocument();
     expect(screen.getByDisplayValue("Revenue returns to growth.")).toBeInTheDocument();
+  });
+
+  it("renders compiler-passing connected research without a stock-direction vote", async () => {
+    const deep = {
+      ...research,
+      deep_research: {
+        run_id: "c".repeat(32),
+        ticker: "ACME",
+        cik: "0000000001",
+        status: "partial" as const,
+        input_hash: "d".repeat(64),
+        report: {
+          schema_version: "company_research.v1" as const,
+          ticker: "ACME",
+          cik: "0000000001",
+          as_of: "2026-08-01",
+          data_cutoff: "2026-08-03",
+          summary: "Verified evidence connects operating pressure with cash conversion.",
+          obligations: [
+            { obligation: "BUSINESS_ECONOMICS" as const, state: "mixed" as const },
+            { obligation: "IMPORTANT_CHANGES" as const, state: "supported" as const },
+            { obligation: "FINANCIAL_QUALITY_AND_DOWNSIDE" as const, state: "supported" as const },
+            { obligation: "VALUATION_CONTEXT" as const, state: "unavailable" as const },
+            { obligation: "PEER_CONTEXT" as const, state: "unavailable" as const },
+            { obligation: "SOURCE_COVERAGE" as const, state: "supported" as const },
+          ],
+          insights: [{
+            insight_id: "i1",
+            category: "change" as const,
+            headline: "A verified operating change affects cash conversion.",
+            evidence_summary: "The cited filing passage establishes the change.",
+            driver: "Operating pressure",
+            mechanism: "cash_conversion",
+            implication: "If the condition persists, cash generation may weaken.",
+            scenario: "downside" as const,
+            assumptions: ["The condition persists."],
+            limitations: ["Only filed SEC evidence was used."],
+            observation_ids: ["o_" + "e".repeat(16)],
+            evidence_status: "conditional_inference" as const,
+          }],
+          observations: [{
+            observation_id: "o_" + "e".repeat(16),
+            tool: "get_verified_changes",
+            evidence_label: "fact" as const,
+            text: "Revenue declined in the period.",
+            evidence: [evidence],
+            metric_ids: [],
+            as_of: "2026-08-01",
+            stable_hash: "e".repeat(64),
+          }],
+          valuation_context: null,
+          evidence_gaps: ["Enter a current price and date to add valuation context."],
+          disclaimer: research.disclaimer,
+        },
+        trace: {
+          schema_version: "company_research_trace.v1" as const,
+          tool_calls: [{ tool: "get_verified_changes", arguments_sha256: "f".repeat(64), result_sha256: "a".repeat(64), cached: false }],
+          obligation_transitions: [],
+          tool_budget_used: 1,
+          turn_budget_used: 2,
+          repair_used: false,
+          dropped_insights: {},
+          model: "test/model",
+          prompt_version: "Company_research.v1",
+          compiler_version: "company_research_compiler.v1",
+          terminal_reason: "submitted",
+        },
+        created_at: "2026-08-01T00:00:00Z",
+        completed_at: "2026-08-01T00:00:05Z",
+      },
+    };
+    renderCompany(vi.fn().mockResolvedValue(new Response(JSON.stringify(deep), { status: 200, headers: { "Content-Type": "application/json" } })));
+
+    expect(await screen.findByText("The evidence is connected")).toBeInTheDocument();
+    expect(screen.getByText("A verified operating change affects cash conversion.")).toBeInTheDocument();
+    expect(screen.getByText("If the condition persists, cash generation may weaken.")).toBeInTheDocument();
+    expect(screen.queryByText(/downside pressure/i)).not.toBeInTheDocument();
   });
 
   it("keeps a fail-closed demo valuation visible without refreshing ephemeral demo state", async () => {
@@ -90,6 +169,7 @@ describe("company decision brief", () => {
     fireEvent.click(screen.getByRole("button", { name: "Calculate scenarios" }));
 
     expect(await screen.findByText("Unavailable under these assumptions")).toBeInTheDocument();
+    expect(screen.getByText(/static demo keeps this optional model pass off/i)).toBeInTheDocument();
     expect(screen.getByText("Required SEC inputs are unreliable.")).toBeInTheDocument();
     expect(fetcher).toHaveBeenCalledTimes(2);
   });

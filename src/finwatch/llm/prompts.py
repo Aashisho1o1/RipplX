@@ -5,6 +5,7 @@ Prompts are DATA, not code (CLAUDE.md rule 7): stored verbatim under
 with every analysis. The P1/P2/P3 stage prompts embed the shared foundation block
 via a ``[FOUNDATION BLOCK]`` placeholder.
 """
+
 from __future__ import annotations
 
 import importlib.resources
@@ -14,10 +15,24 @@ _FOUNDATION_PLACEHOLDER = "[FOUNDATION BLOCK]"
 
 STAGE_P1 = "P1_extractor"
 STAGE_SKEPTIC = "P1_skeptic"
-_STAGE_VERSIONS = {STAGE_P1: "v12", STAGE_SKEPTIC: "v2"}
+STAGE_COMPANY_RESEARCH = "Company_research"
+STAGE_COMPANY_RESEARCH_SKEPTIC = "Company_research_skeptic"
+_STAGE_VERSIONS = {
+    STAGE_P1: "v12",
+    STAGE_SKEPTIC: "v2",
+    STAGE_COMPANY_RESEARCH: "v1",
+    STAGE_COMPANY_RESEARCH_SKEPTIC: "v1",
+}
 # Stage prompts MUST embed the shared foundation block (untrusted-input / prompt-injection
 # defense). ``foundation`` itself is not a stage and carries no placeholder.
-_STAGE_PROMPTS = frozenset({STAGE_P1, STAGE_SKEPTIC})
+_STAGE_PROMPTS = frozenset(
+    {
+        STAGE_P1,
+        STAGE_SKEPTIC,
+        STAGE_COMPANY_RESEARCH,
+        STAGE_COMPANY_RESEARCH_SKEPTIC,
+    }
+)
 
 
 def _read(name: str) -> str:

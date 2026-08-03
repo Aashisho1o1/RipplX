@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -22,10 +24,41 @@ ThesisKind = Literal["reason", "risk", "assumption", "kill_criterion", "next_evi
 ThesisStatus = Literal[
     "draft", "confirmed", "supported", "weakened", "broken", "unclear", "retired"
 ]
+ResearchStatus = Literal["queued", "running", "completed", "partial", "failed"]
+ResearchEvidenceLabel = Literal["fact", "calculation", "unavailable"]
+ResearchObligationId = Literal[
+    "BUSINESS_ECONOMICS",
+    "IMPORTANT_CHANGES",
+    "FINANCIAL_QUALITY_AND_DOWNSIDE",
+    "VALUATION_CONTEXT",
+    "PEER_CONTEXT",
+    "SOURCE_COVERAGE",
+]
+ResearchObligationState = Literal["supported", "mixed", "unavailable"]
+ResearchCategory = Literal[
+    "business",
+    "change",
+    "financial_quality",
+    "valuation",
+    "peer",
+]
+ResearchMechanism = Literal[
+    "revenue",
+    "margin",
+    "working_capital",
+    "cash_conversion",
+    "capital_spending",
+    "leverage",
+    "liquidity",
+    "dilution",
+    "discount_rate",
+    "uncertain",
+]
+ResearchScenario = Literal["downside", "upside", "mixed", "neutral"]
 
 
 class EvidenceRef(BaseModel):
-    kind: Literal["metric", "filing", "thesis", "promise"]
+    kind: Literal["metric", "filing", "thesis", "promise", "valuation"]
     reference_id: str = Field(min_length=1, max_length=128)
     accession: str | None = Field(default=None, max_length=32)
     section_key: str | None = Field(default=None, max_length=128)
@@ -33,6 +66,173 @@ class EvidenceRef(BaseModel):
     char_end: int | None = Field(default=None, ge=0)
     quote: str | None = Field(default=None, max_length=2_000)
     section_sha256: str | None = Field(default=None, min_length=64, max_length=64)
+
+
+def research_observation_hash(
+    *,
+    tool: str,
+    evidence_label: ResearchEvidenceLabel,
+    text: str,
+    evidence: list[EvidenceRef],
+    metric_ids: list[str],
+    as_of: str | None,
+) -> str:
+    """Return the content address for the exact persisted observation fields."""
+    payload = {
+        "tool": tool,
+        "evidence_label": evidence_label,
+        "text": text,
+        "evidence": [row.model_dump(mode="json") for row in evidence],
+        "metric_ids": metric_ids,
+        "as_of": as_of,
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(encoded.encode()).hexdigest()
+
+
+class ResearchObservation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    observation_id: str = Field(pattern=r"^o_[0-9a-f]{16}$")
+    tool: Literal[
+        "search_filing_sections",
+        "get_verified_changes",
+        "get_financial_context",
+        "get_valuation_context",
+        "get_peer_context",
+    ]
+    evidence_label: ResearchEvidenceLabel
+    text: str = Field(min_length=1, max_length=1_200)
+    evidence: list[EvidenceRef] = Field(default_factory=list, max_length=6)
+    metric_ids: list[str] = Field(default_factory=list, max_length=8)
+    as_of: str | None = Field(default=None, max_length=40)
+    stable_hash: str = Field(min_length=64, max_length=64)
+
+    @model_validator(mode="after")
+    def hash_matches_id(self) -> ResearchObservation:
+        expected = research_observation_hash(
+            tool=self.tool,
+            evidence_label=self.evidence_label,
+            text=self.text,
+            evidence=self.evidence,
+            metric_ids=self.metric_ids,
+            as_of=self.as_of,
+        )
+        if self.stable_hash != expected or self.observation_id != f"o_{expected[:16]}":
+            raise ValueError("observation content, ID, and stable hash must match")
+        return self
+
+
+class ResearchObligation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    obligation: ResearchObligationId
+    state: ResearchObligationState
+
+
+class ResearchInsight(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    insight_id: str = Field(pattern=r"^i[1-5]$")
+    category: ResearchCategory
+    headline: str = Field(min_length=1, max_length=180)
+    evidence_summary: str = Field(min_length=1, max_length=320)
+    driver: str = Field(min_length=1, max_length=180)
+    mechanism: ResearchMechanism
+    implication: str = Field(min_length=1, max_length=420)
+    scenario: ResearchScenario
+    assumptions: list[str] = Field(min_length=1, max_length=2)
+    limitations: list[str] = Field(min_length=1, max_length=2)
+    observation_ids: list[str] = Field(min_length=1, max_length=5)
+    evidence_status: Literal["conditional_inference"] = "conditional_inference"
+
+
+class CompanyResearchReport(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["company_research.v1"] = "company_research.v1"
+    ticker: str
+    cik: str
+    as_of: str
+    data_cutoff: str
+    summary: str = Field(min_length=1, max_length=600)
+    obligations: list[ResearchObligation] = Field(min_length=6, max_length=6)
+    insights: list[ResearchInsight] = Field(default_factory=list, max_length=5)
+    observations: list[ResearchObservation] = Field(default_factory=list, max_length=24)
+    valuation_context: ResearchObservation | None = None
+    evidence_gaps: list[str] = Field(default_factory=list, max_length=6)
+    disclaimer: str
+
+    @model_validator(mode="after")
+    def complete_and_unique(self) -> CompanyResearchReport:
+        if {row.obligation for row in self.obligations} != set(ResearchObligationId.__args__):
+            raise ValueError("research report must contain every obligation exactly once")
+        if len({row.obligation for row in self.obligations}) != len(self.obligations):
+            raise ValueError("research obligations must be unique")
+        if len({row.insight_id for row in self.insights}) != len(self.insights):
+            raise ValueError("research insight IDs must be unique")
+        if len({row.observation_id for row in self.observations}) != len(self.observations):
+            raise ValueError("research observation IDs must be unique")
+        known = {row.observation_id for row in self.observations}
+        if any(set(row.observation_ids) - known for row in self.insights):
+            raise ValueError("research insight references an unknown observation")
+        if self.valuation_context and self.valuation_context.observation_id not in known:
+            raise ValueError("valuation context must appear in the observation ledger")
+        return self
+
+
+class ResearchToolCall(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    tool: Literal[
+        "search_filing_sections",
+        "get_verified_changes",
+        "get_financial_context",
+        "get_valuation_context",
+        "get_peer_context",
+    ]
+    arguments_sha256: str = Field(min_length=64, max_length=64)
+    result_sha256: str = Field(min_length=64, max_length=64)
+    cached: bool
+
+
+class ResearchTrace(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["company_research_trace.v1"] = "company_research_trace.v1"
+    tool_calls: list[ResearchToolCall] = Field(default_factory=list, max_length=4)
+    obligation_transitions: list[ResearchObligation] = Field(min_length=6, max_length=6)
+    tool_budget_used: int = Field(ge=0, le=4)
+    turn_budget_used: int = Field(ge=0, le=6)
+    repair_used: bool
+    dropped_insights: dict[str, list[str]] = Field(default_factory=dict)
+    model: str
+    prompt_version: str
+    compiler_version: str
+    terminal_reason: str
+
+
+class ResearchRun(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    run_id: str = Field(pattern=r"^[0-9a-f]{32}$")
+    ticker: str
+    cik: str
+    status: ResearchStatus
+    input_hash: str = Field(min_length=64, max_length=64)
+    report: CompanyResearchReport | None = None
+    trace: ResearchTrace | None = None
+    created_at: str
+    completed_at: str | None = None
+
+    @model_validator(mode="after")
+    def artifact_matches_state(self) -> ResearchRun:
+        terminal = self.status in {"completed", "partial"}
+        if terminal != (self.report is not None and self.trace is not None):
+            raise ValueError("completed research requires one report and trace")
+        if not terminal and (self.report is not None or self.trace is not None):
+            raise ValueError("non-completed research cannot expose an artifact")
+        return self
 
 
 class RiskRadarResult(BaseModel):
@@ -150,9 +350,7 @@ class ValuationRun(BaseModel):
 class ChangeImpact(BaseModel):
     finding_id: str
     headline: str
-    driver: Literal[
-        "revenue", "earnings", "cash_flow", "balance_sheet", "per_share", "operations"
-    ]
+    driver: Literal["revenue", "earnings", "cash_flow", "balance_sheet", "per_share", "operations"]
     effect: Literal["upside", "downside", "mixed", "uncertain"]
     implication: str
     evidence: list[EvidenceRef] = Field(default_factory=list, max_length=3)
@@ -202,4 +400,5 @@ class BeforeYouBuyBrief(BaseModel):
     manual_peer_tickers: list[str] = Field(default_factory=list, max_length=6)
     questions: list[str] = Field(default_factory=list)
     certificate_urls: list[str] = Field(default_factory=list)
+    deep_research: ResearchRun | None = None
     disclaimer: str

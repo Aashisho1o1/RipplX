@@ -1,4 +1,4 @@
-"""Small single-worker job registry for sync and analysis operations."""
+"""Small single-worker job registry for sync, filing analysis, and company research."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 
 from finwatch.pipeline.progress import FAILURE_REASON_LABELS
 
-JobKind = Literal["sync", "analysis"]
+JobKind = Literal["sync", "analysis", "research"]
 JobState = Literal["queued", "running", "completed", "partial", "failed"]
 DEFAULT_MAX_JOB_HISTORY = 100
 LOCAL_JOB_OWNER = "local"
@@ -72,11 +72,8 @@ def _safe_message(
             if state == "completed"
             else "Filing sync could not be completed."
         )
-    return (
-        "Analysis completed."
-        if state == "completed"
-        else "Analysis could not be completed."
-    )
+    label = "Research" if kind == "research" else "Analysis"
+    return f"{label} completed." if state == "completed" else f"{label} could not be completed."
 
 
 class JobItem(BaseModel):
@@ -133,13 +130,14 @@ class JobRegistry:
         work: Callable[[str, JobRegistry], bool],
         *,
         owner_id: str = LOCAL_JOB_OWNER,
+        job_id: str | None = None,
     ) -> JobView:
         with self._lock:
             if any(job.state in {"queued", "running"} for job in self._jobs.values()):
-                raise JobConflictError("Another sync or analysis job is already running.")
+                raise JobConflictError("Another background job is already running.")
             self._prune_terminal_locked()
             job = JobView(
-                id=uuid.uuid4().hex,
+                id=job_id or uuid.uuid4().hex,
                 kind=kind,
                 state="queued",
                 created_at=datetime.now(UTC).isoformat(),
@@ -169,9 +167,7 @@ class JobRegistry:
                 "stage": stage,
                 "verdict": verdict,
                 "reason": reason,
-                "message": _safe_message(
-                    kind, state=state, stage=stage, reason=reason
-                ),
+                "message": _safe_message(kind, state=state, stage=stage, reason=reason),
                 "diagnostics": {},
             },
             deep=True,
@@ -204,14 +200,16 @@ class JobRegistry:
             job.error = (
                 "Filing sync could not be completed."
                 if job.kind == "sync"
-                else "Analysis could not be completed."
+                else (
+                    "Research could not be completed."
+                    if job.kind == "research"
+                    else "Analysis could not be completed."
+                )
             )
 
     def get(self, job_id: str, *, owner_id: str = LOCAL_JOB_OWNER) -> JobView | None:
         with self._lock:
             job = self._jobs.get(job_id)
             return (
-                job.model_copy(deep=True)
-                if job and self._owners.get(job_id) == owner_id
-                else None
+                job.model_copy(deep=True) if job and self._owners.get(job_id) == owner_id else None
             )

@@ -868,6 +868,114 @@ def create_app(
                 raise ApiProblem(404, "company_not_found", "Company not found.")
             return result
 
+    @app.post("/api/companies/{ticker}/research-runs", status_code=202)
+    def create_company_research_run(
+        request: Request,
+        ticker: str = PathParam(pattern=_TICKER_PATTERN, max_length=15),
+    ):
+        from finwatch.llm.router import LiteLLMClient
+        from finwatch.product.research import (
+            CompanyResearchHarness,
+            ResearchHarnessError,
+            research_input_hash,
+        )
+
+        principal = principal_for(request)
+        with repo_context() as repo:
+            settings = resolve_settings(repo, user_id=principal.user_id, remote=remote)
+            if not settings.model or not settings.api_key_configured:
+                raise ApiProblem(
+                    409, "analysis_not_configured", "Analysis is temporarily unavailable."
+                )
+            service = ProductService(repo, user_id=principal.user_id)
+            company = service._company(ticker)
+            if company is None:
+                raise ApiProblem(404, "company_not_found", "Company not found.")
+            filing = service._latest_supported(company)
+            if filing is None or filing.status != "verified":
+                raise ApiProblem(
+                    409,
+                    "research_not_ready",
+                    "A verified filing is required before deep research can run.",
+                )
+            input_hash = research_input_hash(service, company.ticker)
+            existing = service.store.matching_research_run(company, input_hash=input_hash)
+            # A malformed terminal artifact projects as failed and must not poison reuse.
+            if existing is not None and existing.status != "failed":
+                return existing
+            run_id = uuid.uuid4().hex
+            queued = service.store.begin_research_run(
+                company, run_id=run_id, input_hash=input_hash,
+                now=datetime.now(UTC).isoformat(),
+            )
+            model = settings.model
+            api_key = environment_api_key(model)
+            skeptic_model = _trimmed(os.environ.get("FINWATCH_SKEPTIC_MODEL")) or model
+
+        def work(research_run_id: str, _registry: JobRegistry) -> bool:
+            connection = operational_connection()
+            repo = Repo(connection)
+            scoped = ProductService(repo, user_id=principal.user_id)
+            try:
+                if not scoped.store.set_research_running(research_run_id):
+                    raise ResearchHarnessError("research_state_invalid")
+                generator = LiteLLMClient(model, api_key=api_key)
+                skeptic = (
+                    generator
+                    if skeptic_model == model
+                    else LiteLLMClient(
+                        skeptic_model, api_key=environment_api_key(skeptic_model)
+                    )
+                )
+                result = CompanyResearchHarness(scoped, generator, skeptic).run(
+                    company.ticker
+                )
+                if not scoped.store.finish_research_run(
+                    research_run_id,
+                    status=result.status,
+                    report_json=result.report.model_dump_json(),
+                    trace_json=result.trace.model_dump_json(),
+                    now=datetime.now(UTC).isoformat(),
+                ):
+                    raise ResearchHarnessError("research_state_invalid")
+                return result.status == "partial"
+            except Exception:  # noqa: BLE001 - no provider/exception text is persisted
+                scoped.store.fail_research_run(
+                    research_run_id, now=datetime.now(UTC).isoformat()
+                )
+                raise
+            finally:
+                connection.close()
+
+        try:
+            app.state.jobs.start(
+                "research", work, owner_id=principal.user_id, job_id=run_id
+            )
+        except JobConflictError as exc:
+            with repo_context() as repo:
+                ProductService(repo, user_id=principal.user_id).store.fail_research_run(
+                    run_id, now=datetime.now(UTC).isoformat()
+                )
+            raise ApiProblem(
+                409, "job_conflict", "Another background job is already running."
+            ) from exc
+        capture(principal, "deep_research_started", surface="company", state="queued")
+        return queued
+
+    @app.get("/api/research-runs/{run_id}")
+    def company_research_run(
+        request: Request,
+        run_id: str = PathParam(pattern=_JOB_ID_PATTERN, max_length=32),
+    ):
+        principal = principal_for(request)
+        with repo_context() as repo:
+            result = ProductService(
+                repo, user_id=principal.user_id
+            ).store.research_run(run_id)
+            if result is None:
+                raise ApiProblem(404, "research_run_not_found", "Research run not found.")
+            return result
+
     @app.get("/api/companies/{ticker}/risks")
     def company_risks(
         request: Request,

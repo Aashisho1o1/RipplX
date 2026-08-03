@@ -129,8 +129,8 @@ The UI never emits a trade action, price target, P3 posture, or shadow signal.
 - Verification proves provenance, exactness, schema, and hygiene. It does **not** prove that the
   model's interpretation of importance is correct, so the UI labels findings as AI-selected.
 - Product features compose only verified projection data: deterministic downside lenses, optional
-  confirmed thesis monitoring, attention events, bounded follow-up tools, and SIC-derived peer
-  candidates cannot override a compiler verdict.
+  confirmed thesis monitoring, attention events, the bounded company-research harness, bounded
+  follow-up tools, and SIC-derived peer candidates cannot override a compiler verdict.
 
 Prefer deterministic over stochastic · fewer/sharper findings over noisy coverage · explicit
 `not_applicable`/`unavailable` over guessing · withholding over plausible unsupported output.
@@ -157,6 +157,10 @@ SEC companyfacts ──► point-in-time XBRL normalization ──► six starte
 
 section catalog + metrics ──► bounded P1 JSON tool loop ──► compiler ──► one shared repair
                           ──► finance Skeptic ──► final compiler/per-finding prune
+
+verified filing + metrics + risk + saved valuation + peers
+        ──► bounded company-research tool loop ──► cited insight compiler
+        ──► one-directional Skeptic ──► per-insight prune ──► research_runs artifact
 
 surviving P1 + metrics + stored sections ──► deterministic publication gate
                                   ├─ V1 numeric provenance
@@ -252,8 +256,9 @@ selects an accession or falls through to older history within that form.
 ## 6. SQLite and stored data
 
 Authoritative DDL is the one fresh schema in `src/finwatch/db/schema.sql`; there is no migration
-ladder. Schema v7 is a clean backup-and-reset boundary for attempt-linked `harness.v2` traces,
-`certificate.v2`, and private product state; no v1 compatibility fallback exists. It stores users,
+ladder. Schema v8 is a clean backup-and-reset boundary for attempt-linked `harness.v2` traces,
+`certificate.v2`, private product state, and owner-scoped `company_research.v1` artifacts; no v1
+compatibility fallback exists. It stores users,
 private company membership/profiles/theses/events/valuations/delivery records, billing identifiers,
 and reserved encrypted-broker state. A reserved local user preserves CLI/local
 behavior. Issuers, filings, SEC facts, analyses, computations, and verification remain shared
@@ -380,6 +385,16 @@ to a specific finding, but never author, approve, or promote a finding. Once a c
 baseline exists, optional Skeptic/repair protocol or budget failure preserves clean findings and
 drops only findings carrying validated objections; provider failure remains a whole-run failure.
 Output is capped at 2,000 tokens per call.
+
+The company-research harness is a separate downstream pass over already-verified product data. It
+has six fixed obligations, at most six model turns and four read-only tool requests, immutable
+content-addressed observations, one shared compiler repair, and one final one-directional Skeptic.
+Its compiler drops invalid insights individually, requires an entered price for valuation prose,
+labels every implication as a conditional inference, and records the report data cutoff. It has no
+web search, arbitrary URLs, market-data
+provider, transcript/news ingestion, subagents, or generic plugin dispatch. The immediate GET brief
+still works without it; POST creates or reuses one owner-scoped `research_runs` artifact and the
+existing single worker executes it.
 
 Production accepts one `FINWATCH_MODEL` using the `openai/`, `openrouter/`, or `z-ai/` prefix, with an
 optional `FINWATCH_SKEPTIC_MODEL` on the same provider (otherwise it reuses the Generator), and the

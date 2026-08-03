@@ -327,6 +327,41 @@ def test_analysis_captures_operator_key_before_enqueue(tmp_path, monkeypatch):
     assert captured["owner_id"] == "local"
 
 
+def test_deep_research_run_is_persisted_polled_and_reused(tmp_path, monkeypatch):
+    monkeypatch.setenv("FINWATCH_MODEL", "openai/test")
+    monkeypatch.setenv("OPENAI_API_KEY", "operator-key")
+    db_path = tmp_path / "finwatch.db"
+    build_demo_db(str(db_path)).close()
+    app = create_app(db_path=str(db_path), web_dist=tmp_path / "missing-dist")
+    client = TestClient(app, headers=LOCAL_BROWSER_HEADERS)
+    starts = []
+
+    def fake_start(kind, work, *, owner_id, job_id=None):
+        starts.append((kind, owner_id, job_id, inspect.getclosurevars(work).nonlocals))
+        return {
+            "id": job_id,
+            "kind": kind,
+            "state": "queued",
+            "created_at": "now",
+            "items": [],
+            "error": None,
+        }
+
+    app.state.jobs.start = fake_start
+    first = client.post("/api/companies/MSFT/research-runs")
+    second = client.post("/api/companies/MSFT/research-runs")
+
+    assert first.status_code == second.status_code == 202
+    assert first.json() == second.json()
+    assert first.json()["status"] == "queued"
+    assert starts[0][0:3] == ("research", "local", first.json()["run_id"])
+    assert starts[0][3]["api_key"] == "operator-key"
+    assert len(starts) == 1
+    polled = client.get(f"/api/research-runs/{first.json()['run_id']}")
+    assert polled.status_code == 200
+    assert polled.json() == first.json()
+
+
 def test_jobs_reject_untracked_ticker_before_occupying_worker(tmp_path, monkeypatch):
     monkeypatch.setenv("SEC_USER_AGENT", "Test User test@example.com")
     monkeypatch.setenv("FINWATCH_MODEL", "openai/test")
@@ -457,9 +492,12 @@ def test_add_resolves_issuer_identity_instead_of_trusting_a_stale_ticker_row(
     a bulk import would hit routinely. It must fail closed instead.
     """
     client, db_path = _client(tmp_path)
-    assert client.put(
-        "/api/settings", json={"sec_user_agent": "Test User test@example.com"}
-    ).status_code == 200
+    assert (
+        client.put(
+            "/api/settings", json={"sec_user_agent": "Test User test@example.com"}
+        ).status_code
+        == 200
+    )
 
     # MSFT is on file for a stale CIK; the current SEC index says 0000000789019.
     conn = init_db(str(db_path))

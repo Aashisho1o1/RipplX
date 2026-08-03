@@ -149,10 +149,13 @@ PresentationService BriefView/FilingDetailView
           └─► owner-scoped frozen certificate.v2
 
 ProductService composes that verified projection into a Before You Buy Brief, a combined Financial
-X-Ray, a deterministic Stock Impact Snapshot, transparent `reverse_dcf.v2` scenarios and valuation
-ratios, saved watch conditions, peer candidates, and attention events. It cannot promote or rewrite
-a filing finding. The question harness may select only server-issued observations from bounded
-tools; the final answer is rendered deterministically.
+X-Ray, transparent `reverse_dcf.v2` scenarios and valuation ratios, saved watch conditions, peer
+candidates, and attention events. A downstream company-research harness may connect those sources
+through five bounded read-only tools. Its content-addressed observations feed a separate compiler;
+unsupported insights are pruned individually and its one-directional Skeptic can only object. The
+old Stock Impact directional vote is not an authoritative UI conclusion. Neither harness can
+promote or rewrite a filing finding. The existing question harness remains unchanged and may select
+only server-issued observations from bounded tools; its final answer is rendered deterministically.
 ```
 
 No user-visible content path reads P2, P3, signal logs, dormant claim graphs, extended metrics, or
@@ -313,8 +316,9 @@ The deployment model is one process/container, one SQLite file, and one in-proce
 - `create_app()` synchronously installs or verifies the exact file-backed schema once. Requests and
   jobs call `connect()`, never schema installation. Demo databases are separate.
 - Operational connections enable foreign keys, WAL, and a 5-second busy timeout.
-- Schema v7 adds private profiles/theses, risk snapshots, attention events, promises, valuation
-  runs, notification dedupe, billing identifiers, and reserved encrypted-broker state. A reserved
+- Schema v8 adds private profiles/theses, risk snapshots, attention events, promises, valuation
+  runs, owner-scoped research runs, notification dedupe, billing identifiers, and reserved
+  encrypted-broker state. A reserved
   local user preserves auth-free CLI/local behavior. Issuer identity, filings, facts, analyses,
   metrics, and verification remain shared public-data artifacts.
 - XBRL replacement, filing-section/FTS replacement, computation batches, and verification-report
@@ -324,7 +328,7 @@ The deployment model is one process/container, one SQLite file, and one in-proce
 - Jobs are owner-tagged process-memory state and disappear on restart. There is no durable queue,
   leasing, distributed worker, or multi-instance consistency claim.
 
-There is no migration ladder. Schema v7 rejects an older database with a backup-and-reset message;
+There is no migration ladder. Schema v8 rejects an older database with a backup-and-reset message;
 v1 traces and certificates are not adapted, and Git history is the compatibility archive.
 
 ---

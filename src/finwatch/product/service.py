@@ -1069,6 +1069,7 @@ class ProductService:
             ],
             questions=questions[:8],
             certificate_urls=certificates,
+            deep_research=self.store.latest_research_run(company),
             disclaimer=DISCLAIMER,
         )
 

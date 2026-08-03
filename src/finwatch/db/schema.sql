@@ -1,4 +1,4 @@
--- finwatch lean schema (v7). One product path: research a ticker → analyze the newest
+-- finwatch lean schema (v8). One product path: research a ticker → analyze the newest
 -- filing → six deterministic metrics → verified, canonical presentation. Installed
 -- once on a fresh database by db/database.py::init_db, which stamps application_id +
 -- user_version and refuses to open a database created by an older schema.
@@ -173,6 +173,22 @@ CREATE TABLE valuation_runs (
   created_at TEXT NOT NULL
 );
 CREATE INDEX ix_valuation_user_cik ON valuation_runs(user_id, cik, created_at DESC);
+
+CREATE TABLE research_runs (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  cik TEXT NOT NULL REFERENCES companies(cik) ON DELETE CASCADE,
+  status TEXT NOT NULL,                    -- queued|running|completed|partial|failed
+  input_hash TEXT NOT NULL,
+  artifact_json TEXT,
+  trace_json TEXT,
+  created_at TEXT NOT NULL,
+  completed_at TEXT
+);
+CREATE INDEX ix_research_user_cik_created
+  ON research_runs(user_id, cik, created_at DESC);
+CREATE INDEX ix_research_user_input
+  ON research_runs(user_id, cik, input_hash, created_at DESC);
 
 CREATE TABLE notification_deliveries (
   delivery_key TEXT PRIMARY KEY,

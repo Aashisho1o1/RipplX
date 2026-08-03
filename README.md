@@ -219,8 +219,9 @@ Required remote controls:
 The operator key stays in process environment memory. The API reports only whether analysis is
 configured, never the credential itself, and the browser never displays a provider-key field.
 
-Schema v7 is a clean prototype break, not a migration. It retains attempt-linked `harness.v2` and
-frozen `certificate.v2` semantics and adds private research/monitoring product state. Before upgrading an existing Railway volume,
+Schema v8 is a clean prototype break, not a migration. It retains attempt-linked `harness.v2` and
+frozen `certificate.v2` semantics and adds private research/monitoring state plus owner-scoped
+`company_research.v1` reports. Before upgrading an existing Railway volume,
 back up `/data`, stop the old deployment, recreate the database/volume, and deploy. Old schemas fail
 with an explicit backup-and-reset error. `.env` files are excluded from both Git and the Docker build
 context; keep a local copy mode-restricted (for example `chmod 600 .env`).
