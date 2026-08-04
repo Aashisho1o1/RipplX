@@ -36,8 +36,8 @@ def test_every_drop_code_has_a_user_facing_label():
     block = source.split("export const DROP_CODE_LABEL", 1)[1].split("};", 1)[0]
     labelled = set(re.findall(r"^\s*([A-Z][A-Z0-9_]*):", block, re.MULTILINE))
 
-    # The compiler and harness currently emit 17 finding-level codes. Keep the
+    # The compiler and harness currently emit 16 finding-level codes. Keep the
     # count explicit so a new public certificate code requires a deliberate UI
     # label review, rather than silently reaching users as an opaque enum.
-    assert len(emitted) == 17
+    assert len(emitted) == 16
     assert emitted <= labelled

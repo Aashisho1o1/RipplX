@@ -403,7 +403,7 @@ def check_v5_hygiene(bundle: VerifyBundle) -> list[CheckResult]:
                                detail="trade_action must be null in default mode"))
     # Model-reported confidence and free-text gaps are not deterministic facts.
     # The harness routes concrete gaps to FORM_SCOPE/CRITICAL_COVERAGE or a finding ID;
-    # the Skeptic may emit finding-local LOW_CONFIDENCE, which is pruned before V5.
+    # the Skeptic may emit a concrete finding-local objection, which is pruned before V5.
     if bundle.disclaimer_text is not None and bundle.disclaimer_text != DISCLAIMER:
         out.append(CheckResult(check_id="V5", verdict="fail",
                                severity="blocking", detail="disclaimer not verbatim"))

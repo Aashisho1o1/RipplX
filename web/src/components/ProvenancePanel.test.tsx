@@ -9,7 +9,7 @@ const research: ResearchTrace = {
   tool_call_count: 1,
   tool_names: ["search_sections"],
   repair_used: false,
-  dropped_findings: [{ finding_id: "f1", error_codes: ["LOW_CONFIDENCE"] }],
+  dropped_findings: [{ finding_id: "f1", error_codes: ["MATERIALITY_OVERREACH"] }],
 };
 
 const pipeline: PipelineStage[] = [
@@ -50,7 +50,7 @@ describe("ProvenancePanel", () => {
     render(<ProvenancePanel research={research} certificateUrl="/api/filings/a-1/certificate" pipeline={pipeline} terminalReasonLabel="A deterministic publication check failed" />);
 
     expect(fetch).not.toHaveBeenCalled();
-    expect(screen.getByText("LOW_CONFIDENCE")).toHaveAttribute("title", "The reviewer could not support the claim with enough confidence.");
+    expect(screen.getByText("MATERIALITY_OVERREACH")).toHaveAttribute("title", "The claim overstated what the evidence established.");
     fireEvent.click(screen.getByRole("button", { name: "Inspect certificate details" }));
 
     await waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));

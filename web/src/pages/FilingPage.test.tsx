@@ -113,7 +113,7 @@ describe("filing trust surface", () => {
     renderDetail(value);
     expect(await screen.findByText("1 finding published, 1 finding removed by the evidence gate")).toBeInTheDocument();
     expect(screen.getByLabelText("Publication outcome").querySelector(".outcome-glyph")).toHaveTextContent("✓");
-    expect(outcomeHeadline("partial", 2, 1)).toBe("2 findings published, 1 finding removed by the evidence gate");
+    expect(outcomeHeadline("partial", 2, 1, undefined, "verified")).toBe("2 findings published, 1 finding removed by the evidence gate");
   });
 
   it("presents a filing that proposed nothing as routine, not as a gate rejection", async () => {
@@ -149,6 +149,19 @@ describe("filing trust surface", () => {
     const banner = screen.getByLabelText("Publication outcome");
     expect(banner.querySelector(".outcome-glyph")).toHaveTextContent("!");
     expect(banner.className).not.toContain("routine");
+  });
+
+  it("does not call an exhausted qualitative run a routine review", async () => {
+    const value = detail("metrics_only");
+    value.filing.outcome = "no_findings";
+    value.filing.findings = [];
+    value.research!.terminal_reason = "budget_exhausted";
+    renderDetail(value);
+
+    expect(await screen.findByText("Verified numbers published; qualitative review incomplete")).toBeInTheDocument();
+    expect(screen.queryByText("Reviewed — nothing material; verified numbers published")).toBeNull();
+    expect(screen.getAllByText("The research budget was exhausted")).toHaveLength(2);
+    expect(screen.queryByText(/legitimate routine result/)).toBeNull();
   });
 
   it("never renders withheld findings or an affirmative evidence badge", async () => {

@@ -54,12 +54,14 @@ export function isRoutineReview(
   outcome: NonNullable<FilingDetail["research"]>["outcome"],
   filingOutcome?: FilingOutcome,
   droppedCount = 0,
+  terminalReason?: string,
 ): boolean {
-  return outcome === "metrics_only" && filingOutcome === "no_findings" && droppedCount === 0;
+  return outcome === "metrics_only" && filingOutcome === "no_findings" && droppedCount === 0 && terminalReason === "verified";
 }
 
-export function outcomeHeadline(outcome: NonNullable<FilingDetail["research"]>["outcome"], publishedCount: number, droppedCount: number, filingOutcome?: FilingOutcome): string {
-  if (isRoutineReview(outcome, filingOutcome, droppedCount)) return "Reviewed — nothing material; verified numbers published";
+export function outcomeHeadline(outcome: NonNullable<FilingDetail["research"]>["outcome"], publishedCount: number, droppedCount: number, filingOutcome?: FilingOutcome, terminalReason?: string): string {
+  if (isRoutineReview(outcome, filingOutcome, droppedCount, terminalReason)) return "Reviewed — nothing material; verified numbers published";
+  if (outcome === "metrics_only" && terminalReason && terminalReason !== "verified") return "Verified numbers published; qualitative review incomplete";
   if (outcome !== "partial" || droppedCount === 0) return researchOutcomeLabel(outcome);
   const published = `${publishedCount} ${publishedCount === 1 ? "finding" : "findings"} published`;
   const removed = `${droppedCount} ${droppedCount === 1 ? "finding" : "findings"} removed by the evidence gate`;
@@ -89,7 +91,7 @@ export function FilingPage() {
   const filingUrl = trustedSecUrl(filing.edgar_url);
   const reasonLabel = research ? terminalReasonLabel(research.terminal_reason) : "Analysis has not completed";
   const routineReview = research
-    ? isRoutineReview(research.outcome, filing.outcome, research.dropped_findings.length)
+    ? isRoutineReview(research.outcome, filing.outcome, research.dropped_findings.length, research.terminal_reason)
     : false;
   const sectionValue = detail.pipeline.find(stage => stage.stage === "parse")?.diagnostics.sections_found;
   const parsedSections = Array.isArray(sectionValue) ? sectionValue.map(String) : [];
@@ -104,7 +106,7 @@ export function FilingPage() {
 
     {research && <section className={`outcome-banner ${routineReview ? "routine" : research.outcome}`} aria-label="Publication outcome">
       <span className="outcome-glyph" aria-hidden="true">{VERIFIED_OUTCOMES.has(research.outcome) || routineReview ? "✓" : "!"}</span>
-      <div><p>{outcomeHeadline(research.outcome, filing.findings.length, research.dropped_findings.length, filing.outcome)}</p><small>{reasonLabel}</small></div>
+      <div><p>{outcomeHeadline(research.outcome, filing.findings.length, research.dropped_findings.length, filing.outcome, research.terminal_reason)}</p><small>{reasonLabel}</small></div>
     </section>}
     {!research && withheldReason && <section className={`outcome-banner ${pipelineFailed ? "not-analyzed" : "withheld"}`}><span className="outcome-glyph" aria-hidden="true">!</span><div><p>{pipelineFailed ? "Analysis did not complete" : "Analysis held back"}</p><small>{withheldReason}</small></div></section>}
 
@@ -113,7 +115,7 @@ export function FilingPage() {
     <section className="section reading-section" aria-labelledby="changes-heading">
       <header className="reading-heading"><div><p className="section-kicker">AI-selected interpretation</p><h2 id="changes-heading">What changed</h2></div>{!withheld && filing.findings.length > 0 && <span className="verified-label"><i aria-hidden="true" /> Exact evidence checked</span>}</header>
       <p className="metric-caption">The model selects significance and publishes at most three findings per filing. Deterministic checks prove that every displayed quotation matches the filing.</p>
-      {withheld ? <div className="withheld-copy"><strong>No model-authored finding is shown.</strong><p>{withheldReason ?? (pipelineFailed ? "The pipeline stopped before this filing was published." : "This attempt did not clear the publication gate.")}</p></div> : filing.findings.length ? <FindingList findings={filing.findings} /> : filing.outcome === "findings_dropped" ? <p className="empty-line">{filing.dropped_finding_count === 1 ? "1 proposed change was" : `${filing.dropped_finding_count} proposed changes were`} removed by the evidence gate. The verified numbers below are unaffected.</p> : <p className="empty-line">No evidence-backed changes were selected. This is a legitimate routine result.</p>}
+      {withheld ? <div className="withheld-copy"><strong>No model-authored finding is shown.</strong><p>{withheldReason ?? (pipelineFailed ? "The pipeline stopped before this filing was published." : "This attempt did not clear the publication gate.")}</p></div> : filing.findings.length ? <FindingList findings={filing.findings} /> : filing.outcome === "findings_dropped" ? <p className="empty-line">{filing.dropped_finding_count === 1 ? "1 proposed change was" : `${filing.dropped_finding_count} proposed changes were`} removed by the evidence gate. The verified numbers below are unaffected.</p> : <p className="empty-line">{routineReview ? "No evidence-backed changes were selected. This is a legitimate routine result." : "Qualitative review ended before a complete conclusion. The verified numbers below remain available."}</p>}
     </section>
 
     <section className="section reading-section" aria-labelledby="numbers-heading">

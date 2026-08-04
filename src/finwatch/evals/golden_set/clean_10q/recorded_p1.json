@@ -3,7 +3,22 @@
   "ticker": "AAPL",
   "form_type": "10-Q",
   "classification": {"overall_severity": "routine"},
-  "findings": [],
+  "findings": [{
+    "finding_id": "f1",
+    "headline": "Services drove quarterly sales growth",
+    "severity": "low",
+    "critical_flag": null,
+    "metric_id": null,
+    "direction": null,
+    "evidence": [{
+      "accession_number": "0000320193-24-000081",
+      "form_type": "10-Q",
+      "section_key": "mdna",
+      "char_start": 0,
+      "char_end": 58,
+      "snippet": "Net sales increased during the quarter driven by services."
+    }]
+  }],
   "extraction_confidence": "high",
   "gaps": []
 }

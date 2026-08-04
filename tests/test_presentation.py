@@ -20,12 +20,12 @@ def test_demo_projection_preserves_digest_order_and_trust_data():
     assert "Going concern" in view.answer
     assert view.period.filings_in_window == 5
     assert view.period.analyzed_filings == 5
-    assert [item.ticker for item in view.filings] == ["DPLS", "MSFT", "TWKS"]
+    assert [item.ticker for item in view.filings] == ["AAPL", "DPLS", "MSFT", "TWKS"]
     assert view.filings[0].findings[0].evidence[0].quote
     assert all(len(item.findings) <= 3 for item in view.filings)
     assert [row.ticker for row in view.verified_numbers] == ["AAPL", "DPLS", "MSFT", "TWKS"]
     assert [(entry.ticker, entry.form) for entry in view.reviewed_filings] == [
-        ("AAPL", "8-K"), ("AAPL", "10-Q")
+        ("AAPL", "8-K")
     ]
     assert view.period.published_filings == 5
     assert view.period.filings_tracked_total == 5
@@ -35,7 +35,7 @@ def test_gate_removed_findings_are_not_reported_as_nothing_changed():
     conn = build_demo_db()
     try:
         repo = Repo(conn)
-        trace = repo.latest_analysis("0000320193-24-000081", "P1_TRACE")
+        trace = repo.latest_analysis("0000320193-26-000011", "P1_TRACE")
         assert trace is not None and trace.id is not None
         payload = json.loads(trace.output_json)
         payload["dropped_findings"] = [
@@ -49,7 +49,7 @@ def test_gate_removed_findings_are_not_reported_as_nothing_changed():
 
         brief = PresentationService(repo).brief(since=DEMO_SINCE)
         assert [row.accession for row in brief.gate_removed_filings] == [
-            "0000320193-24-000081"
+            "0000320193-26-000011"
         ]
         entry = brief.gate_removed_filings[0]
         assert entry.dropped_finding_count == 1
@@ -101,7 +101,6 @@ def test_routine_filings_publish_as_linkable_reviewed_entries():
         view = PresentationService(Repo(conn)).brief(since=DEMO_SINCE)
         assert [(entry.ticker, entry.form) for entry in view.reviewed_filings] == [
             ("AAPL", "8-K"),
-            ("AAPL", "10-Q"),
         ]
         assert all(not entry.findings and not entry.withheld for entry in view.reviewed_filings)
         assert all(

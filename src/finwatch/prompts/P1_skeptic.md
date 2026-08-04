@@ -17,9 +17,11 @@ Send each tool's arguments with exactly these fields and no others:
 Do not add accession_number, ticker, form_type, or singular query/section_key/metric_id keys; they are rejected and the turn is wasted.
 
 Done action:
-{"action":"done","obligations":[{"finding_id":"f1|f2|f3","code":"HYPOTHETICAL_AS_ACTUAL|TEMPORAL_MISMATCH|ENTITY_MISMATCH|MATERIALITY_OVERREACH|METRIC_CONTRADICTION|MISSING_CHANGE_BASIS|LOW_CONFIDENCE"}]}
+{"action":"done","obligations":[{"finding_id":"f1|f2|f3","code":"HYPOTHETICAL_AS_ACTUAL|TEMPORAL_MISMATCH|ENTITY_MISMATCH|MATERIALITY_OVERREACH|METRIC_CONTRADICTION|MISSING_CHANGE_BASIS"}]}
 
-Add an obligation only when a specific surviving finding has a concrete problem.
+Add an obligation only when a specific surviving finding has a concrete, named defect.
+General uncertainty or low confidence is not a veto when exact evidence and the
+conditional wording support the finding.
 An empty obligations list means you found no additional objection; it does not stamp
 the draft verified. The deterministic compiler remains the sole verifier.
 </system>

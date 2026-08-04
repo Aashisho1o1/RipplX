@@ -80,7 +80,7 @@ describe("company decision brief", () => {
     expect(screen.getByText("4.7%")).toBeInTheDocument();
     expect(screen.getByText("-30.0% vs price")).toBeInTheDocument();
     expect(screen.getByText("Change → driver → conditional implication")).toBeInTheDocument();
-    expect(screen.getByText("This may weaken future cash flows if it persists.")).toBeInTheDocument();
+    expect(screen.getAllByText("This may weaken future cash flows if it persists.")).toHaveLength(2);
     expect(screen.getByText("Saved watch conditions")).toBeInTheDocument();
     expect(screen.getByDisplayValue("Revenue returns to growth.")).toBeInTheDocument();
   });
@@ -97,10 +97,57 @@ describe("company decision brief", () => {
     renderCompany(vi.fn().mockResolvedValue(new Response(JSON.stringify(failed), { status: 200, headers: { "Content-Type": "application/json" } })));
 
     expect(await screen.findByText("Verified filing connection")).toBeInTheDocument();
-    expect(screen.getByText("Revenue declined from the prior period.")).toBeInTheDocument();
-    expect(screen.getByText("This may weaken future cash flows if it persists.")).toBeInTheDocument();
+    expect(screen.getAllByText("Revenue declined from the prior period.")).toHaveLength(2);
+    expect(screen.getAllByText("This may weaken future cash flows if it persists.")).toHaveLength(2);
     expect(screen.getByText(/Optional deeper synthesis did not finish/)).toBeInTheDocument();
     expect(screen.queryByText("Deep research did not complete")).not.toBeInTheDocument();
+  });
+
+  it("uses collected evidence and prioritizes risks when every drafted insight is withheld", async () => {
+    const emptyDeep = {
+      ...research,
+      impact: { ...research.impact, changes: [] },
+      risks: [
+        { ...research.risks[0], status: "watch" as const, explanation: "Revenue and cash flow need review." },
+        { ...research.risks[0], lens: "leverage", status: "stable" as const, reason_codes: ["LEVERAGE_MANAGEABLE"], explanation: "Leverage is within the stable range." },
+        { ...research.risks[0], lens: "concentration", status: "unavailable" as const, reason_codes: ["CONCENTRATION_NOT_STRUCTURED"], explanation: "Concentration is not yet structured." },
+      ],
+      deep_research: {
+        run_id: "6".repeat(32), ticker: "ACME", cik: research.cik, status: "partial" as const,
+        input_hash: "7".repeat(64),
+        report: {
+          schema_version: "company_research.v1" as const, ticker: "ACME", cik: research.cik,
+          as_of: "2026-08-01", data_cutoff: "2026-08-03",
+          summary: "No qualitative insight passed the deterministic research compiler.",
+          obligations: [], insights: [],
+          observations: [{
+            observation_id: "o_" + "8".repeat(16), tool: "get_financial_context",
+            evidence_label: "calculation" as const, text: "Revenue Growth: -8.0%.",
+            evidence: [{ ...evidence, kind: "metric" as const, reference_id: "computation:1:revenue_growth", accession: null, section_key: null, char_start: null, char_end: null, quote: null, section_sha256: null }],
+            metric_ids: ["revenue_growth"], as_of: "2026-08-01", stable_hash: "8".repeat(64),
+          }],
+          valuation_context: null, evidence_gaps: [], disclaimer: research.disclaimer,
+        },
+        trace: {
+          schema_version: "company_research_trace.v1" as const, tool_calls: [], obligation_transitions: [],
+          tool_budget_used: 1, turn_budget_used: 3, repair_used: true,
+          dropped_insights: { i1: ["UNSAFE_AUTHORED_TEXT"] }, model: "test/model",
+          prompt_version: "Company_research.v1", compiler_version: "company_research_compiler.v1",
+          terminal_reason: "submitted",
+        },
+        created_at: "2026-08-03T00:00:00Z", completed_at: "2026-08-03T00:00:05Z",
+      },
+    };
+    renderCompany(vi.fn().mockResolvedValue(new Response(JSON.stringify(emptyDeep), { status: 200, headers: { "Content-Type": "application/json" } })));
+
+    expect(await screen.findAllByText("Revenue and cash flow need review.")).toHaveLength(2);
+    expect(screen.getByText("Verified evidence collected")).toBeInTheDocument();
+    expect(screen.getByText("Revenue Growth: -8.0%.")).toBeVisible();
+    expect(screen.getByText("1 needs review")).toBeInTheDocument();
+    expect(screen.getByText(/Stable and unavailable checks/)).toBeInTheDocument();
+    expect(screen.queryByText("The evidence is connected")).not.toBeInTheDocument();
+    expect(screen.queryByText(/No qualitative insight passed/)).not.toBeInTheDocument();
+    expect(screen.queryByText("REVENUE_DOWN")).not.toBeInTheDocument();
   });
 
   it("renders compiler-passing connected research without a stock-direction vote", async () => {
@@ -174,9 +221,8 @@ describe("company decision brief", () => {
     };
     renderCompany(vi.fn().mockResolvedValue(new Response(JSON.stringify(deep), { status: 200, headers: { "Content-Type": "application/json" } })));
 
-    expect(await screen.findByText("The evidence is connected")).toBeInTheDocument();
-    expect(screen.getByText("A verified operating change affects cash conversion.")).toBeInTheDocument();
-    expect(screen.getByText("If the condition persists, cash generation may weaken.")).toBeInTheDocument();
+    expect(await screen.findAllByText("A verified operating change affects cash conversion.")).toHaveLength(2);
+    expect(screen.getAllByText("If the condition persists, cash generation may weaken.")).toHaveLength(2);
     expect(screen.queryByText(/downside pressure/i)).not.toBeInTheDocument();
   });
 

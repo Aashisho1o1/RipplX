@@ -172,7 +172,6 @@ class SkepticObjection(BaseModel):
         "MATERIALITY_OVERREACH",
         "METRIC_CONTRADICTION",
         "MISSING_CHANGE_BASIS",
-        "LOW_CONFIDENCE",
     ]
 
 
@@ -851,7 +850,7 @@ class CompanyResearchHarness:
                 "saved valuation context, and comparable-company context."
             )
         if not accepted:
-            summary = "No qualitative insight passed the deterministic research compiler."
+            summary = "No additional research insight met the evidence standard."
         gaps = [self._gap(row.obligation) for row in obligations if row.state == "unavailable"]
         valuation_context = next(
             (
@@ -1034,6 +1033,6 @@ class CompanyResearchHarness:
                 ),
                 "summary": report.summary
                 if surviving
-                else "No qualitative insight passed the deterministic research compiler.",
+                else "No additional research insight met the evidence standard.",
             }
         )

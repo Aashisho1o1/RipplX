@@ -331,6 +331,7 @@ def test_repeated_malformed_actions_publish_a_deterministic_partial_report():
 
     assert result.status == "partial"
     assert result.report.insights == []
+    assert result.report.summary == "No additional research insight met the evidence standard."
     assert result.trace.terminal_reason == "malformed_action_breakdown"
     assert result.trace.turn_budget_used == 2
 

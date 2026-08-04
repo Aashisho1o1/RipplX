@@ -28,8 +28,39 @@ _CHANGE_SECTIONS = frozenset({
 _SKEPTIC_CODES = Literal[
     "HYPOTHETICAL_AS_ACTUAL", "TEMPORAL_MISMATCH", "ENTITY_MISMATCH",
     "MATERIALITY_OVERREACH", "METRIC_CONTRADICTION", "MISSING_CHANGE_BASIS",
-    "LOW_CONFIDENCE",
 ]
+
+_CHANGE_SECTION_PRIORITY = {
+    "mdna": 30,
+    "risk_factor_changes": 28,
+    "notes": 24,
+    "business": 20,
+    "risk_factors": 18,
+    "controls": 16,
+    "auditor_report": 16,
+    "legal": 12,
+    "market_risk": 10,
+    "financials": 8,
+}
+_CHANGE_TERMS = (
+    "liquidity", "debt", "borrow", "refinanc", "covenant", "dilut", "shares",
+    "revenue", "sales", "margin", "cash flow", "working capital", "inventory",
+    "receivable", "customer", "supplier", "concentration", "guidance", "outlook",
+    "impairment", "restructur", "acquisition", "accounting polic", "material weakness",
+    "going concern", "auditor", "restatement",
+)
+
+
+def _change_score(row: dict) -> float:
+    """Rank deterministic diff spans for investor usefulness, never truth."""
+    text = str(row.get("snippet", "")).casefold()
+    score = float(_CHANGE_SECTION_PRIORITY.get(str(row.get("section_key", "")), 0))
+    score += 24 if row.get("kind") == "modified" else 18 if row.get("kind") == "added" else -30
+    score += min(40, sum(term in text for term in _CHANGE_TERMS) * 8)
+    similarity = row.get("similarity")
+    if isinstance(similarity, (int, float)):
+        score += max(0.0, 1.0 - float(similarity)) * 12
+    return score + min(len(text), 600) / 100
 
 
 class SearchSectionsArgs(BaseModel):
@@ -515,8 +546,9 @@ class ToolContext:
 
     @property
     def has_prior_comparable(self) -> bool:
-        explicit = self.filing_meta.get("has_prior_comparable")
-        return bool(self.prior_sections) if explicit is None else bool(explicit)
+        # A filing row is not a usable comparison. Only parsed prior sections make the
+        # changed-span gate meaningful; otherwise this is honestly a first baseline.
+        return bool(self.prior_sections)
 
     def _section_rows(self, scope: str) -> dict[str, dict]:
         return self.sections if scope == "current" else self.prior_sections
@@ -587,7 +619,15 @@ class ToolContext:
             for key in args.section_keys
             for row in self.change_catalog.get(key, [])
         ]
-        return {"changes": changes[:args.max_results]}
+        ranked = sorted(
+            changes,
+            key=lambda row: (
+                -_change_score(row),
+                str(row.get("section_key", "")),
+                int(row.get("char_start", 0)),
+            ),
+        )
+        return {"changes": ranked[:args.max_results]}
 
     def get_metric(self, args: GetMetricArgs) -> dict:
         return {"metrics": [

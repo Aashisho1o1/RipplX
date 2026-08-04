@@ -82,9 +82,9 @@ cases:
     form_type: 10-Q
     filed_at: "2024-08-01"
     primary_doc: "https://www.sec.gov/Archives/edgar/data/320193/000032019324000081/aapl-20240629.htm"
-    category: boring
+    category: routine
     expected_critical_flags: []
-    expected_max_findings: 0
+    expected_min_findings: 1
   - id: executive_transition_8k
     accession: "0001193125-24-142941"
     cik: "0000898293"

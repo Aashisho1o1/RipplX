@@ -1713,6 +1713,9 @@ code,
 .risk-card > small { color: var(--color-muted); }
 .risk-card details { padding-top: 12px; margin-top: 14px; border-top: var(--border-hair); }
 .compact-risk-grid .risk-card { padding: 16px; }
+.xray-secondary { margin-top: 18px; border-top: var(--border-hair); }
+.xray-secondary > summary { padding: 16px 2px 12px; cursor: pointer; color: var(--color-muted); font-weight: 700; }
+.xray-secondary .risk-grid { margin-top: 4px; }
 .xray-metrics { margin-top: 18px; border-top: var(--border-hair); }
 .xray-metrics-head { display: flex; gap: 16px; align-items: center; justify-content: space-between; padding: 16px 2px; }
 .xray-metrics-head span { color: var(--color-muted); font-family: var(--font-mono); font-size: var(--text-caption); }

@@ -15,6 +15,15 @@ export function DeepResearchPanel({ run, canRun, demo, fallbackChanges, onRun }:
   );
   const busy = run?.status === "queued" || run?.status === "running";
   const fallback = !report?.insights.length && fallbackChanges.length > 0;
+  const collected = report?.insights.length === 0
+    ? [...report.observations]
+      .filter((row) => row.evidence_label !== "unavailable")
+      .sort((left, right) => {
+        const priority = ["get_verified_changes", "search_filing_sections", "get_financial_context", "get_valuation_context", "get_peer_context"];
+        return priority.indexOf(left.tool) - priority.indexOf(right.tool);
+      })
+      .slice(0, 3)
+    : [];
 
   return (
     <section className="section">
@@ -76,7 +85,17 @@ export function DeepResearchPanel({ run, canRun, demo, fallbackChanges, onRun }:
       )}
 
       {report && report.insights.length === 0 && !fallback && (
-        <div className="notice neutral">No qualitative insight passed verification. Deterministic metrics remain available.</div>
+        collected.length > 0 ? <>
+          <p className="research-summary"><strong>Verified evidence collected</strong> · deeper interpretation was withheld, but the sourced facts remain useful.</p>
+          <div className="research-insight-list">
+            {collected.map((observation) => <article key={observation.observation_id}>
+              <div className="research-insight-heading"><span>{observation.evidence_label === "calculation" ? "Verified calculation" : "SEC fact"}</span><span>{observation.tool.replace("get_", "").replaceAll("_", " ")}</span></div>
+              <p>{observation.text}</p>
+              {observation.evidence.some(row => row.quote) && <details><summary>Exact evidence</summary>{observation.evidence.map(row => row.quote ? <blockquote key={row.reference_id}>{row.quote}</blockquote> : null)}</details>}
+            </article>)}
+          </div>
+          {run.trace && Object.keys(run.trace.dropped_insights).length > 0 && <p className="metric-caption">{Object.keys(run.trace.dropped_insights).length} draft interpretation{Object.keys(run.trace.dropped_insights).length === 1 ? " was" : "s were"} withheld because the evidence standard was not met.</p>}
+        </> : <div className="empty-state compact"><span aria-hidden="true">—</span><div><strong>No material qualitative change cleared verification</strong><p>This is not a clean bill of health. Use the verified financial trends and downside checks below.</p></div></div>
       )}
 
       {report && report.insights.length > 0 && (

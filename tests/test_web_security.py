@@ -209,8 +209,8 @@ def test_remote_demo_uses_isolated_bundled_sample_data(tmp_path, monkeypatch):
     payload = response.json()
     assert payload["sample_data"] is True
     assert payload["tracked_tickers"] == ["AAPL", "DPLS", "MSFT", "TWKS"]
-    assert len(payload["filings"]) == 3
-    assert sum(len(filing["findings"]) for filing in payload["filings"]) == 4
+    assert len(payload["filings"]) == 4
+    assert sum(len(filing["findings"]) for filing in payload["filings"]) == 5
     assert payload["filings"][0]["findings"][0]["evidence"][0]["edgar_url"].startswith(
         "https://www.sec.gov/"
     )

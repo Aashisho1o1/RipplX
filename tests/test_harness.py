@@ -130,7 +130,7 @@ def test_precomputed_change_basis_still_rejects_unchanged_evidence():
     assert "NOT_A_CHANGED_SPAN" in [issue.code for issue in compiled.issues]
 
 
-def test_new_section_is_all_changed_when_comparable_filing_exists():
+def test_unparsed_prior_filing_is_not_misrepresented_as_a_real_comparison():
     context = ToolContext(
         filing_meta={**META, "has_prior_comparable": True},
         sections=SECTIONS,
@@ -139,11 +139,31 @@ def test_new_section_is_all_changed_when_comparable_filing_exists():
         data_quality=[],
     )
 
-    assert context.has_prior_comparable is True
-    assert context.change_ranges["mdna"] == [(0, len(SECTIONS["mdna"]["text"]))]
-    assert context.get_changes(GetChangesArgs(section_keys=["mdna"]))["changes"][0][
-        "kind"
-    ] == "added"
+    assert context.has_prior_comparable is False
+    assert context.change_ranges["mdna"] == []
+    assert context.get_changes(GetChangesArgs(section_keys=["mdna"])) == {"changes": []}
+
+
+def test_get_changes_ranks_investor_relevant_span_ahead_of_section_order():
+    sections = {
+        "business": {"text": "We refreshed our office furniture."},
+        "mdna": {"text": "Liquidity declined after debt refinancing pressure increased."},
+    }
+    prior = {
+        "business": {"text": "We maintained our office furniture."},
+        "mdna": {"text": "Liquidity remained stable."},
+    }
+    context = ToolContext(
+        filing_meta=META, sections=sections, prior_sections=prior,
+        metrics=MetricsBundle(), data_quality=[],
+    )
+
+    result = context.get_changes(
+        GetChangesArgs(section_keys=["business", "mdna"], max_results=1)
+    )
+
+    assert result["changes"][0]["section_key"] == "mdna"
+    assert "Liquidity declined" in result["changes"][0]["snippet"]
 
 
 def test_generator_uses_tool_then_submits_and_skeptic_finishes():
@@ -638,7 +658,7 @@ def test_skeptic_objection_drops_only_targeted_finding_after_final_review():
         _finding("f1", "Revenue increased"),
         _finding("f2", "costs remained stable", headline="Costs remained stable"),
     )
-    objection = _done([{"finding_id": "f2", "code": "LOW_CONFIDENCE"}])
+    objection = _done([{"finding_id": "f2", "code": "MATERIALITY_OVERREACH"}])
     # The repair resubmits the objected finding unchanged. The objection is now
     # discharged deterministically at reconciliation (keyed on the cited evidence, so
     # a renumbering cannot launder it) instead of depending on the second Skeptic pass
@@ -655,7 +675,7 @@ def test_skeptic_objection_drops_only_targeted_finding_after_final_review():
     assert [row.finding_id for row in output.findings] == ["f1"]
     trace = json.loads(repo.latest_analysis(META["accession_number"], "P1_TRACE").output_json)
     assert trace["dropped_findings"] == [
-        {"finding_id": "f2", "error_codes": ["LOW_CONFIDENCE"]}
+        {"finding_id": "f2", "error_codes": ["MATERIALITY_OVERREACH"]}
     ]
     assert trace["research_terminal_reason"] == "skeptic_blocked"
 
@@ -676,7 +696,7 @@ def test_generator_and_skeptic_tool_budgets_are_independent_across_repair():
     skeptic = FakeLLMClient(responses=[
         _tool("get_accounting_checks"),
         _tool("get_metric", {"metric_ids": ["revenue_growth"]}),
-        _done([{"finding_id": "f2", "code": "LOW_CONFIDENCE"}]),
+        _done([{"finding_id": "f2", "code": "MATERIALITY_OVERREACH"}]),
         _done(),
     ])
 
@@ -704,7 +724,7 @@ def test_invalid_repair_preserves_clean_baseline_and_drops_only_objected_finding
         json.dumps({"action": "submit", "surprise": "still invalid"}),
     ])
     skeptic = FakeLLMClient(responses=[
-        _done([{"finding_id": "f2", "code": "LOW_CONFIDENCE"}]),
+        _done([{"finding_id": "f2", "code": "MATERIALITY_OVERREACH"}]),
     ])
 
     output = P1Extractor(generator, repo, skeptic_llm=skeptic).run(
@@ -715,7 +735,7 @@ def test_invalid_repair_preserves_clean_baseline_and_drops_only_objected_finding
     trace = _trace(repo)
     assert trace["research_terminal_reason"] == "skeptic_blocked"
     assert trace["dropped_findings"] == [
-        {"finding_id": "f2", "error_codes": ["LOW_CONFIDENCE"]}
+        {"finding_id": "f2", "error_codes": ["MATERIALITY_OVERREACH"]}
     ]
 
 
@@ -751,7 +771,7 @@ def test_repair_removing_skeptic_objected_finding_records_skeptic_blocked():
     repaired = _draft(_finding("f1", "Revenue increased"))
     generator = FakeLLMClient(responses=[_submit(initial), _submit(repaired)])
     skeptic = FakeLLMClient(responses=[
-        _done([{"finding_id": "f2", "code": "LOW_CONFIDENCE"}]),
+        _done([{"finding_id": "f2", "code": "MATERIALITY_OVERREACH"}]),
         _done(),
     ])
 
@@ -763,7 +783,7 @@ def test_repair_removing_skeptic_objected_finding_records_skeptic_blocked():
     trace = _trace(repo)
     assert trace["research_terminal_reason"] == "skeptic_blocked"
     assert trace["dropped_findings"] == [
-        {"finding_id": "f2", "error_codes": ["LOW_CONFIDENCE"]}
+        {"finding_id": "f2", "error_codes": ["MATERIALITY_OVERREACH"]}
     ]
 
 
@@ -797,7 +817,7 @@ def test_both_skeptic_passes_share_two_tool_call_budget():
     skeptic = FakeLLMClient(responses=[
         _tool("get_accounting_checks"),
         _tool("get_accounting_checks"),
-        _done([{"finding_id": "f2", "code": "LOW_CONFIDENCE"}]),
+        _done([{"finding_id": "f2", "code": "MATERIALITY_OVERREACH"}]),
         _tool("get_accounting_checks"),
         _done(),
     ])
@@ -843,7 +863,7 @@ def test_exhausted_skeptic_repair_restores_baseline_and_applies_objection():
     tool = _tool("get_accounting_checks")
     generator = FakeLLMClient(responses=[tool] * 7 + [_submit(draft)])
     skeptic = FakeLLMClient(responses=[
-        _done([{"finding_id": "f2", "code": "LOW_CONFIDENCE"}])
+        _done([{"finding_id": "f2", "code": "MATERIALITY_OVERREACH"}])
     ])
 
     output = P1Extractor(generator, repo, skeptic_llm=skeptic).run(
@@ -854,7 +874,7 @@ def test_exhausted_skeptic_repair_restores_baseline_and_applies_objection():
     trace = _trace(repo)
     assert trace["research_terminal_reason"] == "skeptic_blocked"
     assert trace["dropped_findings"] == [
-        {"finding_id": "f2", "error_codes": ["LOW_CONFIDENCE"]}
+        {"finding_id": "f2", "error_codes": ["MATERIALITY_OVERREACH"]}
     ]
 
 
@@ -989,7 +1009,7 @@ def test_skeptic_recovers_from_an_isolated_malformed_reply():
         "not json at all",                                   # slip 1
         _tool("search_sections", {"queries": ["Revenue"]}),  # valid tool -> resets
         "still not json",                                    # slip 2, previously fatal
-        _done([{"finding_id": "f2", "code": "LOW_CONFIDENCE"}]),
+        _done([{"finding_id": "f2", "code": "MATERIALITY_OVERREACH"}]),
         _submit(_draft(_finding("f1", "Revenue increased"))),
         _done([]),
     ]
@@ -1008,7 +1028,7 @@ def test_skeptic_still_terminates_when_every_reply_is_malformed():
     responses = [
         _submit(_baseline_pair()),
         *["not json"] * 12,
-        *[_done([{"finding_id": "f9", "code": "LOW_CONFIDENCE"}])] * 12,
+        *[_done([{"finding_id": "f9", "code": "MATERIALITY_OVERREACH"}])] * 12,
         *[_tool("search_sections", {"queries": ["x"]})] * 12,
     ]
     # The pass must end on its own budget rather than exhausting the response queue.

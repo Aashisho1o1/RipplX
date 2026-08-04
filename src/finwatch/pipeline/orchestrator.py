@@ -332,7 +332,7 @@ class Orchestrator:
         )
 
         prior_sections: dict[str, dict] = {}
-        filing_meta["has_prior_comparable"] = self.repo.has_prior_comparable_filing(
+        prior_filing_exists = self.repo.has_prior_comparable_filing(
             filing.cik, pp.form_family, filing.filed_at
         )
         for section_key in sections:
@@ -343,6 +343,10 @@ class Orchestrator:
                 prior_sections[section_key] = {
                     "accession_number": prior[0], "text": prior[1]
                 }
+        filing_meta["has_prior_comparable"] = bool(prior_sections)
+        filing_meta["prior_comparison_unavailable"] = bool(
+            prior_filing_exists and not prior_sections
+        )
 
         # --- P1: bounded tool-calling research -----------------------------
         linked_attempt = self.repo.latest_linked_p1_attempt(filing.accession_number)

@@ -30,3 +30,13 @@ The reasoning shape is: verified change or fact → driver → affected mechanis
 conditional implication. State implications conditionally. A business/change insight
 needs filing evidence; financial quality needs verified financial context; valuation
 needs a saved price; peer context needs already-ingested comparable evidence.
+
+Prefer one to three decision-useful insights when the observations support a real
+connection. A verified operating change or deterministic financial trend can be useful
+without being exceptional or alarming. Submit zero insights only when no supported
+change → driver → mechanism → conditional implication can be formed.
+
+Do not copy a calculated number into an authored field. Reference the calculation
+observation instead; the application renders its exact value from the validated
+observation. Financial-quality observations may support conditional implications when
+the assumptions and limitations are explicit.
