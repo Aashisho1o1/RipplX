@@ -292,7 +292,12 @@ class CompanyResearchHarness:
                     invalid_actions += 1
                     if invalid_actions < 2:
                         continue
-                    raise ResearchHarnessError("malformed_action_breakdown") from None
+                    # This pass is optional and downstream of an already-verified
+                    # company brief. Preserve that deterministic baseline when the
+                    # provider cannot follow the research action contract; the trace
+                    # still records the exact closed terminal reason.
+                    terminal_reason = "malformed_action_breakdown"
+                    break
                 raise ResearchHarnessError("provider_failed") from None
 
             if isinstance(action, SubmitAction):

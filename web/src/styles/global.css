@@ -1714,9 +1714,8 @@ code,
 .risk-card details { padding-top: 12px; margin-top: 14px; border-top: var(--border-hair); }
 .compact-risk-grid .risk-card { padding: 16px; }
 .xray-metrics { margin-top: 18px; border-top: var(--border-hair); }
-.xray-metrics > summary { display: flex; gap: 16px; align-items: center; justify-content: space-between; padding: 16px 2px; cursor: pointer; }
-.xray-metrics > summary span { color: var(--color-muted); font-family: var(--font-mono); font-size: var(--text-caption); }
-.xray-metrics[open] > summary { margin-bottom: 8px; }
+.xray-metrics-head { display: flex; gap: 16px; align-items: center; justify-content: space-between; padding: 16px 2px; }
+.xray-metrics-head span { color: var(--color-muted); font-family: var(--font-mono); font-size: var(--text-caption); }
 
 .valuation-form, .question-form { display: grid; grid-template-columns: minmax(180px, 320px) auto; gap: 12px; align-items: end; }
 .valuation-form .field { margin: 0; }

@@ -325,10 +325,14 @@ def test_primary_provider_failure_is_a_closed_terminal_error():
         CompanyResearchHarness(_service(), FakeLLMClient(responder=fail)).run("MSFT")
 
 
-def test_repeated_malformed_actions_fail_closed_without_provider_text():
+def test_repeated_malformed_actions_publish_a_deterministic_partial_report():
     client = FakeLLMClient(responses=["not JSON", '{"action":"unknown"}'])
-    with pytest.raises(ResearchHarnessError, match="^malformed_action_breakdown$"):
-        CompanyResearchHarness(_service(), client).run("MSFT")
+    result = CompanyResearchHarness(_service(), client).run("MSFT")
+
+    assert result.status == "partial"
+    assert result.report.insights == []
+    assert result.trace.terminal_reason == "malformed_action_breakdown"
+    assert result.trace.turn_budget_used == 2
 
 
 def test_optional_skeptic_failure_preserves_the_compiler_passing_baseline():

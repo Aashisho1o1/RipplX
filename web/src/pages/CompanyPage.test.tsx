@@ -68,18 +68,39 @@ afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 describe("company decision brief", () => {
   it("combines impact, financial health, valuation, changes, and watch conditions", async () => {
-    renderCompany();
+    const view = renderCompany();
     expect(await screen.findByText(/What deserves attention/)).toBeInTheDocument();
     expect(screen.getByText(/Connected research/)).toBeInTheDocument();
     expect(screen.getByText(/Financial X-Ray/)).toBeInTheDocument();
+    expect(screen.getByRole("table", { name: /Deterministic SEC XBRL metric results/ })).toBeVisible();
+    expect(view.container.querySelector("details.xray-metrics")).toBeNull();
+    expect(screen.queryByText("No opaque score")).not.toBeInTheDocument();
     expect(await screen.findByText("18.2×")).toBeInTheDocument();
     expect(screen.getByText("21.4×")).toBeInTheDocument();
     expect(screen.getByText("4.7%")).toBeInTheDocument();
     expect(screen.getByText("-30.0% vs price")).toBeInTheDocument();
-    expect(screen.getByText("Change → driver → possible implication")).toBeInTheDocument();
+    expect(screen.getByText("Change → driver → conditional implication")).toBeInTheDocument();
     expect(screen.getByText("This may weaken future cash flows if it persists.")).toBeInTheDocument();
     expect(screen.getByText("Saved watch conditions")).toBeInTheDocument();
     expect(screen.getByDisplayValue("Revenue returns to growth.")).toBeInTheDocument();
+  });
+
+  it("keeps the verified change connection useful when optional deep research fails", async () => {
+    const failed = {
+      ...research,
+      deep_research: {
+        run_id: "4".repeat(32), ticker: "ACME", cik: research.cik, status: "failed" as const,
+        input_hash: "5".repeat(64), report: null, trace: null,
+        created_at: "2026-08-03T00:00:00Z", completed_at: "2026-08-03T00:00:05Z",
+      },
+    };
+    renderCompany(vi.fn().mockResolvedValue(new Response(JSON.stringify(failed), { status: 200, headers: { "Content-Type": "application/json" } })));
+
+    expect(await screen.findByText("Verified filing connection")).toBeInTheDocument();
+    expect(screen.getByText("Revenue declined from the prior period.")).toBeInTheDocument();
+    expect(screen.getByText("This may weaken future cash flows if it persists.")).toBeInTheDocument();
+    expect(screen.getByText(/Optional deeper synthesis did not finish/)).toBeInTheDocument();
+    expect(screen.queryByText("Deep research did not complete")).not.toBeInTheDocument();
   });
 
   it("renders compiler-passing connected research without a stock-direction vote", async () => {
@@ -169,7 +190,7 @@ describe("company decision brief", () => {
     fireEvent.click(screen.getByRole("button", { name: "Calculate scenarios" }));
 
     expect(await screen.findByText("Unavailable under these assumptions")).toBeInTheDocument();
-    expect(screen.getByText(/static demo keeps this optional model pass off/i)).toBeInTheDocument();
+    expect(screen.getByText("Verified filing connection")).toBeInTheDocument();
     expect(screen.getByText("Required SEC inputs are unreliable.")).toBeInTheDocument();
     expect(fetcher).toHaveBeenCalledTimes(2);
   });
