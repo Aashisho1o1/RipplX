@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from finwatch.core.types import MetricStatus
-from finwatch.db import Company, Computation, Repo, User, XbrlFact
+from finwatch.db import Company, Computation, Filing, Repo, User, XbrlFact
 from finwatch.llm.router import FakeLLMClient
 from finwatch.metrics.envelope import InputUsed, MetricResult
 from finwatch.product.models import (
@@ -118,6 +120,49 @@ def test_risk_radar_is_deterministic_and_missing_data_stays_unavailable(repo: Re
     assert by_lens["operating_deterioration"].status == "elevated"
     assert by_lens["share_count"].status == "unavailable"
     assert by_lens["concentration"].status == "unavailable"
+
+
+def test_liquidity_does_not_flag_covered_current_liabilities_as_watch(repo: Repo):
+    """Positive working-capital coverage is not a liquidity warning by itself.
+
+    This mirrors Microsoft's 2026 shape: current assets cover current liabilities and
+    net debt is small relative to earnings capacity. Leverage is assessed separately.
+    """
+    _company(repo)
+    metric = _metric(
+        "liquidity_basics",
+        components={"cash": 21, "net_debt": 19, "current_ratio": 1.23},
+    )
+
+    result = ProductService(repo, user_id="local", now_fn=lambda: NOW)._liquidity(
+        (None, metric)
+    )
+
+    assert result.status == "stable"
+    assert result.reason_codes == ["CURRENT_LIABILITIES_COVERED"]
+
+
+def test_low_severity_filing_change_does_not_become_a_risk_warning(repo: Repo):
+    _company(repo)
+    service = ProductService(repo, user_id="local", now_fn=lambda: NOW)
+    finding = SimpleNamespace(severity="LOW", finding_id="f1", evidence=[])
+    service.presentation = SimpleNamespace(
+        filing=lambda _accession: SimpleNamespace(
+            filing=SimpleNamespace(outcome="published", findings=[finding])
+        )
+    )
+    filing = Filing(
+        accession_number="0000000001-26-000001",
+        cik="1",
+        form_type="10-K",
+        filed_at=AS_OF,
+    )
+
+    result = service._filing_events(filing)
+
+    assert result.status == "stable"
+    assert result.reason_codes == ["LOW_SEVERITY_VERIFIED_CHANGE"]
+    assert "low-severity" in result.explanation
 
 
 def test_profile_and_thesis_are_owner_isolated(repo: Repo):

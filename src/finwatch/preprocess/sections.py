@@ -161,17 +161,13 @@ _PART_TOKEN_RE = re.compile(r"(?i)^Part\s+(IV|III|II|I)\b[.\):\s]*")
 
 
 def _is_boundary_header(title_line: str) -> bool:
-    """True when an ``Item`` match is a real structural header — either header-shaped
-    (item token + a Title-Case/ALL-CAPS title on the same or joined line) or a bare
-    item token whose title renders on a later line — rather than a prose cross-reference
-    like "Item 8 contains our audited financial statements...". Only such offsets may
-    terminate a section; a prose reference must NOT truncate the section it sits inside
-    (M4). Every ``_accept``-ed header is also a boundary header (``_accept`` implies
-    ``_is_header_shape``)."""
-    return (
-        _is_header_shape(title_line)
-        or _TENKQ_ITEM_ONLY_RE.fullmatch(title_line) is not None
-    )
+    """True only for a resolved structural Item heading.
+
+    ``_headers`` has already joined a split-line token to its nearby title when that
+    title exists. An unresolved bare token is commonly a running page label (for
+    example Microsoft's repeated ``Item 7``) and must not truncate the section.
+    """
+    return _is_header_shape(title_line)
 
 
 def _is_part_header_shape(title_line: str) -> bool:

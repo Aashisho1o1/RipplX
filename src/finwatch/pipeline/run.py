@@ -73,6 +73,7 @@ def newest_filing_to_analyze(
     cik: str | None = None,
     *,
     form_type: str | None = None,
+    allow_reanalysis: bool = False,
 ) -> Filing | None:
     """Return the newest eligible per-issuer filing in scope.
 
@@ -80,7 +81,8 @@ def newest_filing_to_analyze(
     exhausted newest filing suppresses only that issuer; it never exposes the issuer's older
     history, but it also cannot starve another tracked issuer's eligible newest filing. A
     failed filing receives at most one full retry (two persisted pipeline attempts total,
-    counted from download).
+    counted from download). ``allow_reanalysis`` is reserved for an explicit per-company
+    user action; automated portfolio runs keep it false and never repay for terminal work.
     """
     selected_form = base_form(form_type) if form_type else None
     if selected_form is not None and selected_form not in ANALYZABLE_FORMS:
@@ -100,8 +102,10 @@ def newest_filing_to_analyze(
         )
 
     def eligible(filing: Filing | None) -> Filing | None:
-        if filing is None or filing.status in _TERMINAL_STATUS:
+        if filing is None:
             return None
+        if filing.status in _TERMINAL_STATUS:
+            return filing if allow_reanalysis else None
         attempts = max(
             (
                 row.attempts

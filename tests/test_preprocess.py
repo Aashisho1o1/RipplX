@@ -390,6 +390,34 @@ def test_10k_item_number_and_title_may_be_on_separate_lines():
     assert "market_risk" in secs  # the split-line 'Item 7A.' also routes
 
 
+def test_10k_running_item_labels_do_not_truncate_sections():
+    """A repeated bare Item label in a page header is content, not a boundary.
+
+    Microsoft and other issuers repeat ``Item 7``/``Item 8`` beside page numbers.
+    The real heading still routes, but these running labels must remain inside the
+    section instead of reducing MD&A or the statements to one page.
+    """
+    html = (
+        "<html><body>"
+        "<div>ITEM 7. MANAGEMENT’S DISCUSSION AND ANALYSIS OF FINANCIAL CONDITION "
+        "AND RESULTS OF OPERATIONS</div>"
+        "<p>Revenue increased as cloud demand remained strong.</p>"
+        "<div>Item 7</div><div>35</div><div>PART II</div>"
+        "<p>Capital spending increased to expand AI infrastructure capacity.</p>"
+        "<div>Item 7</div><div>36</div><div>PART II</div>"
+        "<p>Gross margin declined as infrastructure costs increased.</p>"
+        "<div>ITEM 7A. QUANTITATIVE AND QUALITATIVE DISCLOSURES ABOUT MARKET RISK</div>"
+        "<p>Interest-rate sensitivity follows.</p>"
+        "</body></html>"
+    )
+
+    sections = {section.section_key: section for section in split_10k(html_to_text(html))}
+
+    assert "Capital spending increased" in sections["mdna"].text
+    assert "Gross margin declined" in sections["mdna"].text
+    assert "Interest-rate sensitivity" not in sections["mdna"].text
+
+
 def test_10q_item_number_and_title_may_be_on_separate_lines():
     html = (
         "<html><body>"

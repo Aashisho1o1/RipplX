@@ -108,6 +108,18 @@ def test_process_latest_runs_pipeline_persists_and_digest_renders():
     assert "Net sales increased 5% year over year" in md
 
 
+def test_explicit_reanalysis_can_select_a_terminal_filing():
+    repo = Repo(init_db(":memory:"))
+    _seed(repo)
+    repo.set_filing_status(ACCN, "verified", processed_at="t")
+
+    assert newest_filing_to_analyze(repo, CIK) is None
+    selected = newest_filing_to_analyze(repo, CIK, allow_reanalysis=True)
+
+    assert selected is not None
+    assert selected.accession_number == ACCN
+
+
 def test_server_anchors_evidence_and_ignores_model_supplied_offsets():
     # The DeepSeek-Flash failure mode: the model returns a verbatim quote but a WRONG
     # character span. The server must re-anchor to the true offsets and publish — not

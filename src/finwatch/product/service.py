@@ -245,35 +245,33 @@ class ProductService:
             )
         net_debt = metric.components.get("net_debt")
         current_ratio = metric.components.get("current_ratio")
-        if current_ratio is not None and current_ratio < 1:
+        current_liabilities_uncovered = current_ratio is not None and current_ratio < 1
+        net_debt_positive = net_debt is not None and net_debt > 0
+        if current_liabilities_uncovered and net_debt_positive:
             return _risk(
                 "liquidity",
                 "elevated",
-                "CURRENT_RATIO_BELOW_ONE",
-                "Current liabilities exceed current assets in the verified inputs.",
+                "CURRENT_LIABILITIES_UNCOVERED_WITH_NET_DEBT",
+                "Current liabilities exceed current assets while verified net debt is positive.",
                 metrics=[metric.metric],
                 evidence=evidence,
                 freshness=metric.as_of,
             )
-        if (
-            net_debt is not None
-            and net_debt <= 0
-            and (current_ratio is None or current_ratio >= 1.5)
-        ):
+        if current_liabilities_uncovered or (current_ratio is None and net_debt_positive):
             return _risk(
                 "liquidity",
-                "stable",
-                "NET_CASH_OR_STRONG_COVERAGE",
-                "Net cash or strong short-term asset coverage reduces near-term pressure.",
+                "watch",
+                "ONE_LIQUIDITY_SIGNAL_WEAK",
+                "One verified liquidity signal is weak; review it with leverage and cash flow.",
                 metrics=[metric.metric],
                 evidence=evidence,
                 freshness=metric.as_of,
             )
         return _risk(
             "liquidity",
-            "watch",
-            "LIQUIDITY_CUSHION_LIMITED",
-            "Liquidity is positive, but the verified cushion is not clearly strong.",
+            "stable",
+            "CURRENT_LIABILITIES_COVERED",
+            "Current assets cover current liabilities, or verified net cash offsets the gap.",
             metrics=[metric.metric],
             evidence=evidence,
             freshness=metric.as_of,
@@ -479,19 +477,31 @@ class ProductService:
             for e in finding.evidence[:1]
         ][:4]
         severe = any(row.severity in {"CRITICAL", "HIGH"} for row in findings)
-        status = "elevated" if severe else "watch" if findings else "stable"
+        review = any(row.severity == "MEDIUM" for row in findings)
+        status = "elevated" if severe else "watch" if review else "stable"
         code = (
             "SEVERE_VERIFIED_FILING_CHANGE"
             if severe
-            else "VERIFIED_FILING_CHANGE"
+            else "REVIEWABLE_VERIFIED_FILING_CHANGE"
+            if review
+            else "LOW_SEVERITY_VERIFIED_CHANGE"
             if findings
             else "NO_MATERIAL_VERIFIED_CHANGE"
+        )
+        explanation = (
+            "A high-severity verified filing change needs prompt review."
+            if severe
+            else "A medium-severity verified filing change merits review this week."
+            if review
+            else "Only low-severity verified filing changes were found."
+            if findings
+            else "No publishable filing change was classified as material."
         )
         return _risk(
             "filing_events",
             status,
             code,
-            "Classification reflects only findings that cleared the verification gate.",
+            explanation,
             evidence=evidence,
             freshness=filing.filed_at[:10],
         )

@@ -74,6 +74,11 @@ describe("company decision brief", () => {
     expect(screen.getByText(/Financial X-Ray/)).toBeInTheDocument();
     expect(screen.getByRole("table", { name: /Deterministic SEC XBRL metric results/ })).toBeVisible();
     expect(view.container.querySelector("details.xray-metrics")).toBeNull();
+    const metricBlock = view.container.querySelector(".xray-metrics");
+    const flaggedRisks = view.container.querySelector(".compact-risk-grid");
+    expect(metricBlock).not.toBeNull();
+    expect(flaggedRisks).not.toBeNull();
+    expect(metricBlock!.compareDocumentPosition(flaggedRisks!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(screen.queryByText("No opaque score")).not.toBeInTheDocument();
     expect(await screen.findByText("18.2×")).toBeInTheDocument();
     expect(screen.getByText("21.4×")).toBeInTheDocument();
