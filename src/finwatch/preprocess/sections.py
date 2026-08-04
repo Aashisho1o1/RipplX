@@ -1,11 +1,11 @@
 """Canonical section routing for 10-K and 10-Q filings (deterministic).
 
 Strategy: over the flat text, find line-start ``Item N`` / ``Part N`` headers that
-are NOT inside anchor links (which excludes the table of contents). Item numbers
-alone identify sections in a 10-K; a 10-Q needs Part context because Item 2 means
-MD&A in Part I but Unregistered Sales in Part II. Each recognised section spans
-from its header to the next header of any kind. A title-keyword check guards each
-mapping so a stray body reference cannot masquerade as a section.
+identify canonical sections, following same-document table-of-contents links when
+available. Item numbers alone identify sections in a 10-K; a 10-Q uses Part context
+plus its canonical title because Item 2 means MD&A in Part I but Unregistered Sales
+in Part II. A narrow fallback recovers substantive MD&A/financial statements placed
+later in the same primary 10-K after short incorporation stubs.
 """
 from __future__ import annotations
 
@@ -16,16 +16,18 @@ from dataclasses import dataclass
 
 from finwatch.preprocess.html import NormalizedDoc, normalize_whitespace_line
 
-_ITEM_RE = re.compile(r"(?im)^[ \t]*Item[ \t]+(\d{1,2}[A-Z]?)[.\):\s]")
+_ITEM_RE = re.compile(r"(?im)^[ \t]*Item[ \t]+(\d{1,2}[A-Z]?)[.\):\s\-–—•]")
 _PART_RE = re.compile(r"(?im)^[ \t]*Part[ \t]+(IV|III|II|I)\b")
 # Leading item token of either form ("Item 7." or "Item 2.02"), for header-shape checks.
-_ITEM_TOKEN_RE = re.compile(r"(?i)^Item\s+\d{1,2}[A-Z]?(?:\.\d{2})?[.\):\s]+")
+_ITEM_TOKEN_RE = re.compile(
+    r"(?i)^Item\s+\d{1,2}[A-Z]?(?:\.\d{2})?[.\):\s\-–—•]+"
+)
 # A separator run (dash / en- or em-dash / bullet / colon / space) that some filers
 # place between the item token and its title, e.g. "Item 5.02 - Departure of...".
 _SEP_RUN_RE = re.compile(r"^[\s\-–—•:]+")
 # A header line that is ONLY the item token ("Item 7." / "Item 1A."), whose title
 # renders on the following line (SEC's common two-cell table layout after flattening).
-_TENKQ_ITEM_ONLY_RE = re.compile(r"(?i)^Item\s+\d{1,2}[A-Z]?[.\):]?")
+_TENKQ_ITEM_ONLY_RE = re.compile(r"(?i)^Item\s+\d{1,2}[A-Z]?[.\):\-–—•]?")
 # Item 8 sub-sections (auditor's report + notes), detected within the financials span.
 _AUDITOR_RE = re.compile(
     r"(?im)^.{0,25}Report\s+of\s+Independent\s+Registered\s+Public\s+Accounting\s+Firm"
@@ -53,6 +55,27 @@ _TITLE_HINTS: dict[str, tuple[str, ...]] = {
     "financials": ("financial statement",),
     "controls": ("controls",),
 }
+_STRUCTURAL_MIN_CHARS = {
+    "business": 1_000,
+    "risk_factors": 1_000,
+    "mdna": 1_000,
+    "financials": 3_000,
+}
+_ALT_MDNA_RE = re.compile(
+    r"(?im)^[ \t]*management[’']s\s+discussion\s+and\s+analysis"
+    r"(?:\s+of\s+financial\s+condition\s+and\s+results\s+of\s+operations)?"
+    r"[.:]?[ \t]*$"
+)
+_ALT_FINANCIALS_RES = (
+    re.compile(
+        r"(?im)^[ \t]*(?:audited\s+)?(?:consolidated\s+)?financial\s+statements"
+        r"(?:\s+and\s+supplementary\s+data)?[.:]?[ \t]*$"
+    ),
+    re.compile(
+        r"(?im)^[ \t]*report\s+of\s+independent\s+registered\s+public\s+"
+        r"accounting\s+firm[.:]?[ \t]*$"
+    ),
+)
 
 
 @dataclass
@@ -72,6 +95,7 @@ class _Header:
     value: str          # item number ("1A") or part roman ("II")
     offset: int
     title_line: str     # normalized text of the header's line
+    source_offset: int | None = None  # ToC position before following an internal link
 
 
 def _line_at(text: str, start: int) -> str:
@@ -90,15 +114,23 @@ def _headers(doc: NormalizedDoc, regex: re.Pattern,
     """
     out: list[_Header] = []
     for m in regex.finditer(doc.text):
-        if doc.is_link_at(m.start()):
-            continue
         single = normalize_whitespace_line(_line_at(doc.text, m.start()))
         if item_only_re is not None:
             title_line = _resolve_header_title(doc.text, m.start(), item_only_re) or single
         else:
             title_line = single
-        out.append(_Header(m.group(1).upper(), m.start(), title_line))
-    return out
+        source_end = _header_source_end(doc.text, m.start(), item_only_re)
+        linked_target = doc.link_target_between(m.start(), source_end)
+        if linked_target is not None and linked_target > m.start():
+            offset = linked_target
+        elif doc.is_link_at(m.start()) and linked_target is None:
+            continue
+        else:
+            # A linked body heading may point backward to the table of contents.
+            # Keep the real heading at its current location rather than following back.
+            offset = m.start()
+        out.append(_Header(m.group(1).upper(), offset, title_line, m.start()))
+    return sorted(out, key=lambda header: header.offset)
 
 
 def _title_ok(key: str, title_line: str) -> bool:
@@ -153,8 +185,67 @@ def _resolve_header_title(text: str, start: int, item_only_re: re.Pattern) -> st
     return None
 
 
-def _accept(key: str, title_line: str) -> bool:
-    return _title_ok(key, title_line) and _is_header_shape(title_line)
+def _header_source_end(
+    text: str,
+    start: int,
+    item_only_re: re.Pattern | None,
+) -> int:
+    """End of the source header row, including a split-line linked title."""
+    line_end = text.find("\n", start)
+    line_end = line_end if line_end != -1 else len(text)
+    if item_only_re is None:
+        return line_end
+    item_line = normalize_whitespace_line(text[start:line_end])
+    if not item_only_re.fullmatch(item_line):
+        return line_end
+    cursor = line_end + 1
+    for _ in range(3):
+        next_end = text.find("\n", cursor)
+        next_end = next_end if next_end != -1 else len(text)
+        if normalize_whitespace_line(text[cursor:next_end]):
+            return next_end
+        if next_end == len(text):
+            break
+        cursor = next_end + 1
+    return line_end
+
+
+def _accept_candidate(key: str, title_line: str, span_length: int) -> bool:
+    """Accept standard titles, or a substantial structurally bounded Item span.
+
+    Some issuers use a company/page heading after the Item token instead of the
+    Regulation S-K title. The Item sequence still supplies a reliable boundary;
+    requiring a meaningful span prevents a table-of-contents stub from winning.
+    """
+    if not _is_header_shape(title_line):
+        return False
+    structural_minimum = _STRUCTURAL_MIN_CHARS.get(key)
+    return _title_ok(key, title_line) or (
+        structural_minimum is not None and span_length >= structural_minimum
+    )
+
+
+def _tenq_key(part: str | None, item: str, title_line: str) -> str | None:
+    """Route a 10-Q item using Part context, corrected by its canonical title.
+
+    Some financial-company filings place the substantive MD&A before a repeated
+    ``Part I`` body marker, after a plain-text table of contents has already emitted
+    ``Part II``. In that shape physical Part context is stale. Item number plus the
+    standard SEC title is unambiguous for every section we retain, so use it to
+    correct (never invent) the mapping. A Part II ``Item 2. Unregistered Sales``
+    cannot pass the MD&A title check and remains excluded.
+    """
+    contextual = TENQ_MAP.get((part, item)) if part else None
+    if contextual is not None and _title_ok(contextual, title_line):
+        return contextual
+    titled = {
+        key
+        for (candidate_part, candidate_item), key in TENQ_MAP.items()
+        if candidate_item == item
+        and candidate_part in {"I", "II"}
+        and _title_ok(key, title_line)
+    }
+    return next(iter(titled)) if len(titled) == 1 else contextual
 
 
 _PART_TOKEN_RE = re.compile(r"(?i)^Part\s+(IV|III|II|I)\b[.\):\s]*")
@@ -219,15 +310,122 @@ def split_10k(doc: NormalizedDoc) -> list[Section]:
     sections: list[Section] = []
     for h in items:
         key = TENK_MAP.get(h.value)
-        if key is None or not _accept(key, h.title_line):
+        if key is None:
             continue
         end = _next_boundary(boundaries, h.offset, len(doc.text))
+        if not _accept_candidate(key, h.title_line, end - h.offset):
+            continue
         sections.append(_make_section(doc, key, h, end, is_furnished=False))
-    result = dedupe_largest(sections)
+    result = _repair_incorporated_annual_sections(doc, dedupe_largest(sections))
     financials = next((s for s in result if s.section_key == "financials"), None)
     if financials is not None:
         result.extend(_item8_subsections(doc, financials))
     return sorted(result, key=lambda s: s.char_start)
+
+
+def _alternate_heading(
+    doc: NormalizedDoc,
+    patterns: tuple[re.Pattern, ...],
+    after: int,
+    minimum_span: int,
+) -> _Header | None:
+    """Find a canonical standalone heading later in the same primary document.
+
+    Forward same-document links are strongest: they relocate an annual-report table
+    of contents entry to its body anchor. If no such link exists, an exact standalone
+    heading is accepted. Sentence fragments and arbitrary keyword hits cannot enter
+    because every pattern consumes the complete normalized line.
+    """
+    linked: list[_Header] = []
+    plain: list[_Header] = []
+    for pattern in patterns:
+        for match in pattern.finditer(doc.text):
+            line_end = doc.text.find("\n", match.start())
+            line_end = line_end if line_end != -1 else len(doc.text)
+            target = doc.link_target_between(match.start(), line_end)
+            followed_link = target is not None and target > match.start()
+            offset = target if followed_link else match.start()
+            if offset <= after or len(doc.text) - offset < minimum_span:
+                continue
+            header = _Header(
+                value="",
+                offset=offset,
+                title_line=normalize_whitespace_line(match.group(0)),
+                source_offset=match.start(),
+            )
+            (linked if followed_link else plain).append(header)
+    candidates = linked or plain
+    return min(candidates, key=lambda header: header.offset) if candidates else None
+
+
+def _replacement_section(
+    doc: NormalizedDoc,
+    key: str,
+    header: _Header,
+    end: int,
+) -> Section | None:
+    if end - header.offset < _STRUCTURAL_MIN_CHARS[key]:
+        return None
+    return _make_section(doc, key, header, end, is_furnished=False)
+
+
+def _repair_incorporated_annual_sections(
+    doc: NormalizedDoc,
+    sections: list[Section],
+) -> list[Section]:
+    """Replace only suspiciously short Item 7/8 incorporation stubs.
+
+    Large issuers sometimes append a shareholder-report/financial section inside
+    the same primary 10-K while the formal Item 7 and Item 8 bodies merely point to
+    it. This is not a general keyword fallback: it activates only for an already
+    identified but undersized canonical section and only accepts exact standalone
+    annual-report headings with a substantial body.
+    """
+    by_key = {section.section_key: section for section in sections}
+    mdna = by_key.get("mdna")
+    financials = by_key.get("financials")
+    needs_mdna = mdna is not None and len(mdna.text) < _STRUCTURAL_MIN_CHARS["mdna"]
+    needs_financials = (
+        financials is not None
+        and len(financials.text) < _STRUCTURAL_MIN_CHARS["financials"]
+    )
+    if not needs_mdna and not needs_financials:
+        return sections
+
+    financial_header = None
+    if needs_financials and financials is not None:
+        financial_header = _alternate_heading(
+            doc,
+            _ALT_FINANCIALS_RES,
+            financials.char_end,
+            _STRUCTURAL_MIN_CHARS["financials"],
+        )
+
+    if needs_mdna and mdna is not None:
+        mdna_header = _alternate_heading(
+            doc,
+            (_ALT_MDNA_RE,),
+            mdna.char_end,
+            _STRUCTURAL_MIN_CHARS["mdna"],
+        )
+        if mdna_header is not None:
+            mdna_end = (
+                financial_header.offset
+                if financial_header is not None and financial_header.offset > mdna_header.offset
+                else len(doc.text)
+            )
+            replacement = _replacement_section(doc, "mdna", mdna_header, mdna_end)
+            if replacement is not None:
+                by_key["mdna"] = replacement
+
+    if financial_header is not None:
+        replacement = _replacement_section(
+            doc, "financials", financial_header, len(doc.text)
+        )
+        if replacement is not None:
+            by_key["financials"] = replacement
+
+    return sorted(by_key.values(), key=lambda section: section.char_start)
 
 
 def split_10q(doc: NormalizedDoc) -> list[Section]:
@@ -237,15 +435,37 @@ def split_10q(doc: NormalizedDoc) -> list[Section]:
     items = _headers(doc, _ITEM_RE, _TENKQ_ITEM_ONLY_RE)
     item_bounds = {h.offset for h in items if _is_boundary_header(h.title_line)}
     boundaries = sorted(item_bounds | {p.offset for p in parts})
-    part_offsets = [p.offset for p in parts]
+    source_parts = sorted(
+        parts,
+        key=lambda part: (
+            part.source_offset if part.source_offset is not None else part.offset
+        ),
+    )
+    part_offsets = [
+        part.source_offset if part.source_offset is not None else part.offset
+        for part in source_parts
+    ]
+    target_parts = sorted(parts, key=lambda part: part.offset)
+    target_part_offsets = [part.offset for part in target_parts]
     sections: list[Section] = []
     for h in items:
-        idx = bisect.bisect_right(part_offsets, h.offset) - 1
-        part = parts[idx].value if idx >= 0 else None
-        key = TENQ_MAP.get((part, h.value)) if part else None
-        if key is None or not _accept(key, h.title_line):
+        followed_link = h.source_offset is not None and h.source_offset != h.offset
+        if followed_link:
+            lookup_offset = h.source_offset
+            lookup_parts = source_parts
+            lookup_offsets = part_offsets
+        else:
+            lookup_offset = h.offset
+            lookup_parts = target_parts
+            lookup_offsets = target_part_offsets
+        idx = bisect.bisect_right(lookup_offsets, lookup_offset) - 1
+        part = lookup_parts[idx].value if idx >= 0 else None
+        key = _tenq_key(part, h.value, h.title_line)
+        if key is None:
             continue
         end = _next_boundary(boundaries, h.offset, len(doc.text))
+        if not _accept_candidate(key, h.title_line, end - h.offset):
+            continue
         sections.append(_make_section(doc, key, h, end, is_furnished=False))
     return dedupe_largest(sections)
 

@@ -18,8 +18,8 @@ from finwatch.preprocess.sections import (
     dedupe_largest,
 )
 
-_EIGHTK_ITEM_RE = re.compile(r"(?im)^[ \t]*Item[ \t]+(\d)\.(\d{2})[.\):\s]")
-_ITEM_ONLY_RE = re.compile(r"(?i)^Item\s+\d\.\d{2}[.\):]?")
+_EIGHTK_ITEM_RE = re.compile(r"(?im)^[ \t]*Item[ \t]+(\d)\.(\d{2})[.\):\s\-–—•]")
+_ITEM_ONLY_RE = re.compile(r"(?i)^Item\s+\d\.\d{2}[.\):\-–—•]?")
 _FURNISH_RE = re.compile(
     r"(furnished\b"
     r"|shall\s+not\s+be\s+deemed\s+.{0,20}?filed"

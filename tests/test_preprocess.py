@@ -418,6 +418,142 @@ def test_10k_running_item_labels_do_not_truncate_sections():
     assert "Interest-rate sensitivity" not in sections["mdna"].text
 
 
+def test_attached_dash_item_headings_route_sections():
+    """SEC issuers may render ``Item 7—Title`` without intervening whitespace."""
+    tenk = (
+        "<html><body>"
+        "<div>Item 1—Business</div><p>We operate membership warehouses worldwide.</p>"
+        "<div>Item 1A—Risk Factors</div><p>Competition and supply risks may affect us.</p>"
+        "<div>Item 7—Management’s Discussion and Analysis of Financial Condition "
+        "and Results of Operations</div><p>Comparable sales and margins changed.</p>"
+        "<div>Item 8—Financial Statements and Supplementary Data</div>"
+        "<p>Consolidated statements follow.</p>"
+        "</body></html>"
+    )
+    tenq = (
+        "<html><body>"
+        "<div>PART I—FINANCIAL INFORMATION</div>"
+        "<div>Item 1—Financial Statements</div><p>Condensed statements follow.</p>"
+        "<div>Item 2—Management’s Discussion and Analysis of Financial Condition "
+        "and Results of Operations</div><p>Comparable sales and margins changed.</p>"
+        "<div>Item 4—Controls and Procedures</div><p>Controls were evaluated.</p>"
+        "</body></html>"
+    )
+
+    annual = {section.section_key: section for section in split_10k(html_to_text(tenk))}
+    quarterly = {section.section_key: section for section in split_10q(html_to_text(tenq))}
+
+    assert "membership warehouses" in annual["business"].text
+    assert "Comparable sales" in annual["mdna"].text
+    assert "Consolidated statements" in annual["financials"].text
+    assert "Condensed statements" in quarterly["financials"].text
+    assert "Comparable sales" in quarterly["mdna"].text
+    assert "Controls were evaluated" in quarterly["controls"].text
+
+
+def test_linked_toc_targets_sections_when_body_omits_item_labels():
+    """A bank-style filing may put Item labels only in a linked table of contents."""
+    html = (
+        "<html><body>"
+        "<div><a href='#part-one'>Part I – Financial Information</a></div>"
+        "<div>Item 1.</div><div><a href='#statements'>Financial Statements</a></div>"
+        "<div>Item 2.</div><div><a href='#discussion'>Management’s Discussion and "
+        "Analysis of Financial Condition and Results of Operations</a></div>"
+        "<div>Item 4.</div><div><a href='#controls'>Controls and Procedures</a></div>"
+        "<div id='part-one'></div>"
+        "<div id='discussion'><h2>Consolidated Financial Highlights</h2>"
+        "<p>Net revenue and credit costs changed during the quarter.</p></div>"
+        "<div id='statements'><h2>Consolidated Financial Statements</h2>"
+        "<p>Condensed balance sheets and income statements follow.</p></div>"
+        "<div id='controls'><h2>Disclosure Controls</h2>"
+        "<p>Management evaluated disclosure controls and procedures.</p></div>"
+        "</body></html>"
+    )
+
+    sections = {section.section_key: section for section in split_10q(html_to_text(html))}
+
+    assert "Net revenue and credit costs" in sections["mdna"].text
+    assert "Condensed balance sheets" in sections["financials"].text
+    assert "Management evaluated" in sections["controls"].text
+
+
+def test_linked_part_two_toc_does_not_reclassify_part_one_body_items():
+    """Body Item 4 remains in Part I even when only the ToC carries Part I."""
+    body = "Management evaluated disclosure controls and procedures. " * 30
+    html = (
+        "<html><body>"
+        "<div><a href='#discussion'>Part I – Financial Information</a></div>"
+        "<div>Item 2.</div><div><a href='#discussion'>Management’s Discussion and "
+        "Analysis of Financial Condition and Results of Operations</a></div>"
+        "<div>Item 4.</div><div><a href='#controls'>Controls and Procedures</a></div>"
+        "<div><a href='#part-two'>Part II – Other Information</a></div>"
+        "<div id='discussion'><h2>Management’s Discussion and Analysis</h2>"
+        "<p>Revenue and credit costs changed during the quarter.</p></div>"
+        "<div id='controls'><h2>Item 4. Controls and Procedures.</h2>"
+        f"<p>{body}</p></div>"
+        "<div id='part-two'><h2>Part II – Other Information</h2></div>"
+        "<div><h2>Item 1. Legal Proceedings.</h2><p>Legal disclosure.</p></div>"
+        "</body></html>"
+    )
+
+    sections = {section.section_key: section for section in split_10q(html_to_text(html))}
+
+    assert "controls" in sections
+    assert len(sections["controls"].text) > 1_000
+    assert "Management evaluated" in sections["controls"].text
+
+
+def test_substantial_item_span_allows_a_nonstandard_issuer_heading():
+    """The Item number can be structural even when a bank repeats its legal name."""
+    body = "Net interest income and credit costs changed during the year. " * 30
+    html = (
+        "<html><body>"
+        "<div>Item 7. Example Bank Corporation and Subsidiaries</div>"
+        f"<p>{body}</p>"
+        "<div>Item 7A. Quantitative and Qualitative Disclosures About Market Risk</div>"
+        "<p>Market risk follows.</p>"
+        "</body></html>"
+    )
+
+    sections = {section.section_key: section for section in split_10k(html_to_text(html))}
+
+    assert "Net interest income" in sections["mdna"].text
+    assert len(sections["mdna"].text) > 1_000
+
+
+def test_10k_recovers_substantive_sections_after_incorporation_stubs():
+    """Annual-report content later in the same primary document replaces stubs."""
+    mdna_body = "Revenue, margins, liquidity, and capital allocation changed. " * 80
+    financial_body = "Consolidated balances and accounting footnotes follow. " * 100
+    html = (
+        "<html><body>"
+        "<div>Item 7. Management’s Discussion and Analysis of Financial Condition "
+        "and Results of Operations</div><p>See the Financial Section below.</p>"
+        "<div>Item 7A. Quantitative and Qualitative Disclosures About Market Risk</div>"
+        "<p>See the Financial Section below.</p>"
+        "<div>Item 8. Financial Statements and Supplementary Data</div>"
+        "<p>See the Financial Section below.</p>"
+        "<div>Item 9. Changes in and Disagreements with Accountants</div>"
+        "<div><a href='#auditor'>Report of Independent Registered Public "
+        "Accounting Firm</a></div>"
+        "<h1>Management’s Discussion and Analysis</h1>"
+        f"<p>{mdna_body}</p>"
+        "<div id='auditor'><h1>Report of Independent Registered Public "
+        "Accounting Firm</h1>"
+        f"<p>{financial_body}</p></div>"
+        "</body></html>"
+    )
+
+    sections = {section.section_key: section for section in split_10k(html_to_text(html))}
+
+    assert len(sections["mdna"].text) > 4_000
+    assert "Revenue, margins, liquidity" in sections["mdna"].text
+    assert "Consolidated balances" not in sections["mdna"].text
+    assert len(sections["financials"].text) > 5_000
+    assert "Consolidated balances" in sections["financials"].text
+    assert sections["financials"].title.startswith("Report of Independent")
+
+
 def test_10q_item_number_and_title_may_be_on_separate_lines():
     html = (
         "<html><body>"
