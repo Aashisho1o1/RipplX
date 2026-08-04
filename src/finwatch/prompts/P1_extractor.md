@@ -28,11 +28,10 @@ a compiler preflight. Use no more tools than needed.
 
 For a 10-K or 10-Q, inspect MD&A changes before relying on statement-table line items.
 Use the remaining change results for distinct evidence about margins or costs, cash flow
-or capital spending, balance-sheet pressure, and materially changed risks. Do not spend
-the only finding on an ``other income/expense`` or investment-mark swing when a stronger
-operating, cash-flow, margin, capital-allocation, or balance-sheet change is available.
-Such a non-operating item is useful only when it materially explains earnings quality;
-then cite the filing's explanation of the driver, not only the statement row.
+or capital spending, balance-sheet pressure, and materially changed risks. A changed
+statement-table line is decision-useful only when its magnitude and cited driver affect
+earnings quality, cash flow, risk, or valuation; cite the filing's explanation of that
+driver rather than relying on the row alone.
 
 Select one to three concrete, decision-useful findings when the evidence supports them.
 Return zero only after reviewing the highest-ranked changed spans and explicitly
