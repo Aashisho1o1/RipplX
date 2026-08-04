@@ -83,6 +83,12 @@ describe("accessible restrained design tokens", () => {
     expect(block(".filing-option.selected")).toContain("border-color: var(--color-accent)");
   });
 
+  it("keeps research and route-loading surfaces light", () => {
+    expect(block(".research-hero {")).toContain("background: var(--color-accent-wash)");
+    expect(block(".research-hero {")).not.toContain("background: var(--color-sidebar)");
+    expect(block(".app-loading {")).toContain("background: var(--color-bg)");
+  });
+
   it("references every declared token and keeps a five-step serif scale", () => {
     const declared = [...tokens.matchAll(/(--[\w-]+):/g)].flatMap(match => match[1] ? [match[1]] : []);
     for (const name of declared) expect(`${tokens}\n${global}`).toContain(`var(${name})`);

@@ -21,9 +21,9 @@ const PILLARS = [
     body: "Before anything is published, deterministic checks run: quotations must match the filing byte for byte, headlines may not contain numbers or advice, and stated directions must agree with the computed metric. A finding that fails is dropped with a typed reason — the surviving findings and the verified numbers still publish.",
   },
   {
-    kicker: "Hallucination containment",
-    title: "The model chooses what matters. It never gets to invent a fact.",
-    body: "The language model selects and summarises; it cannot author a number, cannot widen its own permissions, and cannot publish a quotation that is not in the filing. That boundary is enforced in code and re-checked on the final output, not requested in a prompt.",
+    kicker: "Interpretation boundary",
+    title: "The evidence can be verified. A possible effect cannot be proven automatically.",
+    body: "RipplX verifies source quotations and deterministic calculations. When an optional model pass describes a possible driver or financial effect, the interface labels it as conditional and shows its assumptions and limitations. It is context for your review, not a prediction.",
   },
   {
     kicker: "Honest failure",
@@ -32,11 +32,10 @@ const PILLARS = [
   },
 ] as const;
 
-const ROADMAP = [
-  { title: "Filings that find you", body: "Periodic delivery to your inbox — a brief when a filing earns your attention, and a short all-clear when it does not, so you never have to remember to visit." },
-  { title: "Connected research", body: "A bounded synthesis pass connects published filing changes, verified financial context, and peers without weakening the evidence rules." },
-  { title: "Connect your brokerage", body: "Read only the list of tickers you hold — never balances, positions, or credentials — so your watchlist builds itself." },
-  { title: "Portfolio-level review", body: "The same verified treatment applied across everything you follow, rather than one filing at a time." },
+const CURRENT_PRODUCT = [
+  { title: "Research before buying", body: "Enter a U.S. ticker to assemble the newest supported SEC filings, up to three AI-selected changes with exact quotations, and six deterministic financial trends." },
+  { title: "Monitor new filings", body: "Track a company, classify new supported filings by attention level, and choose immediate, same-week, weekly, or in-app-only notification behavior." },
+  { title: "Compare local peers", body: "Review SIC-derived peer candidates when comparable companies have already been ingested. RipplX explains the match without calling it an investment recommendation." },
 ] as const;
 
 export function AboutPage() {
@@ -46,9 +45,9 @@ export function AboutPage() {
         <p className="page-eyebrow">About RipplX</p>
         <h1 className="page-title">Filing intelligence that has to prove itself.</h1>
         <p className="page-subtitle">
-          Track the companies you own. When their newest SEC filing arrives, see at most three
-          important changes, the exact evidence behind each one, and six financial deltas computed
-          deterministically from SEC data.
+          Research and monitor U.S. companies through their SEC filings. See up to three
+          AI-selected changes worth reviewing, the exact source quotations behind them, and six
+          financial trends computed deterministically from SEC data.
         </p>
       </div>
     </header>
@@ -86,12 +85,12 @@ export function AboutPage() {
     </section>
 
     <section className="section">
-      <SectionHeader index="03 · Ahead" title="Where this is going" />
+      <SectionHeader index="03 · Product" title="What works today" />
       <p className="metric-caption">
-        Planned, not shipped. Listed here so you can judge the direction, not so it can be claimed.
+        The current prototype stays focused on SEC evidence, verified financial trends, and filing monitoring.
       </p>
       <div className="about-grid">
-        {ROADMAP.map(item => <article className="about-card muted-card" key={item.title}>
+        {CURRENT_PRODUCT.map(item => <article className="about-card muted-card" key={item.title}>
           <h3>{item.title}</h3>
           <p>{item.body}</p>
         </article>)}

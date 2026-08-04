@@ -29,12 +29,12 @@ export function DeepResearchPanel({ run, canRun, demo, fallbackChanges, onRun }:
     <section className="section">
       <div className="surface-header">
         <div>
-          <span className="section-kicker">02 · Connected research</span>
-          <h2>Change → driver → conditional implication</h2>
+          <span className="section-kicker">02 · Filing changes</span>
+          <h2>Verified changes and possible effects</h2>
         </div>
         {!demo && (
           <button className="button primary" disabled={!canRun || busy} onClick={onRun}>
-            {busy ? "Connecting evidence…" : run?.status === "failed" ? "Retry connection" : report ? "Refresh research" : "Connect the research"}
+            {busy ? "Reviewing evidence…" : run?.status === "failed" ? "Try deeper analysis again" : report ? "Run analysis again" : "Run deeper analysis"}
           </button>
         )}
       </div>
@@ -43,13 +43,13 @@ export function DeepResearchPanel({ run, canRun, demo, fallbackChanges, onRun }:
         <div className="empty-state compact">
           <span aria-hidden="true">↗</span>
           <div>
-            <strong>No connected qualitative insight yet</strong>
+            <strong>No deeper interpretation yet</strong>
             <p>
               {demo
-                ? "The static demo keeps this optional model pass off; the verified brief remains available."
+                ? "The showcase displays verified filing changes without running another model pass."
                 : canRun
-                  ? "RipplX can connect filing evidence, financial quality, and peers in one bounded pass."
-                : "Analyze a filing and configure the research model to create this report."}
+                  ? "Optional analysis can compare verified filing changes with financial context. Any possible effect remains conditional."
+                  : "Analyze a filing and configure the research model to add a cautious interpretation."}
             </p>
           </div>
         </div>
@@ -57,36 +57,29 @@ export function DeepResearchPanel({ run, canRun, demo, fallbackChanges, onRun }:
 
       {fallback && (
         <>
-          <p className="research-summary"><strong>{fallbackChanges.length} AI-selected change{fallbackChanges.length === 1 ? "" : "s"}</strong> · exact SEC evidence verified; RipplX publishes up to three distinct changes and does not add filler.</p>
+          <p className="research-summary"><strong>{fallbackChanges.length} AI-selected change{fallbackChanges.length === 1 ? "" : "s"}</strong> · exact source quotations verified. No cause or stock effect is inferred here.</p>
           <div className="research-insight-list">
             {fallbackChanges.map((change) => (
               <article key={change.finding_id}>
                 <div className="research-insight-heading">
-                  <span className={`impact-effect ${change.effect}`}>{change.effect}</span>
-                  <span>SEC evidence verified</span>
+                  <span>AI-selected change</span>
+                  <span>Source quote verified</span>
                 </div>
                 <h3>{change.headline}</h3>
-                <div className="research-chain">
-                  <div><small>Driver</small><strong>{change.driver.replaceAll("_", " ")}</strong></div>
-                  <span aria-hidden="true">→</span>
-                  <div><small>Evidence</small><strong>SEC filing</strong></div>
-                  <span aria-hidden="true">→</span>
-                  <div><small>Possible implication</small><strong>{change.implication}</strong></div>
-                </div>
                 <details>
-                  <summary>Exact evidence</summary>
+                  <summary>Exact SEC evidence</summary>
                   {change.evidence.map((row) => <blockquote key={row.reference_id}>{row.quote}</blockquote>)}
                 </details>
               </article>
             ))}
           </div>
-          {run?.status === "failed" && <p className="metric-caption">Optional deeper synthesis did not finish. The verified filing connection and SEC numbers remain available.</p>}
+          {run?.status === "failed" && <p className="metric-caption">Optional deeper analysis did not finish. No causal or stock-effect claim is shown.</p>}
         </>
       )}
 
       {report && report.insights.length === 0 && !fallback && (
         collected.length > 0 ? <>
-          <p className="research-summary"><strong>Verified evidence collected</strong> · deeper interpretation was withheld, but the sourced facts remain useful.</p>
+          <p className="research-summary"><strong>Verified sources collected</strong> · RipplX withheld interpretation it could not support.</p>
           <div className="research-insight-list">
             {collected.map((observation) => <article key={observation.observation_id}>
               <div className="research-insight-heading"><span>{observation.evidence_label === "calculation" ? "Verified calculation" : "SEC fact"}</span><span>{observation.tool.replace("get_", "").replaceAll("_", " ")}</span></div>
@@ -101,28 +94,22 @@ export function DeepResearchPanel({ run, canRun, demo, fallbackChanges, onRun }:
       {report && report.insights.length > 0 && (
         <>
           <p className="research-summary">{report.summary}</p>
-          <div className="obligation-strip" aria-label="Research coverage">
-            {report.obligations.map((row) => (
-              <span className={row.state} key={row.obligation}>
-                {row.obligation.replaceAll("_", " ")} · {row.state}
-              </span>
-            ))}
-          </div>
+          <p className="metric-caption">Source evidence is verified. The possible driver and effect below are model-generated, conditional, and not predictions.</p>
           <div className="research-insight-list">
             {report.insights.map((insight) => (
               <article key={insight.insight_id}>
                 <div className="research-insight-heading">
-                  <span className={`impact-effect ${insight.scenario}`}>{insight.scenario}</span>
-                  <span>{insight.evidence_status.replaceAll("_", " ")}</span>
+                  <span>{insight.category.replaceAll("_", " ")}</span>
+                  <span>Conditional interpretation</span>
                 </div>
                 <h3>{insight.headline}</h3>
-                <p>{insight.evidence_summary}</p>
+                <p><strong>Observed evidence:</strong> {insight.evidence_summary}</p>
                 <div className="research-chain">
-                  <div><small>Driver</small><strong>{insight.driver}</strong></div>
+                  <div><small>Possible driver</small><strong>{insight.driver}</strong></div>
                   <span aria-hidden="true">→</span>
-                  <div><small>Mechanism</small><strong>{insight.mechanism.replaceAll("_", " ")}</strong></div>
+                  <div><small>May affect</small><strong>{insight.mechanism.replaceAll("_", " ")}</strong></div>
                   <span aria-hidden="true">→</span>
-                  <div><small>Possible implication</small><strong>{insight.implication}</strong></div>
+                  <div><small>Possible effect</small><strong>{insight.implication}</strong></div>
                 </div>
                 <details>
                   <summary>Evidence, assumptions & limitations</summary>
@@ -145,7 +132,14 @@ export function DeepResearchPanel({ run, canRun, demo, fallbackChanges, onRun }:
             ))}
           </div>
           <details className="research-method">
-            <summary>Evidence gaps & method</summary>
+            <summary>Coverage, evidence gaps & method</summary>
+            <div className="obligation-strip" aria-label="Research coverage">
+              {report.obligations.map((row) => (
+                <span className={row.state} key={row.obligation}>
+                  {row.obligation.replaceAll("_", " ")} · {row.state}
+                </span>
+              ))}
+            </div>
             <p>Data cutoff: {report.data_cutoff}</p>
             {report.evidence_gaps.map((gap) => <p key={gap}>{gap}</p>)}
             {run.trace && (

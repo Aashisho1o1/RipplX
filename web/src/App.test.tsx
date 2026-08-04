@@ -8,6 +8,16 @@ afterEach(() => {
   window.history.pushState({}, "", "/");
 });
 
+it("uses a light, visible bootstrap state instead of the dark setup screen", () => {
+  vi.stubGlobal("fetch", vi.fn().mockReturnValue(new Promise(() => undefined)));
+
+  const view = render(<App />);
+
+  expect(screen.getByRole("status")).toHaveTextContent("Starting RipplX");
+  expect(view.container.querySelector("main.app-loading")).not.toBeNull();
+  expect(view.container.querySelector("main.setup")).toBeNull();
+});
+
 it("replaces the shared unlock token with public email-code sign in", async () => {
   // Sign-in is no longer the landing screen; it is reached deliberately.
   window.history.pushState({}, "", "/signin");

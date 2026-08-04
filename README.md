@@ -35,8 +35,9 @@ The current repository contains a lean commercial loop:
    Missing data stays `unavailable`.
 6. Monitor supported filings with one idempotent scheduled command, persist attention events, and
    deliver urgent/same-week and weekly email summaries through Resend.
-7. Connect verified findings and downside lenses into a compact change → driver → conditional
-   implication view. Every displayed change retains its exact filing evidence.
+7. Show verified filing changes first. An optional deeper pass may add a clearly labelled possible
+   driver and financial effect; those interpretations remain model-generated and conditional, while
+   every source quotation and displayed calculation retains deterministic provenance.
 8. Let users save up to five watch conditions and compare user-editable SIC-derived peer
    candidates. Filing commitments remain optional supporting context.
 

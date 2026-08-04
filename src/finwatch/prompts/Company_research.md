@@ -25,8 +25,10 @@ dilution|uncertain), `implication`, `scenario`
 (downside|upside|mixed|neutral), one or two `assumptions`, one or two `limitations`,
 and one to five `observation_ids`.
 
-The reasoning shape is: verified change or fact → driver → affected mechanism →
-conditional implication. State implications conditionally. A business/change insight
+The reasoning shape is: verified change or fact → possible driver → possibly affected mechanism →
+conditional effect. The headline and evidence summary must describe only what the cited
+observations establish; do not put a causal claim or stock effect in either field. State every
+driver, mechanism, and effect conditionally. A business/change insight
 needs filing evidence; financial quality needs verified financial context; peer context
 needs already-ingested comparable evidence.
 

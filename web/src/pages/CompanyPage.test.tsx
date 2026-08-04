@@ -70,7 +70,7 @@ describe("company decision brief", () => {
   it("combines evidence-backed changes, financial health, and watch conditions", async () => {
     const view = renderCompany();
     expect(await screen.findByText(/What deserves attention/)).toBeInTheDocument();
-    expect(screen.getByText(/Connected research/)).toBeInTheDocument();
+    expect(screen.getByText(/Filing changes/)).toBeInTheDocument();
     expect(screen.getByText(/Financial X-Ray/)).toBeInTheDocument();
     expect(screen.getByRole("table", { name: /Deterministic SEC XBRL metric results/ })).toBeVisible();
     expect(view.container.querySelector("details.xray-metrics")).toBeNull();
@@ -80,8 +80,10 @@ describe("company decision brief", () => {
     expect(flaggedRisks).not.toBeNull();
     expect(metricBlock!.compareDocumentPosition(flaggedRisks!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(screen.queryByText("No opaque score")).not.toBeInTheDocument();
-    expect(screen.getByText("Change → driver → conditional implication")).toBeInTheDocument();
-    expect(screen.getAllByText("This may weaken future cash flows if it persists.")).toHaveLength(2);
+    expect(screen.getByText("Verified changes and possible effects")).toBeInTheDocument();
+    expect(screen.queryByText("Driver")).not.toBeInTheDocument();
+    expect(screen.queryByText("Possible implication")).not.toBeInTheDocument();
+    expect(screen.queryByText("This may weaken future cash flows if it persists.")).not.toBeInTheDocument();
     expect(screen.getByText("2 AI-selected changes")).toBeInTheDocument();
     expect(screen.getByText("Revenue declined in the period.")).toBeInTheDocument();
     expect(screen.getByText("Operating cash flow also declined.")).toBeInTheDocument();
@@ -105,8 +107,8 @@ describe("company decision brief", () => {
 
     expect(await screen.findByText("2 AI-selected changes")).toBeInTheDocument();
     expect(screen.getAllByText("Revenue declined from the prior period.")).toHaveLength(2);
-    expect(screen.getAllByText("This may weaken future cash flows if it persists.")).toHaveLength(2);
-    expect(screen.getByText(/Optional deeper synthesis did not finish/)).toBeInTheDocument();
+    expect(screen.queryByText("This may weaken future cash flows if it persists.")).not.toBeInTheDocument();
+    expect(await screen.findByText(/Optional deeper analysis did not finish/)).toBeInTheDocument();
     expect(screen.queryByText("Deep research did not complete")).not.toBeInTheDocument();
   });
 
@@ -148,7 +150,7 @@ describe("company decision brief", () => {
     renderCompany(vi.fn().mockResolvedValue(new Response(JSON.stringify(emptyDeep), { status: 200, headers: { "Content-Type": "application/json" } })));
 
     expect(await screen.findAllByText("Revenue and cash flow need review.")).toHaveLength(2);
-    expect(screen.getByText("Verified evidence collected")).toBeInTheDocument();
+    expect(screen.getByText("Verified sources collected")).toBeInTheDocument();
     expect(screen.getByText("Revenue Growth: -8.0%.")).toBeVisible();
     expect(screen.getByText("1 needs review")).toBeInTheDocument();
     expect(screen.getByText(/Stable and unavailable checks/)).toBeInTheDocument();
@@ -227,8 +229,25 @@ describe("company decision brief", () => {
     renderCompany(vi.fn().mockResolvedValue(new Response(JSON.stringify(deep), { status: 200, headers: { "Content-Type": "application/json" } })));
 
     expect(await screen.findAllByText("A verified operating change affects cash conversion.")).toHaveLength(2);
-    expect(screen.getAllByText("If the condition persists, cash generation may weaken.")).toHaveLength(2);
+    expect(screen.getByText("If the condition persists, cash generation may weaken.")).toBeInTheDocument();
+    expect(screen.getByText("Possible driver")).toBeInTheDocument();
+    expect(screen.getByText("May affect")).toBeInTheDocument();
+    expect(screen.getByText("Possible effect")).toBeInTheDocument();
+    expect(screen.getByText(/model-generated, conditional, and not predictions/)).toBeInTheDocument();
     expect(screen.queryByText(/downside pressure/i)).not.toBeInTheDocument();
+  });
+
+  it("shows a stable company loading surface instead of an empty route", async () => {
+    let resolveResponse: (response: Response) => void = () => undefined;
+    const pending = new Promise<Response>(resolve => { resolveResponse = resolve; });
+    const view = renderCompany(vi.fn().mockReturnValue(pending));
+
+    expect(screen.getByRole("status")).toHaveTextContent("Assembling ACME research");
+    expect(view.container.querySelector("main.route-loading")).not.toBeNull();
+    expect(view.container.querySelector("main.setup")).toBeNull();
+
+    resolveResponse(new Response(JSON.stringify(research), { status: 200, headers: { "Content-Type": "application/json" } }));
+    expect(await screen.findByText(/What deserves attention/)).toBeInTheDocument();
   });
 
   it("continues a research launch from filing analysis into connected research", async () => {
@@ -258,7 +277,7 @@ describe("company decision brief", () => {
       </BootstrapContext.Provider>,
     );
 
-    expect(await screen.findByText("Connecting evidence…", {}, { timeout: 3000 })).toBeInTheDocument();
+    expect(await screen.findByText("Reviewing evidence…", {}, { timeout: 3000 })).toBeInTheDocument();
     expect(fetcher.mock.calls.some(([url, init]) => String(url) === "/api/companies/ACME/research-runs" && (init as RequestInit | undefined)?.method === "POST")).toBe(true);
   });
 });

@@ -37,7 +37,7 @@ function RoutedApp() {
       : <Navigate to="/brief?demo=1" replace />;
   }
   if (!resource.data) {
-    return <main className="setup"><p className={resource.loading ? "loading" : "notice"}>{resource.loading ? "Starting RipplX…" : resource.error?.message ?? "RipplX could not start."}</p></main>;
+    return <main className="app-loading"><section role="status" aria-live="polite"><span className="page-eyebrow">RipplX</span><h1>Starting RipplX…</h1><p>{resource.loading ? "Loading the research workspace." : resource.error?.message ?? "RipplX could not start."}</p></section></main>;
   }
   const demoPreview = resource.data.setup_required && demo;
   return <BootstrapContext.Provider value={{ bootstrap: resource.data, refresh: resource.refresh }}><Routes>{resource.data.setup_required && !demoPreview && <Route path="*" element={<SetupPage onComplete={resource.refresh} />} />} {(!resource.data.setup_required || demoPreview) && <Route element={<AppShell />}><Route path="/today" element={<BriefPage />} /><Route path="/brief" element={<Navigate to={`/today${location.search}`} replace />} /><Route path="/research" element={<ResearchPage />} /><Route path="/about" element={<AboutPage />} /><Route path="/signin" element={<SignInScreen onSignedIn={resource.refresh} />} /><Route path="/companies" element={<CompaniesPage />} /><Route path="/alerts" element={<AlertsPage />} /><Route path="/settings" element={<SettingsPage />} /><Route path="/filings/:accession" element={<FilingPage />} /><Route path="/companies/:ticker" element={<CompanyPage />} /><Route path="*" element={<Navigate to={`/today${location.search}`} replace />} /></Route>}</Routes></BootstrapContext.Provider>;
