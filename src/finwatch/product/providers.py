@@ -118,7 +118,6 @@ _ANALYTICS_EVENTS = {
     "research_opened",
     "risk_radar_viewed",
     "thesis_saved",
-    "valuation_run",
     "alert_opened",
     "checkout_started",
 }

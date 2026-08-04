@@ -30,7 +30,6 @@ ResearchObligationId = Literal[
     "BUSINESS_ECONOMICS",
     "IMPORTANT_CHANGES",
     "FINANCIAL_QUALITY_AND_DOWNSIDE",
-    "VALUATION_CONTEXT",
     "PEER_CONTEXT",
     "SOURCE_COVERAGE",
 ]
@@ -39,7 +38,6 @@ ResearchCategory = Literal[
     "business",
     "change",
     "financial_quality",
-    "valuation",
     "peer",
 ]
 ResearchMechanism = Literal[
@@ -51,14 +49,13 @@ ResearchMechanism = Literal[
     "leverage",
     "liquidity",
     "dilution",
-    "discount_rate",
     "uncertain",
 ]
 ResearchScenario = Literal["downside", "upside", "mixed", "neutral"]
 
 
 class EvidenceRef(BaseModel):
-    kind: Literal["metric", "filing", "thesis", "promise", "valuation"]
+    kind: Literal["metric", "filing", "thesis", "promise"]
     reference_id: str = Field(min_length=1, max_length=128)
     accession: str | None = Field(default=None, max_length=32)
     section_key: str | None = Field(default=None, max_length=128)
@@ -98,7 +95,6 @@ class ResearchObservation(BaseModel):
         "search_filing_sections",
         "get_verified_changes",
         "get_financial_context",
-        "get_valuation_context",
         "get_peer_context",
     ]
     evidence_label: ResearchEvidenceLabel
@@ -150,16 +146,15 @@ class ResearchInsight(BaseModel):
 class CompanyResearchReport(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal["company_research.v1"] = "company_research.v1"
+    schema_version: Literal["company_research.v2"] = "company_research.v2"
     ticker: str
     cik: str
     as_of: str
     data_cutoff: str
     summary: str = Field(min_length=1, max_length=600)
-    obligations: list[ResearchObligation] = Field(min_length=6, max_length=6)
+    obligations: list[ResearchObligation] = Field(min_length=5, max_length=5)
     insights: list[ResearchInsight] = Field(default_factory=list, max_length=5)
     observations: list[ResearchObservation] = Field(default_factory=list, max_length=24)
-    valuation_context: ResearchObservation | None = None
     evidence_gaps: list[str] = Field(default_factory=list, max_length=6)
     disclaimer: str
 
@@ -176,8 +171,6 @@ class CompanyResearchReport(BaseModel):
         known = {row.observation_id for row in self.observations}
         if any(set(row.observation_ids) - known for row in self.insights):
             raise ValueError("research insight references an unknown observation")
-        if self.valuation_context and self.valuation_context.observation_id not in known:
-            raise ValueError("valuation context must appear in the observation ledger")
         return self
 
 
@@ -188,7 +181,6 @@ class ResearchToolCall(BaseModel):
         "search_filing_sections",
         "get_verified_changes",
         "get_financial_context",
-        "get_valuation_context",
         "get_peer_context",
     ]
     arguments_sha256: str = Field(min_length=64, max_length=64)
@@ -199,9 +191,9 @@ class ResearchToolCall(BaseModel):
 class ResearchTrace(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal["company_research_trace.v1"] = "company_research_trace.v1"
+    schema_version: Literal["company_research_trace.v2"] = "company_research_trace.v2"
     tool_calls: list[ResearchToolCall] = Field(default_factory=list, max_length=4)
-    obligation_transitions: list[ResearchObligation] = Field(min_length=6, max_length=6)
+    obligation_transitions: list[ResearchObligation] = Field(min_length=5, max_length=5)
     tool_budget_used: int = Field(ge=0, le=4)
     turn_budget_used: int = Field(ge=0, le=6)
     repair_used: bool
@@ -302,64 +294,18 @@ class PeerComparison(BaseModel):
     metrics: dict[str, str] = Field(default_factory=dict)
 
 
-class ValuationAssumptions(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    discount_rate: float = Field(default=0.10, gt=0.04, lt=0.30)
-    terminal_growth: float = Field(default=0.025, ge=-0.05, lt=0.08)
-    conservative_growth: float = Field(default=0.00, ge=-0.50, le=1.0)
-    base_growth: float = Field(default=0.05, ge=-0.50, le=1.0)
-    optimistic_growth: float = Field(default=0.10, ge=-0.50, le=1.0)
-
-    @model_validator(mode="after")
-    def ordered(self) -> ValuationAssumptions:
-        if not self.conservative_growth <= self.base_growth <= self.optimistic_growth:
-            raise ValueError("growth scenarios must be ordered")
-        if self.terminal_growth >= self.discount_rate:
-            raise ValueError("terminal growth must be below the discount rate")
-        return self
-
-
-class ValuationScenario(BaseModel):
-    name: Literal["conservative", "base", "optimistic"]
-    growth: float
-    implied_value_per_share: float
-    change_percent: float | None = None
-
-
-class ValuationRun(BaseModel):
-    run_id: str
-    ticker: str
-    price: float = Field(gt=0)
-    price_as_of: str
-    status: Literal["computed", "unavailable"]
-    label: Literal["Demanding", "Balanced", "Undemanding", "Unavailable"]
-    explanation: str
-    assumptions: ValuationAssumptions
-    scenarios: list[ValuationScenario] = Field(default_factory=list, max_length=3)
-    reverse_dcf_growth: float | None = None
-    trailing_pe: float | None = None
-    price_to_fcf: float | None = None
-    fcf_yield: float | None = None
-    inputs: list[EvidenceRef] = Field(default_factory=list)
-    formula_version: str
-    certificate_hash: str
-    created_at: str
-
-
 class ChangeImpact(BaseModel):
     finding_id: str
     headline: str
     driver: Literal["revenue", "earnings", "cash_flow", "balance_sheet", "per_share", "operations"]
     effect: Literal["upside", "downside", "mixed", "uncertain"]
     implication: str
-    evidence: list[EvidenceRef] = Field(default_factory=list, max_length=3)
+    evidence: list[EvidenceRef] = Field(min_length=1, max_length=3)
 
 
 class StockImpactSnapshot(BaseModel):
     directional_pressure: Literal["upside", "downside", "mixed", "uncertain"]
     summary: str
-    priced_in: str
     watch_next: str
     reason_codes: list[str] = Field(default_factory=list, max_length=8)
     changes: list[ChangeImpact] = Field(default_factory=list, max_length=3)
@@ -391,14 +337,12 @@ class BeforeYouBuyBrief(BaseModel):
     business_evidence: EvidenceRef | None = None
     recent_filings: list[dict] = Field(default_factory=list)
     metrics: dict
-    valuation: ValuationRun | None = None
     impact: StockImpactSnapshot
     profile: CompanyProfile
     thesis: Thesis
     promises: list[ManagementPromise] = Field(default_factory=list)
     peers: list[PeerComparison] = Field(default_factory=list)
     manual_peer_tickers: list[str] = Field(default_factory=list, max_length=6)
-    questions: list[str] = Field(default_factory=list)
     certificate_urls: list[str] = Field(default_factory=list)
     deep_research: ResearchRun | None = None
     disclaimer: str

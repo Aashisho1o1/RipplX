@@ -113,9 +113,9 @@ buying, monitor filings, detect downside, receive a weekly brief, and compare si
 > “I own 12 stocks. I do not read every 8-K, 10-Q, and 10-K. I want to know when something
 > actually important changed.”
 
-**What this is not:** an investment advisor, portfolio manager, trading system, or historical
-backtester. Transparent reverse-DCF scenarios expose assumptions but never claim one correct value.
-The UI never emits a trade action, price target, P3 posture, or shadow signal.
+**What this is not:** an investment advisor, portfolio manager, trading system, valuation product,
+or historical backtester. The UI never emits a trade action, price target, P3 posture, or shadow
+signal.
 
 **Trust promise:**
 
@@ -129,8 +129,8 @@ The UI never emits a trade action, price target, P3 posture, or shadow signal.
 - Verification proves provenance, exactness, schema, and hygiene. It does **not** prove that the
   model's interpretation of importance is correct, so the UI labels findings as AI-selected.
 - Product features compose only verified projection data: deterministic downside lenses, optional
-  confirmed thesis monitoring, attention events, the bounded company-research harness, bounded
-  follow-up tools, and SIC-derived peer candidates cannot override a compiler verdict.
+  confirmed thesis monitoring, attention events, the bounded company-research harness, and
+  SIC-derived peer candidates cannot override a compiler verdict.
 
 Prefer deterministic over stochastic · fewer/sharper findings over noisy coverage · explicit
 `not_applicable`/`unavailable` over guessing · withholding over plausible unsupported output.
@@ -158,7 +158,7 @@ SEC companyfacts ──► point-in-time XBRL normalization ──► six starte
 section catalog + metrics ──► bounded P1 JSON tool loop ──► compiler ──► one shared repair
                           ──► finance Skeptic ──► final compiler/per-finding prune
 
-verified filing + metrics + risk + saved valuation + peers
+verified filing + metrics + risk + peers
         ──► bounded company-research tool loop ──► cited insight compiler
         ──► one-directional Skeptic ──► per-insight prune ──► research_runs artifact
 
@@ -264,10 +264,10 @@ selects an accession or falls through to older history within that form.
 ## 6. SQLite and stored data
 
 Authoritative DDL is the one fresh schema in `src/finwatch/db/schema.sql`; there is no migration
-ladder. Schema v8 is a clean backup-and-reset boundary for attempt-linked `harness.v2` traces,
-`certificate.v2`, private product state, and owner-scoped `company_research.v1` artifacts; no v1
+ladder. Schema v9 is a clean backup-and-reset boundary for attempt-linked `harness.v2` traces,
+`certificate.v2`, private product state, and owner-scoped `company_research.v2` artifacts; no v1
 compatibility fallback exists. It stores users,
-private company membership/profiles/theses/events/valuations/delivery records, billing identifiers,
+private company membership/profiles/theses/events/delivery records, billing identifiers,
 and reserved encrypted-broker state. A reserved local user preserves CLI/local
 behavior. Issuers, filings, SEC facts, analyses, computations, and verification remain shared
 public-data artifacts. Older schema versions fail closed with a backup-and-reset message.
@@ -328,8 +328,7 @@ effective `as_of`, and source inputs, including SEC `decimals`. Revenue, net inc
 count also carry `direction_delta`, conservative `direction_slack`, and `direction_basis`; missing
 rounding metadata never becomes zero slack. The browser DTO carries the source computation ID. The
 full formula catalog remains tested research code but is not called, persisted, or presented by the
-launch metrics service. Valuation accepts an explicit timestamped user price downstream of verified
-inputs; holding/portfolio inputs remain absent.
+launch metrics service. Market-price, valuation, holding, and portfolio inputs remain absent.
 
 Presentation language stays narrower than the accounting facts: share-count changes are described
 only as increased, decreased, or flat—not inferred to be dilution or a buyback—and only when the
@@ -395,10 +394,10 @@ drops only findings carrying validated objections; provider failure remains a wh
 Output is capped at 2,000 tokens per call.
 
 The company-research harness is a separate downstream pass over already-verified product data. It
-has six fixed obligations, at most six model turns and four read-only tool requests, immutable
+has five fixed obligations, at most six model turns and four read-only tool requests, immutable
 content-addressed observations, one shared compiler repair, and one final one-directional Skeptic.
-Its compiler drops invalid insights individually, requires an entered price for valuation prose,
-labels every implication as a conditional inference, and records the report data cutoff. It has no
+Its compiler drops invalid insights individually, labels every implication as a conditional
+inference, and records the report data cutoff. It has no
 web search, arbitrary URLs, market-data
 provider, transcript/news ingestion, subagents, or generic plugin dispatch. The immediate GET brief
 still works without it; POST creates or reuses one owner-scoped `research_runs` artifact and the
@@ -582,7 +581,7 @@ analysis replay · provider-native function calling · generic plugins/subagents
 | Launch pipeline and scheduling | `src/finwatch/pipeline/orchestrator.py`, `run.py`, `progress.py` |
 | Publication checks | `src/finwatch/verify/compiler.py`, `checks.py`, `verify/presentation.py` |
 | Canonical projection and renderer | `src/finwatch/presentation/`, `src/finwatch/digest/render.py` |
-| Research, risk, monitoring, valuation, providers | `src/finwatch/product/`, `PROVIDERS.md` |
+| Research, risk, monitoring, providers | `src/finwatch/product/`, `PROVIDERS.md` |
 | Web/API/security | `src/finwatch/web/`, `web/` |
 | 12-case golden set | `src/finwatch/evals/golden_set/manifest.yaml` |
 

@@ -28,6 +28,14 @@ const evidence = {
   quote: "Revenue declined in the period.",
   section_sha256: "a".repeat(64),
 };
+const secondEvidence = {
+  ...evidence,
+  reference_id: "a-1:mdna:32:71",
+  section_key: "mdna",
+  char_start: 32,
+  char_end: 71,
+  quote: "Operating cash flow also declined.",
+};
 
 const research: CompanyResearch = {
   ticker: "ACME",
@@ -40,20 +48,12 @@ const research: CompanyResearch = {
   business_evidence: evidence,
   recent_filings: [{ accession: "a-1", ticker: "ACME", form: "10-K", filed: "2026-08-01", edgar_url: "https://www.sec.gov/Archives/a-1.htm", findings: [], withheld: false, withheld_reason: null, withheld_kind: null, outcome: "published", dropped_finding_count: 0 }],
   metrics: { ticker: "ACME", as_of: "2026-08-01", rows: [{ metric: "Revenue growth", value: "-8.0%", formula: "revenue_growth.v5", state: "computed", state_label: "Computed", source_computation_id: 1, effective_as_of: "2026-08-01" }], empty: null, summary: "One verified operating measure declined.", before_first_filing: false },
-  valuation: {
-    run_id: "v-1", ticker: "ACME", price: 10, price_as_of: "2026-08-01", status: "computed", label: "Demanding", explanation: "Price requires stronger cash-flow growth.", assumptions: { discount_rate: 0.1, terminal_growth: 0.025, conservative_growth: 0, base_growth: 0.05, optimistic_growth: 0.1 }, scenarios: [
-      { name: "conservative", growth: 0, implied_value_per_share: 7, change_percent: -30 },
-      { name: "base", growth: 0.05, implied_value_per_share: 9, change_percent: -10 },
-      { name: "optimistic", growth: 0.1, implied_value_per_share: 12, change_percent: 20 },
-    ], reverse_dcf_growth: 0.08, trailing_pe: 18.2, price_to_fcf: 21.4, fcf_yield: 0.0467, inputs: [evidence], formula_version: "reverse_dcf.v2", certificate_hash: "b".repeat(64), created_at: "2026-08-01T00:00:00Z",
-  },
-  impact: { directional_pressure: "downside", summary: "Verified evidence currently points to more downside than upside pressure.", priced_in: "The saved price is demanding under the selected assumptions.", watch_next: "Watch revenue and cash flow in the next filing.", reason_codes: ["VERIFIED_REVENUE_DOWN"], changes: [{ finding_id: "f1", headline: "Revenue declined from the prior period.", driver: "revenue", effect: "downside", implication: "This may weaken future cash flows if it persists.", evidence: [evidence] }], formula_version: "stock_impact.v1" },
+  impact: { directional_pressure: "downside", summary: "Verified evidence currently points to more downside than upside pressure.", watch_next: "Watch revenue and cash flow in the next filing.", reason_codes: ["VERIFIED_REVENUE_DOWN"], changes: [{ finding_id: "f1", headline: "Revenue declined from the prior period.", driver: "revenue", effect: "downside", implication: "This may weaken future cash flows if it persists.", evidence: [evidence] }, { finding_id: "f2", headline: "Operating cash flow weakened.", driver: "cash_flow", effect: "downside", implication: "This can weaken the cash flow supporting the business.", evidence: [secondEvidence] }], formula_version: "stock_impact.v1" },
   profile: { ticker: "ACME", cik: "0000000001", monitoring_enabled: true, notification_level: "weekly", thesis: { items: [] }, peer_ciks: [], updated_at: "2026-08-01T00:00:00Z" },
   thesis: { items: [{ item_id: "w1", kind: "next_evidence", text: "Revenue returns to growth.", status: "confirmed", lens: "operating_performance" }] },
   promises: [],
   peers: [],
   manual_peer_tickers: [],
-  questions: ["What is the biggest verified downside right now?"],
   certificate_urls: ["/api/filings/a-1/certificate"],
   deep_research: null,
   disclaimer: "Educational decision support only.",
@@ -67,7 +67,7 @@ function renderCompany(fetcher = vi.fn().mockResolvedValue(new Response(JSON.str
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 describe("company decision brief", () => {
-  it("combines impact, financial health, valuation, changes, and watch conditions", async () => {
+  it("combines evidence-backed changes, financial health, and watch conditions", async () => {
     const view = renderCompany();
     expect(await screen.findByText(/What deserves attention/)).toBeInTheDocument();
     expect(screen.getByText(/Connected research/)).toBeInTheDocument();
@@ -80,12 +80,14 @@ describe("company decision brief", () => {
     expect(flaggedRisks).not.toBeNull();
     expect(metricBlock!.compareDocumentPosition(flaggedRisks!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(screen.queryByText("No opaque score")).not.toBeInTheDocument();
-    expect(await screen.findByText("18.2×")).toBeInTheDocument();
-    expect(screen.getByText("21.4×")).toBeInTheDocument();
-    expect(screen.getByText("4.7%")).toBeInTheDocument();
-    expect(screen.getByText("-30.0% vs price")).toBeInTheDocument();
     expect(screen.getByText("Change → driver → conditional implication")).toBeInTheDocument();
     expect(screen.getAllByText("This may weaken future cash flows if it persists.")).toHaveLength(2);
+    expect(screen.getByText("2 AI-selected changes")).toBeInTheDocument();
+    expect(screen.getByText("Revenue declined in the period.")).toBeInTheDocument();
+    expect(screen.getByText("Operating cash flow also declined.")).toBeInTheDocument();
+    expect(screen.queryByText("Follow-up research")).not.toBeInTheDocument();
+    expect(screen.queryByText("Valuation and scenarios")).not.toBeInTheDocument();
+    expect(screen.getByText("Comparisons and verification")).toBeInTheDocument();
     expect(screen.getByText("Saved watch conditions")).toBeInTheDocument();
     expect(screen.getByDisplayValue("Revenue returns to growth.")).toBeInTheDocument();
   });
@@ -101,7 +103,7 @@ describe("company decision brief", () => {
     };
     renderCompany(vi.fn().mockResolvedValue(new Response(JSON.stringify(failed), { status: 200, headers: { "Content-Type": "application/json" } })));
 
-    expect(await screen.findByText("Verified filing connection")).toBeInTheDocument();
+    expect(await screen.findByText("2 AI-selected changes")).toBeInTheDocument();
     expect(screen.getAllByText("Revenue declined from the prior period.")).toHaveLength(2);
     expect(screen.getAllByText("This may weaken future cash flows if it persists.")).toHaveLength(2);
     expect(screen.getByText(/Optional deeper synthesis did not finish/)).toBeInTheDocument();
@@ -121,7 +123,7 @@ describe("company decision brief", () => {
         run_id: "6".repeat(32), ticker: "ACME", cik: research.cik, status: "partial" as const,
         input_hash: "7".repeat(64),
         report: {
-          schema_version: "company_research.v1" as const, ticker: "ACME", cik: research.cik,
+          schema_version: "company_research.v2" as const, ticker: "ACME", cik: research.cik,
           as_of: "2026-08-01", data_cutoff: "2026-08-03",
           summary: "No qualitative insight passed the deterministic research compiler.",
           obligations: [], insights: [],
@@ -131,13 +133,13 @@ describe("company decision brief", () => {
             evidence: [{ ...evidence, kind: "metric" as const, reference_id: "computation:1:revenue_growth", accession: null, section_key: null, char_start: null, char_end: null, quote: null, section_sha256: null }],
             metric_ids: ["revenue_growth"], as_of: "2026-08-01", stable_hash: "8".repeat(64),
           }],
-          valuation_context: null, evidence_gaps: [], disclaimer: research.disclaimer,
+          evidence_gaps: [], disclaimer: research.disclaimer,
         },
         trace: {
-          schema_version: "company_research_trace.v1" as const, tool_calls: [], obligation_transitions: [],
+          schema_version: "company_research_trace.v2" as const, tool_calls: [], obligation_transitions: [],
           tool_budget_used: 1, turn_budget_used: 3, repair_used: true,
           dropped_insights: { i1: ["UNSAFE_AUTHORED_TEXT"] }, model: "test/model",
-          prompt_version: "Company_research.v1", compiler_version: "company_research_compiler.v1",
+          prompt_version: "Company_research.v2", compiler_version: "company_research_compiler.v2",
           terminal_reason: "submitted",
         },
         created_at: "2026-08-03T00:00:00Z", completed_at: "2026-08-03T00:00:05Z",
@@ -165,7 +167,7 @@ describe("company decision brief", () => {
         status: "partial" as const,
         input_hash: "d".repeat(64),
         report: {
-          schema_version: "company_research.v1" as const,
+          schema_version: "company_research.v2" as const,
           ticker: "ACME",
           cik: "0000000001",
           as_of: "2026-08-01",
@@ -175,7 +177,6 @@ describe("company decision brief", () => {
             { obligation: "BUSINESS_ECONOMICS" as const, state: "mixed" as const },
             { obligation: "IMPORTANT_CHANGES" as const, state: "supported" as const },
             { obligation: "FINANCIAL_QUALITY_AND_DOWNSIDE" as const, state: "supported" as const },
-            { obligation: "VALUATION_CONTEXT" as const, state: "unavailable" as const },
             { obligation: "PEER_CONTEXT" as const, state: "unavailable" as const },
             { obligation: "SOURCE_COVERAGE" as const, state: "supported" as const },
           ],
@@ -203,12 +204,11 @@ describe("company decision brief", () => {
             as_of: "2026-08-01",
             stable_hash: "e".repeat(64),
           }],
-          valuation_context: null,
-          evidence_gaps: ["Enter a current price and date to add valuation context."],
+          evidence_gaps: ["No already-ingested peer comparison was available."],
           disclaimer: research.disclaimer,
         },
         trace: {
-          schema_version: "company_research_trace.v1" as const,
+          schema_version: "company_research_trace.v2" as const,
           tool_calls: [{ tool: "get_verified_changes", arguments_sha256: "f".repeat(64), result_sha256: "a".repeat(64), cached: false }],
           obligation_transitions: [],
           tool_budget_used: 1,
@@ -216,8 +216,8 @@ describe("company decision brief", () => {
           repair_used: false,
           dropped_insights: {},
           model: "test/model",
-          prompt_version: "Company_research.v1",
-          compiler_version: "company_research_compiler.v1",
+          prompt_version: "Company_research.v2",
+          compiler_version: "company_research_compiler.v2",
           terminal_reason: "submitted",
         },
         created_at: "2026-08-01T00:00:00Z",
@@ -229,21 +229,6 @@ describe("company decision brief", () => {
     expect(await screen.findAllByText("A verified operating change affects cash conversion.")).toHaveLength(2);
     expect(screen.getAllByText("If the condition persists, cash generation may weaken.")).toHaveLength(2);
     expect(screen.queryByText(/downside pressure/i)).not.toBeInTheDocument();
-  });
-
-  it("keeps a fail-closed demo valuation visible without refreshing ephemeral demo state", async () => {
-    const emptyBrief = { ...research, valuation: null };
-    const unavailable = { ...research.valuation!, status: "unavailable" as const, label: "Unavailable" as const, explanation: "Required SEC inputs are unreliable.", scenarios: [], reverse_dcf_growth: null, trailing_pe: null, price_to_fcf: null, fcf_yield: null };
-    const fetcher = vi.fn().mockImplementation((_input: RequestInfo | URL, init?: RequestInit) => Promise.resolve(new Response(JSON.stringify(init?.method === "POST" ? unavailable : emptyBrief), { status: 200, headers: { "Content-Type": "application/json" } })));
-    renderCompany(fetcher);
-    fireEvent.change(await screen.findByLabelText("Price you want to evaluate"), { target: { value: "400" } });
-
-    fireEvent.click(screen.getByRole("button", { name: "Calculate scenarios" }));
-
-    expect(await screen.findByText("Unavailable under these assumptions")).toBeInTheDocument();
-    expect(screen.getByText("Verified filing connection")).toBeInTheDocument();
-    expect(screen.getByText("Required SEC inputs are unreliable.")).toBeInTheDocument();
-    expect(fetcher).toHaveBeenCalledTimes(2);
   });
 
   it("continues a research launch from filing analysis into connected research", async () => {

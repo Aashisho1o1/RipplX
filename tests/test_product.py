@@ -3,8 +3,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from finwatch.core.types import MetricStatus
-from finwatch.db import Company, Computation, Filing, Repo, User, XbrlFact
-from finwatch.llm.router import FakeLLMClient
+from finwatch.db import Company, Computation, Filing, Repo, User
 from finwatch.metrics.envelope import InputUsed, MetricResult
 from finwatch.product.models import (
     AttentionEvent,
@@ -12,14 +11,12 @@ from finwatch.product.models import (
     RiskRadarResult,
     Thesis,
     ThesisItem,
-    ValuationAssumptions,
 )
 from finwatch.product.monitoring import (
     build_attention_events,
     deliver_attention_event,
     deliver_weekly_briefs,
 )
-from finwatch.product.questions import QuestionHarness
 from finwatch.product.service import ProductService
 
 NOW = "2026-08-02T12:00:00+00:00"
@@ -192,64 +189,6 @@ def test_profile_and_thesis_are_owner_isolated(repo: Repo):
     assert other.thesis.items == []
 
 
-def test_reverse_dcf_uses_verified_inputs_and_persists_certificate(repo: Repo):
-    _company(repo)
-    cfo_input = InputUsed(
-        concept="cfo",
-        tag="NetCashProvidedByUsedInOperatingActivities",
-        value=150,
-        unit_ref="USD",
-        period_start="2025-08-01",
-        period_end=AS_OF,
-        accession_number="0000000001-26-000001",
-    )
-    _persist(
-        repo,
-        _metric(
-            "cfo_trend", value=0.1, components={"current": 150, "prior": 136}, inputs=[cfo_input]
-        ),
-        _metric(
-            "net_income_trend",
-            value=0.2,
-            components={"current": 120, "prior": 100},
-        ),
-        _metric("liquidity_basics", components={"net_debt": -20}),
-        _metric("share_count_change", value=0.01, components={"current": 10, "prior": 9.9}),
-    )
-    repo.replace_xbrl_facts(
-        "1",
-        [
-            XbrlFact(
-                cik="1",
-                taxonomy="us-gaap",
-                tag="PaymentsToAcquirePropertyPlantAndEquipment",
-                value=30,
-                unit_ref="USD",
-                decimals="0",
-                period_start="2025-08-01",
-                period_end=AS_OF,
-                accession_number="0000000001-26-000001",
-            )
-        ],
-    )
-    service = ProductService(repo, user_id="local", now_fn=lambda: NOW)
-    run = service.calculate_valuation(
-        "TEST", price=120, price_as_of=AS_OF, assumptions=ValuationAssumptions()
-    )
-    assert run is not None
-    assert run.status == "computed"
-    assert len(run.scenarios) == 3
-    assert run.trailing_pe == 10
-    assert run.price_to_fcf == 10
-    assert run.fcf_yield == 0.1
-    assert all(row.change_percent is not None for row in run.scenarios)
-    assert run.scenarios[1].change_percent == round(
-        (run.scenarios[1].implied_value_per_share / run.price - 1) * 100, 1
-    )
-    assert len(run.certificate_hash) == 64
-    assert service.store.latest_valuation(repo.get_company("1")).run_id == run.run_id
-
-
 def test_stock_impact_is_explainable_and_uses_verified_change_structure(repo: Repo):
     _company(repo)
     service = ProductService(repo, user_id="local", now_fn=lambda: NOW)
@@ -262,7 +201,6 @@ def test_stock_impact_is_explainable_and_uses_verified_change_structure(repo: Re
                 explanation="Multiple verified operating measures declined.",
             )
         ],
-        valuation=None,
         recent_filings=[
             {
                 "accession": "0000000001-26-000001",
@@ -299,10 +237,9 @@ def test_stock_impact_is_explainable_and_uses_verified_change_structure(repo: Re
     assert impact.changes[0].evidence[0].accession == "0000000001-26-000001"
 
 
-def test_unstructured_change_does_not_create_false_directional_pressure():
+def test_change_without_exact_evidence_is_not_projected():
     impact = ProductService._stock_impact(
         risks=[],
-        valuation=None,
         recent_filings=[
             {
                 "findings": [
@@ -317,7 +254,7 @@ def test_unstructured_change_does_not_create_false_directional_pressure():
     )
 
     assert impact.directional_pressure == "uncertain"
-    assert impact.changes[0].effect == "uncertain"
+    assert impact.changes == []
 
 
 def test_attention_event_is_idempotent(repo: Repo):
@@ -366,77 +303,6 @@ def test_attention_event_requires_a_verified_analysis(repo: Repo):
     assert ProductService(repo, user_id="local", now_fn=lambda: NOW).create_attention_event(
         "TEST"
     ) is None
-
-
-def test_follow_up_model_can_select_only_server_issued_observations(repo: Repo):
-    _company(repo)
-    _persist(
-        repo,
-        _metric("revenue_growth", value=-0.1, direction=-10),
-    )
-    llm = FakeLLMClient(
-        responses=[
-            '{"action":"tool","tool":"get_risk_radar","arguments":{}}',
-            '{"action":"submit","observation_ids":["risk:operating_deterioration",'
-            '"invented:claim"],"conclusion":"supported"}',
-        ]
-    )
-    answer = QuestionHarness(ProductService(repo, user_id="local", now_fn=lambda: NOW), llm).run(
-        "TEST", "Is the business deteriorating?"
-    )
-    assert answer.conclusion == "supported"
-    assert [row.observation_id for row in answer.observations] == ["risk:operating_deterioration"]
-    assert "invented" not in answer.model_dump_json()
-    assert answer.tools_used == ["get_risk_radar"]
-    assert "One verified operating measure declined" in answer.answer
-
-
-def test_follow_up_fails_closed_after_repeated_malformed_actions(repo: Repo):
-    _company(repo)
-    llm = FakeLLMClient(responses=["{}", "not json"])
-    answer = QuestionHarness(ProductService(repo, user_id="local", now_fn=lambda: NOW), llm).run(
-        "TEST", "Tell me what to buy"
-    )
-    assert answer.conclusion == "insufficient"
-    assert answer.observations == []
-    assert "general-web" in answer.limitation
-
-
-def test_follow_up_can_retrieve_saved_watch_conditions(repo: Repo):
-    _company(repo)
-    service = ProductService(repo, user_id="local", now_fn=lambda: NOW)
-    profile = service.profile("TEST")
-    assert profile is not None
-    service.save_profile(
-        "TEST",
-        profile.model_copy(
-            update={
-                "thesis": Thesis(
-                    items=[
-                        ThesisItem(
-                            item_id="t1",
-                            kind="next_evidence",
-                            text="Cash conversion returns to its prior level",
-                            status="confirmed",
-                            lens="cash_conversion",
-                        )
-                    ]
-                )
-            }
-        ),
-    )
-    llm = FakeLLMClient(
-        responses=[
-            '{"action":"tool","tool":"get_watch_conditions","arguments":{}}',
-            '{"action":"submit","observation_ids":["watch:t1"],'
-            '"conclusion":"supported"}',
-        ]
-    )
-
-    answer = QuestionHarness(service, llm).run("TEST", "What should I watch next?")
-
-    assert answer.answer == "confirmed: Cash conversion returns to its prior level"
-    assert answer.tools_used == ["get_watch_conditions"]
 
 
 def test_monitoring_and_delivery_are_idempotent(repo: Repo):

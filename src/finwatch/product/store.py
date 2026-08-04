@@ -13,7 +13,6 @@ from finwatch.product.models import (
     ResearchStatus,
     RiskRadarResult,
     Thesis,
-    ValuationRun,
 )
 
 
@@ -196,35 +195,6 @@ class ProductStore:
         )
         self.repo.conn.commit()
         return cursor.rowcount > 0
-
-    def save_valuation(self, company: Company, run: ValuationRun) -> None:
-        self.repo.conn.execute(
-            """INSERT INTO valuation_runs
-                 (id, user_id, cik, price, price_as_of, assumptions_json, output_json,
-                  formula_version, certificate_hash, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (
-                run.run_id,
-                self.user_id,
-                company.cik,
-                run.price,
-                run.price_as_of,
-                run.assumptions.model_dump_json(),
-                run.model_dump_json(),
-                run.formula_version,
-                run.certificate_hash,
-                run.created_at,
-            ),
-        )
-        self.repo.conn.commit()
-
-    def latest_valuation(self, company: Company) -> ValuationRun | None:
-        row = self.repo.conn.execute(
-            """SELECT output_json FROM valuation_runs
-                WHERE user_id = ? AND cik = ? ORDER BY created_at DESC LIMIT 1""",
-            (self.user_id, company.cik),
-        ).fetchone()
-        return None if row is None else ValuationRun.model_validate_json(row["output_json"])
 
     def begin_research_run(
         self, company: Company, *, run_id: str, input_hash: str, now: str

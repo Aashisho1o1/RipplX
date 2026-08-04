@@ -349,30 +349,14 @@ def test_operator_environment_key_enables_hosted_analysis_without_exposing_it(
     finally:
         connection.close()
 
-    captured = {}
-
-    def fake_question(self, ticker, question):
-        captured["api_key"] = self.llm._api_key
-        return {
-            "ticker": ticker,
-            "question": question,
-            "conclusion": "insufficient",
-            "answer": "No verified evidence was selected.",
-            "observations": [],
-            "tools_used": [],
-            "limitation": "No unsupported answer was substituted.",
-        }
-
-    monkeypatch.setattr(
-        "finwatch.product.questions.QuestionHarness.run", fake_question
+    assert (
+        alice.post(
+            "/api/companies/MSFT/questions",
+            json={"question": "What changed?"},
+            headers=_csrf(alice),
+        ).status_code
+        == 404
     )
-    question = alice.post(
-        "/api/companies/MSFT/questions",
-        json={"question": "What changed?"},
-        headers=_csrf(alice),
-    )
-    assert question.status_code == 200
-    assert captured["api_key"] == operator_key
 
 
 def test_local_api_remains_auth_free(tmp_path):

@@ -155,36 +155,6 @@ def test_compiler_prunes_authored_numbers_and_fabricated_citations_per_insight()
     assert errors["i4"] == ["UNSAFE_AUTHORED_TEXT"]
 
 
-def test_missing_valuation_is_unavailable_and_never_estimated():
-    service = _service()
-    company = service._company("MSFT")
-    assert company is not None
-    filing = service._latest_supported(company)
-    assert filing is not None
-    harness = CompanyResearchHarness(service, FakeLLMClient(responses=[]))
-    observation = harness._valuation(company)[0]
-    report, errors = harness.compile(
-        company,
-        filing,
-        ResearchDraft(
-            summary="Valuation evidence is incomplete.",
-            insights=[_insight("i1", "valuation", observation.observation_id)],
-        ),
-        {observation.observation_id: observation},
-    )
-
-    assert report.insights == []
-    assert errors["i1"] == [
-        "CATEGORY_EVIDENCE_MISSING",
-        "INSUFFICIENT_EVIDENCE",
-        "VALUATION_UNAVAILABLE",
-    ]
-    valuation = next(row for row in report.obligations if row.obligation == "VALUATION_CONTEXT")
-    assert valuation.state == "unavailable"
-    assert report.valuation_context == observation
-    assert any("current price" in gap for gap in report.evidence_gaps)
-
-
 def test_explicit_unavailability_is_a_complete_report_not_protocol_degradation():
     def responder(system: str, user: str) -> str:
         if "one-directional financial Skeptic" in system:
@@ -407,8 +377,8 @@ def test_research_run_artifacts_are_owner_scoped_and_reusable():
         turn_budget_used=1,
         repair_used=False,
         model="fake/model",
-        prompt_version="Company_research.v1",
-        compiler_version="company_research_compiler.v1",
+        prompt_version="Company_research.v2",
+        compiler_version="company_research_compiler.v2",
         terminal_reason="turn_budget_exhausted",
     )
     assert service.store.set_research_running(run_id)

@@ -34,12 +34,11 @@ from finwatch.product.service import ProductService
 _STRICT = ConfigDict(extra="forbid")
 MAX_TURNS = 6
 MAX_TOOLS = 4
-COMPILER_VERSION = "company_research_compiler.v1"
+COMPILER_VERSION = "company_research_compiler.v2"
 OBLIGATIONS: tuple[ResearchObligationId, ...] = (
     "BUSINESS_ECONOMICS",
     "IMPORTANT_CHANGES",
     "FINANCIAL_QUALITY_AND_DOWNSIDE",
-    "VALUATION_CONTEXT",
     "PEER_CONTEXT",
     "SOURCE_COVERAGE",
 )
@@ -95,13 +94,6 @@ class FinancialAction(BaseModel):
     arguments: FinancialArgs
 
 
-class ValuationAction(BaseModel):
-    model_config = _STRICT
-    action: Literal["tool"]
-    tool: Literal["get_valuation_context"]
-    arguments: EmptyArgs
-
-
 class PeerAction(BaseModel):
     model_config = _STRICT
     action: Literal["tool"]
@@ -112,7 +104,7 @@ class PeerAction(BaseModel):
 class DraftInsight(BaseModel):
     model_config = _STRICT
     insight_id: str = Field(pattern=r"^i[1-5]$")
-    category: Literal["business", "change", "financial_quality", "valuation", "peer"]
+    category: Literal["business", "change", "financial_quality", "peer"]
     headline: str = Field(min_length=1, max_length=180)
     evidence_summary: str = Field(min_length=1, max_length=320)
     driver: str = Field(min_length=1, max_length=180)
@@ -125,7 +117,6 @@ class DraftInsight(BaseModel):
         "leverage",
         "liquidity",
         "dilution",
-        "discount_rate",
         "uncertain",
     ]
     implication: str = Field(min_length=1, max_length=420)
@@ -156,7 +147,7 @@ class SubmitAction(BaseModel):
 
 
 ResearchAction = Annotated[
-    SearchAction | ChangesAction | FinancialAction | ValuationAction | PeerAction | SubmitAction,
+    SearchAction | ChangesAction | FinancialAction | PeerAction | SubmitAction,
     Field(union_mode="left_to_right"),
 ]
 _ACTION = TypeAdapter(ResearchAction)
@@ -204,7 +195,6 @@ def research_input_hash(service: ProductService, ticker: str) -> str:
     if company is None:
         raise ValueError("company not found")
     filing = service._latest_supported(company)
-    valuation = service.store.latest_valuation(company)
     peers = service.store.peers(company, service.store.profile(company, now=service.now_fn()))
     _, prompt_version = load_prompt(STAGE_COMPANY_RESEARCH)
     return _json_hash(
@@ -225,9 +215,6 @@ def research_input_hash(service: ProductService, ticker: str) -> str:
                 ]
                 for row in service.repo.latest_computations(company.ticker)
             ],
-            "valuation": None
-            if valuation is None
-            else [valuation.run_id, valuation.certificate_hash, valuation.price_as_of],
             "peers": [
                 [
                     peer.cik,
@@ -395,7 +382,6 @@ class CompanyResearchHarness:
                 for row in self.service.repo.list_filing_sections(filing.accession_number)
             }
         )
-        valuation = self.service.store.latest_valuation(company)
         peers = self.service.store.peers(
             company, self.service.store.profile(company, now=self.service.now_fn())
         )
@@ -418,7 +404,6 @@ class CompanyResearchHarness:
                 "sections": section_keys,
                 "metrics": [row.value for row in MetricId],
                 "risk_lenses": list(RiskLens.__args__),
-                "valuation_available": bool(valuation and valuation.status == "computed"),
                 "peers": [row.ticker for row in peers],
             },
         }
@@ -433,7 +418,6 @@ class CompanyResearchHarness:
             "BUSINESS_ECONOMICS": "search_filing_sections",
             "IMPORTANT_CHANGES": "get_verified_changes",
             "FINANCIAL_QUALITY_AND_DOWNSIDE": "get_financial_context",
-            "VALUATION_CONTEXT": "get_valuation_context",
             "PEER_CONTEXT": "get_peer_context",
         }
         open_rows = [
@@ -455,8 +439,6 @@ class CompanyResearchHarness:
             return self._changes(filing)
         if isinstance(action, FinancialAction):
             return self._financial(company, action.arguments)
-        if isinstance(action, ValuationAction):
-            return self._valuation(company)
         return self._peers(company)
 
     def _observation(
@@ -656,51 +638,6 @@ class CompanyResearchHarness:
                 )
         return rows[:12]
 
-    def _valuation(self, company: Company) -> list[ResearchObservation]:
-        run = self.service.store.latest_valuation(company)
-        if run is None or run.status != "computed":
-            return [
-                self._observation(
-                    tool="get_valuation_context",
-                    label="unavailable",
-                    text=(
-                        "Valuation context is unavailable until the user enters "
-                        "a current price and date."
-                    ),
-                )
-            ]
-        parts = [f"saved price {run.price:g}", run.label.lower()]
-        if run.trailing_pe is not None:
-            parts.append(f"trailing P/E {run.trailing_pe:.1f}")
-        if run.price_to_fcf is not None:
-            parts.append(f"price to FCF {run.price_to_fcf:.1f}")
-        if run.fcf_yield is not None:
-            parts.append(f"FCF yield {run.fcf_yield:.1%}")
-        if run.reverse_dcf_growth is not None:
-            parts.append(f"reverse-DCF growth {run.reverse_dcf_growth:.1%}")
-        parts.extend(
-            f"{row.name} scenario value {row.implied_value_per_share:g}"
-            + (
-                f" ({row.change_percent:+.1f}% versus the saved price)"
-                if row.change_percent is not None
-                else ""
-            )
-            for row in run.scenarios
-        )
-        return [
-            self._observation(
-                tool="get_valuation_context",
-                label="calculation",
-                text="Saved valuation context: " + "; ".join(parts) + ".",
-                evidence=[
-                    EvidenceRef(kind="valuation", reference_id=f"valuation:{run.run_id}"),
-                    *run.inputs[:5],
-                ],
-                metric_ids=[],
-                as_of=run.price_as_of,
-            )
-        ]
-
     def _peers(self, company: Company) -> list[ResearchObservation]:
         peers = self.service.store.peers(
             company, self.service.store.profile(company, now=self.service.now_fn())
@@ -820,7 +757,6 @@ class CompanyResearchHarness:
                 "business": {"search_filing_sections"},
                 "change": {"get_verified_changes", "search_filing_sections"},
                 "financial_quality": {"get_financial_context"},
-                "valuation": {"get_valuation_context"},
                 "peer": {"get_peer_context"},
             }[item.category]
             if not any(
@@ -828,11 +764,6 @@ class CompanyResearchHarness:
                 for row in valid_refs
             ):
                 codes.append("CATEGORY_EVIDENCE_MISSING")
-            if item.category == "valuation" and not any(
-                row.tool == "get_valuation_context" and row.evidence_label == "calculation"
-                for row in valid_refs
-            ):
-                codes.append("VALUATION_UNAVAILABLE")
             if codes:
                 errors[item.insight_id] = sorted(set(codes))
                 continue
@@ -847,19 +778,11 @@ class CompanyResearchHarness:
         if authored_text_violations(summary):
             summary = (
                 "RipplX connected the available filing evidence, verified calculations, "
-                "saved valuation context, and comparable-company context."
+                "and comparable-company context."
             )
         if not accepted:
             summary = "No additional research insight met the evidence standard."
         gaps = [self._gap(row.obligation) for row in obligations if row.state == "unavailable"]
-        valuation_context = next(
-            (
-                row
-                for row in observations.values()
-                if row.tool == "get_valuation_context"
-            ),
-            None,
-        )
         report = CompanyResearchReport(
             ticker=company.ticker,
             cik=company.cik,
@@ -869,7 +792,6 @@ class CompanyResearchHarness:
             obligations=obligations,
             insights=accepted,
             observations=sorted(observations.values(), key=lambda row: row.observation_id)[:24],
-            valuation_context=valuation_context,
             evidence_gaps=gaps,
             disclaimer=DISCLAIMER,
         )
@@ -938,14 +860,6 @@ class CompanyResearchHarness:
                         return False
                 else:
                     return False
-            elif ref.kind == "valuation":
-                run_id = ref.reference_id.removeprefix("valuation:")
-                row = self.service.repo.conn.execute(
-                    "SELECT 1 FROM valuation_runs WHERE id = ? AND user_id = ? AND cik = ?",
-                    (run_id, self.service.user_id, company.cik),
-                ).fetchone()
-                if row is None:
-                    return False
         return True
 
     @staticmethod
@@ -958,7 +872,6 @@ class CompanyResearchHarness:
             "BUSINESS_ECONOMICS": ("business", "search_filing_sections"),
             "IMPORTANT_CHANGES": ("change", "get_verified_changes"),
             "FINANCIAL_QUALITY_AND_DOWNSIDE": ("financial_quality", "get_financial_context"),
-            "VALUATION_CONTEXT": ("valuation", "get_valuation_context"),
             "PEER_CONTEXT": ("peer", "get_peer_context"),
         }
         result = []
@@ -992,7 +905,6 @@ class CompanyResearchHarness:
             "BUSINESS_ECONOMICS": "Business-model evidence was not established.",
             "IMPORTANT_CHANGES": "No verified filing change was available.",
             "FINANCIAL_QUALITY_AND_DOWNSIDE": "Verified financial context was unavailable.",
-            "VALUATION_CONTEXT": "Enter a current price and date to add valuation context.",
             "PEER_CONTEXT": "No already-ingested peer comparison was available.",
             "SOURCE_COVERAGE": "The available SEC and calculation sources were incomplete.",
         }[obligation]

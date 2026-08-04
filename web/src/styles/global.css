@@ -1720,22 +1720,6 @@ code,
 .xray-metrics-head { display: flex; gap: 16px; align-items: center; justify-content: space-between; padding: 16px 2px; }
 .xray-metrics-head span { color: var(--color-muted); font-family: var(--font-mono); font-size: var(--text-caption); }
 
-.valuation-form, .question-form { display: grid; grid-template-columns: minmax(180px, 320px) auto; gap: 12px; align-items: end; }
-.valuation-form .field { margin: 0; }
-.assumptions-editor { max-width: 760px; margin-top: 14px; }
-.assumption-grid { display: grid; grid-template-columns: repeat(5, minmax(110px, 1fr)); gap: 8px; margin-top: 12px; }
-.assumption-grid label { color: var(--color-muted); font-size: var(--text-caption); }
-.assumption-grid .input { margin-top: 5px; }
-.valuation-result, .answer-panel { padding: 24px; margin-top: 20px; background: var(--color-panel-alt); border: var(--border-hair); border-radius: var(--radius-sm); }
-.scenario-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 18px; }
-.scenario-grid > div { display: grid; gap: 2px; padding: 14px; background: var(--color-panel); border: var(--border-hair); border-radius: var(--radius-sm); }
-.scenario-grid span, .scenario-grid small { color: var(--color-muted); font-size: var(--text-caption); text-transform: capitalize; }
-.scenario-grid strong { font: 500 var(--text-serif-sm) var(--font-serif); }
-.valuation-ratios { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-top: 18px; }
-.valuation-ratios span { display: grid; gap: 3px; padding: 12px; background: var(--color-panel); border: var(--border-hair); border-radius: var(--radius-sm); }
-.valuation-ratios small { color: var(--color-muted); font-size: var(--text-caption); }
-.valuation-ratios strong { font: 500 var(--text-serif-sm) var(--font-serif); }
-
 .change-impact-list { display: grid; gap: 10px; }
 .change-impact-list > article { padding: 20px; background: var(--color-panel); border: var(--border-hair); border-radius: var(--radius-sm); }
 .change-impact-list h3 { margin: 6px 0 14px; }
@@ -1753,10 +1737,6 @@ code,
 .thesis-item { display: grid; grid-template-columns: 120px minmax(0, 1fr) 150px; gap: 12px; align-items: start; }
 .thesis-item > span { padding-top: 10px; color: var(--color-muted); font-size: var(--text-caption); font-weight: 700; text-transform: capitalize; }
 .thesis-item textarea { min-height: 76px; resize: vertical; }
-.answer-panel > article { padding: 12px 0; border-top: var(--border-hair); }
-.answer-panel > article span { color: var(--color-muted); font-size: var(--text-caption); text-transform: capitalize; }
-.answer-panel > article p { margin: 4px 0 0; overflow-wrap: anywhere; }
-
 .promise { padding: 16px 18px; background: var(--color-panel-alt); border-left: 2px solid var(--color-accent); }
 .promise footer { margin-top: 8px; color: var(--color-muted); font: 500 var(--text-caption) var(--font-sans); }
 .watch-promises { margin-top: 18px; }
@@ -1766,9 +1746,7 @@ code,
 .peer-form { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; margin-top: 14px; }
 .certificate-links { display: flex; flex-wrap: wrap; gap: 10px; }
 .more-research > summary { color: var(--color-ink); font: 500 var(--text-serif-sm) var(--font-serif); cursor: pointer; }
-.more-research-grid { display: grid; grid-template-columns: 1.2fr 0.8fr; gap: 48px; padding-top: 28px; }
-.question-prompts { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
-.question-prompts .button { height: auto; min-height: 36px; white-space: normal; text-align: left; }
+.more-research > div { padding-top: 28px; }
 
 .alert-timeline { display: grid; gap: 10px; }
 .alert-row { display: grid; grid-template-columns: 110px minmax(0, 1fr) auto; gap: 20px; align-items: center; padding: 20px 24px; background: var(--color-panel); border: var(--border-hair); border-left: 3px solid var(--color-hairline-strong); border-radius: var(--radius-sm); }
@@ -1784,8 +1762,7 @@ code,
     display: block;
   }
 
-  .risk-grid,
-  .more-research-grid { grid-template-columns: 1fr; }
+  .risk-grid { grid-template-columns: 1fr; }
 
   .thesis-item { grid-template-columns: 1fr; }
 
@@ -1898,16 +1875,9 @@ code,
 
   .research-chain > span { transform: rotate(90deg); }
 
-  .ticker-search,
-  .valuation-form,
-  .question-form { grid-template-columns: 1fr; }
-
-  .scenario-grid,
-  .valuation-ratios { grid-template-columns: 1fr; }
+  .ticker-search { grid-template-columns: 1fr; }
 
   .change-impact-list dl { grid-template-columns: 1fr; }
-
-  .assumption-grid { grid-template-columns: 1fr 1fr; }
 
   .actions,
   .stacked-mobile {

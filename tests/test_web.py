@@ -244,7 +244,7 @@ def test_get_and_delete_path_params_reject_malformed_input(tmp_path):
     assert client.get("/api/filings/0000000001-24-000001").status_code == 404
 
 
-def test_company_research_assembles_risks_profile_metrics_and_questions(tmp_path):
+def test_company_research_assembles_risks_profile_and_metrics(tmp_path):
     db_path = tmp_path / "finwatch.db"
     build_demo_db(str(db_path)).close()
     client = TestClient(
@@ -265,7 +265,8 @@ def test_company_research_assembles_risks_profile_metrics_and_questions(tmp_path
     assert body["metrics"]["rows"]
     assert body["thesis"] == {"items": []}
     assert body["profile"]["monitoring_enabled"] is True
-    assert body["questions"]
+    assert "questions" not in body
+    assert "valuation" not in body
     assert body["impact"]["directional_pressure"] in {
         "upside",
         "downside",
@@ -291,23 +292,8 @@ def test_company_research_assembles_risks_profile_metrics_and_questions(tmp_path
     assert draft.status_code == 200
     assert all(row["status"] == "draft" for row in draft.json()["items"])
 
-    demo_valuation = client.post(
-        "/api/companies/MSFT/valuation?demo=true",
-        json={
-            "price": 400,
-            "price_as_of": "2024-04-25",
-            "assumptions": {
-                "discount_rate": 0.10,
-                "terminal_growth": 0.025,
-                "conservative_growth": 0,
-                "base_growth": 0.05,
-                "optimistic_growth": 0.10,
-            },
-        },
-    )
-    assert demo_valuation.status_code == 200
-    assert demo_valuation.json()["formula_version"] == "reverse_dcf.v2"
-    assert all("change_percent" in row for row in demo_valuation.json()["scenarios"])
+    assert client.post("/api/companies/MSFT/valuation", json={}).status_code == 404
+    assert client.post("/api/companies/MSFT/questions", json={}).status_code == 404
 
 
 def test_stripe_webhook_rejects_unsigned_payload_without_origin(tmp_path, monkeypatch):

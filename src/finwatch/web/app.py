@@ -34,7 +34,7 @@ from finwatch.demo import (
 from finwatch.ingest import TickerNotFoundError, build_service
 from finwatch.presentation import PresentationService
 from finwatch.product import ProductService
-from finwatch.product.models import Thesis, ValuationAssumptions
+from finwatch.product.models import Thesis
 from finwatch.web.auth import (
     CSRF_COOKIE_NAME,
     CSRF_HEADER_NAME,
@@ -206,20 +206,6 @@ class ThesisUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     thesis: Thesis
-
-
-class ValuationRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    price: float = Field(gt=0, le=10_000_000)
-    price_as_of: date
-    assumptions: ValuationAssumptions = Field(default_factory=ValuationAssumptions)
-
-
-class FollowUpQuestion(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    question: str = Field(min_length=3, max_length=500)
 
 
 def _since_for_period(period: str) -> str:
@@ -1078,33 +1064,6 @@ def create_app(
                 raise ApiProblem(404, "company_not_found", "Company not found.")
             return thesis
 
-    @app.post("/api/companies/{ticker}/valuation")
-    def calculate_company_valuation(
-        request: Request,
-        payload: ValuationRequest,
-        ticker: str = PathParam(pattern=_TICKER_PATTERN, max_length=15),
-        demo: bool = False,
-    ):
-        principal = principal_for(request)
-        with repo_context(demo) as repo:
-            result = ProductService(
-                repo, user_id=sample_scope(principal, demo)
-            ).calculate_valuation(
-                ticker,
-                price=payload.price,
-                price_as_of=payload.price_as_of.isoformat(),
-                assumptions=payload.assumptions,
-            )
-            if result is None:
-                raise ApiProblem(404, "company_not_found", "Company not found.")
-            capture(
-                principal,
-                "valuation_run",
-                surface="company",
-                outcome=result.status,
-            )
-            return result
-
     @app.get("/api/companies/{ticker}/peers")
     def company_peers(
         request: Request,
@@ -1116,37 +1075,6 @@ def create_app(
             if result is None:
                 raise ApiProblem(404, "company_not_found", "Company not found.")
             return {"ticker": ticker.upper(), "peers": result}
-
-    @app.post("/api/companies/{ticker}/questions")
-    def ask_company_question(
-        request: Request,
-        payload: FollowUpQuestion,
-        ticker: str = PathParam(pattern=_TICKER_PATTERN, max_length=15),
-    ):
-        from finwatch.llm.router import LiteLLMClient
-        from finwatch.product.questions import QuestionHarness
-
-        principal = principal_for(request)
-        with repo_context() as repo:
-            settings = resolve_settings(
-                repo,
-                user_id=principal.user_id,
-                remote=remote,
-            )
-            if not settings.model or not settings.api_key_configured:
-                raise ApiProblem(
-                    409,
-                    "analysis_not_configured",
-                    "Analysis is temporarily unavailable.",
-                )
-            api_key = environment_api_key(settings.model)
-            service = ProductService(repo, user_id=principal.user_id)
-            if service.profile(ticker) is None:
-                raise ApiProblem(404, "company_not_found", "Company not found.")
-            return QuestionHarness(
-                service,
-                LiteLLMClient(settings.model, api_key=api_key),
-            ).run(ticker, payload.question)
 
     @app.get("/api/alerts")
     def alerts(request: Request):

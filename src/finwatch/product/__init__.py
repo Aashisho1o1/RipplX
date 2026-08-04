@@ -1,4 +1,4 @@
-"""Evidence-grounded research, monitoring, and valuation product services."""
+"""Evidence-grounded research and monitoring product services."""
 
 from finwatch.product.models import (
     AttentionEvent,
@@ -8,7 +8,6 @@ from finwatch.product.models import (
     ResearchRun,
     RiskRadarResult,
     Thesis,
-    ValuationRun,
 )
 from finwatch.product.service import ProductService
 
@@ -21,5 +20,4 @@ __all__ = [
     "RiskRadarResult",
     "ResearchRun",
     "Thesis",
-    "ValuationRun",
 ]

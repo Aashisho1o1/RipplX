@@ -19,7 +19,7 @@ export function DeepResearchPanel({ run, canRun, demo, fallbackChanges, onRun }:
     ? [...report.observations]
       .filter((row) => row.evidence_label !== "unavailable")
       .sort((left, right) => {
-        const priority = ["get_verified_changes", "search_filing_sections", "get_financial_context", "get_valuation_context", "get_peer_context"];
+        const priority = ["get_verified_changes", "search_filing_sections", "get_financial_context", "get_peer_context"];
         return priority.indexOf(left.tool) - priority.indexOf(right.tool);
       })
       .slice(0, 3)
@@ -48,7 +48,7 @@ export function DeepResearchPanel({ run, canRun, demo, fallbackChanges, onRun }:
               {demo
                 ? "The static demo keeps this optional model pass off; the verified brief remains available."
                 : canRun
-                  ? "RipplX can connect filing evidence, financial quality, valuation, and peers in one bounded pass."
+                  ? "RipplX can connect filing evidence, financial quality, and peers in one bounded pass."
                 : "Analyze a filing and configure the research model to create this report."}
             </p>
           </div>
@@ -57,7 +57,7 @@ export function DeepResearchPanel({ run, canRun, demo, fallbackChanges, onRun }:
 
       {fallback && (
         <>
-          <p className="research-summary"><strong>Verified filing connection</strong> · available without the optional synthesis pass.</p>
+          <p className="research-summary"><strong>{fallbackChanges.length} AI-selected change{fallbackChanges.length === 1 ? "" : "s"}</strong> · exact SEC evidence verified; RipplX publishes up to three distinct changes and does not add filler.</p>
           <div className="research-insight-list">
             {fallbackChanges.map((change) => (
               <article key={change.finding_id}>

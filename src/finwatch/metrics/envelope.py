@@ -105,9 +105,8 @@ class MetricResult(BaseModel):
 
 
 class MetricsBundle(BaseModel):
-    """Named MetricResults plus the valuation-percentile family."""
+    """Named deterministic metric results."""
     results: dict[str, MetricResult] = Field(default_factory=dict)
-    valuations: list[MetricResult] = Field(default_factory=list)  # percentile results
 
     def get(self, name: str) -> Optional[MetricResult]:
         return self.results.get(name)
@@ -117,4 +116,4 @@ class MetricsBundle(BaseModel):
         return bool(r and r.computed)
 
     def all_results(self) -> list[MetricResult]:
-        return list(self.results.values()) + list(self.valuations)
+        return list(self.results.values())

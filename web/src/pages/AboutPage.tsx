@@ -34,7 +34,7 @@ const PILLARS = [
 
 const ROADMAP = [
   { title: "Filings that find you", body: "Periodic delivery to your inbox — a brief when a filing earns your attention, and a short all-clear when it does not, so you never have to remember to visit." },
-  { title: "Deeper research assistance", body: "Bounded follow-up research on a published finding, held to the same evidence rules: anything shown must trace to a filing." },
+  { title: "Connected research", body: "A bounded synthesis pass connects published filing changes, verified financial context, and peers without weakening the evidence rules." },
   { title: "Connect your brokerage", body: "Read only the list of tickers you hold — never balances, positions, or credentials — so your watchlist builds itself." },
   { title: "Portfolio-level review", body: "The same verified treatment applied across everything you follow, rather than one filing at a time." },
 ] as const;

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import uuid
 from datetime import UTC, date, datetime
 
 from finwatch.core.types import DISCLAIMER
@@ -23,13 +22,9 @@ from finwatch.product.models import (
     StockImpactSnapshot,
     Thesis,
     ThesisItem,
-    ValuationAssumptions,
-    ValuationRun,
-    ValuationScenario,
 )
 from finwatch.product.store import ProductStore
 
-VALUATION_FORMULA_VERSION = "reverse_dcf.v2"
 _EVENT_TERMS = {
     "restatement": "RESTATEMENT",
     "going concern": "GOING_CONCERN",
@@ -577,191 +572,9 @@ class ProductService:
                 )
         return Thesis(items=items)
 
-    def _valuation_inputs(self, company: Company):
-        rows = self._metrics(company)
-        cfo_row, cfo = rows.get("cfo_trend", (None, None))
-        income_row, income = rows.get("net_income_trend", (None, None))
-        liq_row, liq = rows.get("liquidity_basics", (None, None))
-        shares_row, shares = rows.get("share_count_change", (None, None))
-        if not all((cfo and cfo.computed, liq and liq.computed, shares and shares.computed)):
-            return None
-        cfo_current = cfo.components.get("current")
-        share_current = shares.components.get("current")
-        net_debt = liq.components.get("net_debt")
-        cfo_source = next((row for row in cfo.inputs_used if row.concept == "cfo"), None)
-        if not cfo_source or not cfo_source.period_end or not isinstance(cfo_current, (int, float)):
-            return None
-        capex = next(
-            (
-                row
-                for row in self.repo.list_xbrl_facts(company.cik)
-                if row.tag == "PaymentsToAcquirePropertyPlantAndEquipment"
-                and row.period_end == cfo_source.period_end
-                and row.period_start == cfo_source.period_start
-                and row.value is not None
-            ),
-            None,
-        )
-        if (
-            capex is None
-            or not isinstance(share_current, (int, float))
-            or share_current <= 0
-            or not isinstance(net_debt, (int, float))
-        ):
-            return None
-        free_cash_flow = cfo_current - abs(float(capex.value))
-        if free_cash_flow <= 0:
-            return None
-        refs = [
-            *_metric_ref("cfo_trend", cfo_row),
-            *_metric_ref("liquidity_basics", liq_row),
-            *_metric_ref("share_count_change", shares_row),
-            EvidenceRef(
-                kind="metric",
-                reference_id=f"xbrl_fact:{capex.id}:capex",
-                accession=capex.accession_number,
-            ),
-        ]
-        net_income = None
-        if income and income.computed and income.as_of == cfo.as_of:
-            value = income.components.get("current")
-            if isinstance(value, (int, float)):
-                net_income = float(value)
-                refs.extend(_metric_ref("net_income_trend", income_row))
-        return free_cash_flow, net_debt, share_current, net_income, refs
-
-    @staticmethod
-    def _dcf_per_share(
-        fcf: float, net_debt: float, shares: float, growth: float, discount: float, terminal: float
-    ) -> float:
-        cash_flows = [fcf * ((1 + growth) ** year) for year in range(1, 6)]
-        terminal_value = cash_flows[-1] * (1 + terminal) / (discount - terminal)
-        enterprise = sum(
-            value / ((1 + discount) ** year) for year, value in enumerate(cash_flows, 1)
-        )
-        enterprise += terminal_value / ((1 + discount) ** 5)
-        return max(0.0, (enterprise - net_debt) / shares)
-
-    def calculate_valuation(
-        self, ticker: str, *, price: float, price_as_of: str, assumptions: ValuationAssumptions
-    ) -> ValuationRun | None:
-        company = self._company(ticker)
-        if company is None:
-            return None
-        created = self.now_fn()
-        inputs = self._valuation_inputs(company)
-        run_id = uuid.uuid4().hex
-        if inputs is None:
-            payload = {
-                "run_id": run_id,
-                "ticker": company.ticker,
-                "price": price,
-                "price_as_of": price_as_of,
-                "status": "unavailable",
-                "label": "Unavailable",
-                "explanation": (
-                    "Required SEC cash-flow, capital-spending, debt, or share inputs "
-                    "are unreliable."
-                ),
-                "assumptions": assumptions.model_dump(mode="json"),
-                "scenarios": [],
-                "reverse_dcf_growth": None,
-                "trailing_pe": None,
-                "price_to_fcf": None,
-                "fcf_yield": None,
-                "inputs": [],
-                "formula_version": VALUATION_FORMULA_VERSION,
-                "created_at": created,
-            }
-        else:
-            fcf, net_debt, shares, net_income, refs = inputs
-            scenario_growth = {
-                "conservative": assumptions.conservative_growth,
-                "base": assumptions.base_growth,
-                "optimistic": assumptions.optimistic_growth,
-            }
-            scenarios = []
-            for name, growth in scenario_growth.items():
-                implied = round(
-                    self._dcf_per_share(
-                        fcf,
-                        net_debt,
-                        shares,
-                        growth,
-                        assumptions.discount_rate,
-                        assumptions.terminal_growth,
-                    ),
-                    2,
-                )
-                scenarios.append(
-                    ValuationScenario(
-                        name=name,
-                        growth=growth,
-                        implied_value_per_share=implied,
-                        change_percent=round((implied / price - 1) * 100, 1),
-                    )
-                )
-            low, high = -0.50, 1.00
-            for _ in range(80):
-                mid = (low + high) / 2
-                if (
-                    self._dcf_per_share(
-                        fcf,
-                        net_debt,
-                        shares,
-                        mid,
-                        assumptions.discount_rate,
-                        assumptions.terminal_growth,
-                    )
-                    < price
-                ):
-                    low = mid
-                else:
-                    high = mid
-            reverse = (low + high) / 2
-            base = scenarios[1].implied_value_per_share
-            fcf_per_share = fcf / shares
-            earnings_per_share = net_income / shares if net_income and net_income > 0 else None
-            label = (
-                "Demanding"
-                if price > base * 1.2
-                else "Undemanding"
-                if price < base * 0.8
-                else "Balanced"
-            )
-            payload = {
-                "run_id": run_id,
-                "ticker": company.ticker,
-                "price": price,
-                "price_as_of": price_as_of,
-                "status": "computed",
-                "label": label,
-                "explanation": (
-                    f"{label} under these explicit assumptions; this is not a single correct value."
-                ),
-                "assumptions": assumptions.model_dump(mode="json"),
-                "scenarios": [row.model_dump(mode="json") for row in scenarios],
-                "reverse_dcf_growth": round(reverse, 6),
-                "trailing_pe": (
-                    round(price / earnings_per_share, 2) if earnings_per_share else None
-                ),
-                "price_to_fcf": round(price / fcf_per_share, 2),
-                "fcf_yield": round(fcf_per_share / price, 6),
-                "inputs": [row.model_dump(mode="json") for row in refs],
-                "formula_version": VALUATION_FORMULA_VERSION,
-                "created_at": created,
-            }
-        certificate = hashlib.sha256(
-            json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
-        ).hexdigest()
-        run = ValuationRun(**payload, certificate_hash=certificate)
-        self.store.save_valuation(company, run)
-        return run
-
     @staticmethod
     def _stock_impact(
-        *, risks: list[RiskRadarResult], valuation: ValuationRun | None,
-        recent_filings: list[dict],
+        *, risks: list[RiskRadarResult], recent_filings: list[dict],
     ) -> StockImpactSnapshot:
         metric_drivers = {
             "revenue_growth": ("revenue", "REVENUE"),
@@ -771,8 +584,8 @@ class ProductService:
         }
         implications = {
             "revenue": "This can affect future cash flow and operating leverage if it persists.",
-            "earnings": "This can affect earnings power and the valuation investors support.",
-            "cash_flow": "This can strengthen or weaken the cash flow supporting valuation.",
+            "earnings": "This can affect sustainable earnings power if it persists.",
+            "cash_flow": "This can change cash available to reinvest or return to shareholders.",
             "balance_sheet": (
                 "This can change financial risk and the discount rate investors require."
             ),
@@ -795,8 +608,6 @@ class ProductService:
                     "downside" if direction == "down" else
                     "mixed" if direction == "flat" else "uncertain"
                 )
-                if effect in {"upside", "downside"}:
-                    reasons.append(f"VERIFIED_{code}_{direction.upper()}")
             else:
                 headline = finding["headline"].lower()
                 if any(term in headline for term in ("revenue", "sales")):
@@ -826,6 +637,10 @@ class ProductService:
                 )
                 for row in finding.get("evidence", [])[:3]
             ]
+            if not evidence:
+                continue
+            if metric_id in metric_drivers and effect in {"upside", "downside"}:
+                reasons.append(f"VERIFIED_{code}_{direction.upper()}")
             changes.append(
                 ChangeImpact(
                     finding_id=finding["finding_id"],
@@ -842,13 +657,6 @@ class ProductService:
         if any(row.status == "elevated" for row in risks):
             downside += 1
             reasons.append("ELEVATED_DOWNSIDE_RISK")
-        if valuation and valuation.status == "computed":
-            if valuation.label == "Demanding":
-                downside += 1
-                reasons.append("DEMANDING_BASE_SCENARIO")
-            elif valuation.label == "Undemanding":
-                upside += 1
-                reasons.append("UNDEMANDING_BASE_SCENARIO")
         pressure = (
             "downside" if downside > upside else
             "upside" if upside > downside else
@@ -862,14 +670,6 @@ class ProductService:
                 "There is not enough verified evidence to infer directional stock pressure."
             ),
         }[pressure]
-        priced_in = (
-            f"At ${valuation.price:.2f}, the saved reverse DCF implies about "
-            f"{valuation.reverse_dcf_growth * 100:.1f}% annual five-year FCF growth."
-            if valuation
-            and valuation.status == "computed"
-            and valuation.reverse_dcf_growth is not None
-            else "Enter a current price to compare verified cash flow with priced-in expectations."
-        )
         watch = next(
             (row.explanation for row in risks if row.status == "elevated"),
             changes[0].implication
@@ -879,7 +679,6 @@ class ProductService:
         return StockImpactSnapshot(
             directional_pressure=pressure,
             summary=summary,
-            priced_in=priced_in,
             watch_next=watch,
             reason_codes=list(dict.fromkeys(reasons))[:8],
             changes=changes,
@@ -1038,21 +837,8 @@ class ProductService:
             details.append(detail.filing.model_dump(mode="json"))
             if detail.certificate_url:
                 certificates.append(detail.certificate_url)
-        questions = [
-            "What creates the biggest verified downside?",
-            "What changed in the latest filing?",
-            "What does the saved valuation assume?",
-            "What evidence would change this view?",
-        ]
-        questions.extend(
-            f"What source could resolve {row.lens.replace('_', ' ')}?"
-            for row in risks
-            if row.status == "unavailable"
-        )
-        valuation = self.store.latest_valuation(company)
         impact = self._stock_impact(
             risks=risks,
-            valuation=valuation,
             recent_filings=details,
         )
         return BeforeYouBuyBrief(
@@ -1066,7 +852,6 @@ class ProductService:
             business_evidence=summary_ref,
             recent_filings=details,
             metrics=metrics.model_dump(mode="json") if metrics else {},
-            valuation=valuation,
             impact=impact,
             profile=profile,
             thesis=profile.thesis,
@@ -1077,7 +862,6 @@ class ProductService:
                 for cik in profile.peer_ciks
                 if (peer := self.repo.get_company(cik)) is not None
             ],
-            questions=questions[:8],
             certificate_urls=certificates,
             deep_research=self.store.latest_research_run(company),
             disclaimer=DISCLAIMER,

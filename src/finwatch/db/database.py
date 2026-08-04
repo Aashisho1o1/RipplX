@@ -16,7 +16,7 @@ from pathlib import Path
 # Bump SCHEMA_VERSION whenever schema shape or an incompatible persisted contract changes.
 # APPLICATION_ID ("FWL1") marks a finwatch-lean database so a same-version file from
 # another tool is still rejected.
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 APPLICATION_ID = 0x46574C31
 
 
@@ -85,7 +85,7 @@ def _install_or_verify_schema(conn: sqlite3.Connection) -> None:
         if existing is not None:
             raise SchemaVersionError(
                 "This non-empty database is not marked as the current finwatch schema. "
-                "Back up the directory and start fresh before deploying schema version 8."
+                "Back up the directory and start fresh before deploying schema version 9."
             )
         conn.executescript(
             f"BEGIN;\n{_schema_sql()}\n"

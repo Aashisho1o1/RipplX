@@ -35,11 +35,10 @@ The current repository contains a lean commercial loop:
    Missing data stays `unavailable`.
 6. Monitor supported filings with one idempotent scheduled command, persist attention events, and
    deliver urgent/same-week and weekly email summaries through Resend.
-7. Build a deterministic Stock Impact Snapshot from verified findings, risk lenses, and the user's
-   saved valuation. Show trailing P/E, P/FCF, FCF yield, and scenario percentage changes downstream
-   of the fixed starter metrics.
-8. Let users save up to five watch conditions, ask bounded evidence-grounded questions, and compare
-   user-editable SIC-derived peer candidates. Filing commitments remain optional supporting context.
+7. Connect verified findings and downside lenses into a compact change → driver → conditional
+   implication view. Every displayed change retains its exact filing evidence.
+8. Let users save up to five watch conditions and compare user-editable SIC-derived peer
+   candidates. Filing commitments remain optional supporting context.
 
 Numbers may appear only in deterministic metric rows sourced from SEC XBRL or inside exact SEC
 quotations. Structured direction claims are compiled against current-minus-prior metric deltas and
@@ -100,9 +99,9 @@ been published, the public routes automatically use the bundled zero-key SEC fix
 refresh requires `SEC_USER_AGENT`, `FINWATCH_MODEL`, and that model's server-side credential; none
 of those values are requested from or exposed to visitors.
 
-This prototype deliberately has no market-price provider. SEC filings and companyfacts supply the
-financial source data; valuation remains explicit and user-directed by entering a price to evaluate.
-The valuation run records its date and assumptions rather than labeling that input as a live quote.
+This prototype deliberately has no market-price or valuation surface. SEC filings and companyfacts
+supply the financial source data; market-data licensing and valuation receive a separate later
+product decision after the evidence and monitoring loop proves useful.
 
 ## Run locally
 
@@ -158,8 +157,8 @@ POSTHOG_HOST=https://us.i.posthog.com
 - RipplX supplies this credential server-side. The browser never asks users for a provider key,
   and the API reports only whether analysis is available.
 - Stripe owns card data; RipplX stores only customer/subscription identifiers and status. PostHog is
-  optional, server-side, allowlisted, and receives no tickers, holdings, thesis text, valuation
-  inputs, filing text, or financial values. See `PROVIDERS.md`.
+  optional, server-side, allowlisted, and receives no tickers, holdings, thesis text, filing text,
+  or financial values. See `PROVIDERS.md`.
 
 Do not commit `.env`; it is ignored by Git. The demo needs none of these values.
 
@@ -242,9 +241,9 @@ Required remote controls:
 The operator key stays in process environment memory. The API reports only whether analysis is
 configured, never the credential itself, and the browser never displays a provider-key field.
 
-Schema v8 is a clean prototype break, not a migration. It retains attempt-linked `harness.v2` and
-frozen `certificate.v2` semantics and adds private research/monitoring state plus owner-scoped
-`company_research.v1` reports. Before upgrading an existing Railway volume,
+Schema v9 is a clean prototype break, not a migration. It retains attempt-linked `harness.v2` and
+frozen `certificate.v2` semantics plus private research/monitoring state and owner-scoped
+`company_research.v2` reports, while removing the prototype valuation store. Before upgrading an existing Railway volume,
 back up `/data`, stop the old deployment, recreate the database/volume, and deploy. Old schemas fail
 with an explicit backup-and-reset error. `.env` files are excluded from both Git and the Docker build
 context; keep a local copy mode-restricted (for example `chmod 600 .env`).
