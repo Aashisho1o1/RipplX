@@ -34,8 +34,16 @@ const PILLARS = [
 
 const CURRENT_PRODUCT = [
   { title: "Research before buying", body: "Enter a U.S. ticker to assemble the newest supported SEC filings, up to three AI-selected changes with exact quotations, and six deterministic financial trends." },
-  { title: "Monitor new filings", body: "Track a company, classify new supported filings by attention level, and choose immediate, same-week, weekly, or in-app-only notification behavior." },
+  { title: "Read the deep research report", body: "A bounded second pass works through the business, the recent changes, financial quality and downside, and peer context — every observation tied back to the tool call and the filing text that produced it." },
+  { title: "Check the financial X-ray", body: "Downside lenses summarize health, leverage, cash and dilution against the six verified metrics, and say 'unavailable' rather than guessing when SEC data cannot support a lens." },
+  { title: "Monitor new filings", body: "Track a company, classify new supported filings by attention level, and choose immediate, same-week, weekly, or in-app-only notification behavior. Alerts keep a chronological record, including the routine cycles." },
   { title: "Compare local peers", body: "Review SIC-derived peer candidates when comparable companies have already been ingested. RipplX explains the match without calling it an investment recommendation." },
+] as const;
+
+const BROKERAGE = [
+  { title: "Your positions become your watchlist", body: "Link a brokerage once and each holding is tracked like a ticker you typed in yourself — same exact SEC quotations, same deterministic numbers, same publication gate. No shares, cost basis, or target weights are requested." },
+  { title: "Read-only, and never your credentials", body: "You sign in on your broker's own page. RipplX reads balances and positions so it knows what to watch, and it cannot place or cancel an order, move cash, or change anything at your broker." },
+  { title: "No custody, disconnect any time", body: "RipplX never holds funds or securities. The connection exists to decide which filings matter to you, and removing it stops the sync." },
 ] as const;
 
 export function AboutPage() {
@@ -91,6 +99,22 @@ export function AboutPage() {
       </p>
       <div className="about-grid">
         {CURRENT_PRODUCT.map(item => <article className="about-card muted-card" key={item.title}>
+          <h3>{item.title}</h3>
+          <p>{item.body}</p>
+        </article>)}
+      </div>
+    </section>
+
+    <section className="section">
+      <SectionHeader index="04 · Founding plan" title="Connect your brokerage" />
+      <p className="metric-caption">
+        Paying members can link a brokerage so RipplX watches what they actually own instead of
+        a list they maintain by hand. The connection is read-only, it is rolling out to
+        founding-plan members and is not switched on yet, and tracking tickers by hand stays
+        free.
+      </p>
+      <div className="about-grid">
+        {BROKERAGE.map(item => <article className="about-card" key={item.title}>
           <h3>{item.title}</h3>
           <p>{item.body}</p>
         </article>)}

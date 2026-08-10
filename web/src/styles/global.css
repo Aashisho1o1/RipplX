@@ -464,6 +464,7 @@ code,
 
 .ticker-strip {
   display: flex;
+  flex-wrap: wrap;
   gap: 9px;
   align-items: center;
   margin-top: 16px;
@@ -2090,6 +2091,8 @@ code,
     transition-duration: 0.01ms !important;
   }
 }
+
+.brokerage-actions { margin: 24px 0 10px; }
 
 /* ---- About page ------------------------------------------------------- */
 .about-grid {
