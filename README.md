@@ -2,6 +2,8 @@
 
 **Evidence-backed company research and filing monitoring for self-directed investors.**
 
+**[Try the live site →](https://rippl-x-nine.vercel.app)**
+
 Research a company before buying, monitor it automatically, detect downside, receive a weekly
 brief, and compare similar companies. Every published filing finding remains tied to exact SEC
 evidence, and financial metrics remain deterministic.
