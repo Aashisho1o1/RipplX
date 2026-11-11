@@ -94,6 +94,20 @@ describe("company decision brief", () => {
     expect(screen.getByDisplayValue("Revenue returns to growth.")).toBeInTheDocument();
   });
 
+  it("does not claim stability when the risk checks have no data", async () => {
+    const respond = (body: CompanyResearch) => vi.fn().mockResolvedValue(new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } }));
+    const quiet = { ...research, impact: { ...research.impact, changes: [] } };
+    const unavailable = { ...research.risks[0]!, status: "unavailable" as const, reason_codes: ["INPUTS_UNAVAILABLE"] };
+    renderCompany(respond({ ...quiet, risks: [unavailable, { ...unavailable, lens: "leverage" }] }));
+
+    expect(await screen.findByText("Not enough verified data to assess this company yet")).toBeInTheDocument();
+    expect(screen.queryByText(/No deterioration detected/)).not.toBeInTheDocument();
+    cleanup();
+
+    renderCompany(respond({ ...quiet, risks: [{ ...unavailable, lens: "leverage", status: "stable" as const }, unavailable] }));
+    expect(await screen.findByText("No deterioration detected in 1 of 2 risk checks")).toBeInTheDocument();
+  });
+
   it("keeps the verified change connection useful when optional deep research fails", async () => {
     const failed = {
       ...research,

@@ -43,8 +43,10 @@ export function CompanyPage() {
   const brief = resource.data;
   const connectedInsight = deepResearch?.report?.insights[0] ?? null;
   const leadingChange = brief.impact.changes[0] ?? null;
+  // A check with no data is not evidence of stability, so only assessed checks count.
+  const assessedRisks = brief.risks.filter(row => row.status !== "unavailable").length;
   const priorityRisk = brief.risks.find(row => row.status === "elevated") ?? brief.risks.find(row => row.status === "watch") ?? null;
-  const attentionTitle = connectedInsight?.headline ?? leadingChange?.headline ?? (priorityRisk ? `${priorityRisk.lens.replaceAll("_", " ")} needs attention` : "No material deterioration detected");
+  const attentionTitle = connectedInsight?.headline ?? leadingChange?.headline ?? (priorityRisk ? `${priorityRisk.lens.replaceAll("_", " ")} needs attention` : assessedRisks ? `No deterioration detected in ${assessedRisks} of ${brief.risks.length} risk checks` : "Not enough verified data to assess this company yet");
   const attentionBody = connectedInsight?.evidence_summary ?? (leadingChange ? "Review the exact SEC quotation and verified financial trends below." : null) ?? priorityRisk?.explanation ?? brief.metrics.summary ?? "Review the verified numbers and evidence below.";
   return <main className="page"><button className="button ghost back-button" onClick={() => navigate(-1)}>← Back</button>
     <header className="company-brief-header"><div><p className="page-eyebrow">Stock decision brief · as of {brief.as_of}</p><h1>{brief.ticker}<small>{brief.company_name}</small></h1><p>Review selected filing changes, exact source quotations, and verified financial trends.</p>{brief.business_summary && <p className="business-summary-inline">{brief.business_summary}</p>}</div>{!demo && <div className="actions"><button className="button" onClick={() => start("sync")}>Sync filings</button><button className="button primary" onClick={() => navigate("?panel=analysis")}>Analyze filing</button></div>}</header>

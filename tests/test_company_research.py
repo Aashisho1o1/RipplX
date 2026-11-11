@@ -6,9 +6,10 @@ from datetime import date
 
 import pytest
 
-from finwatch.db import LOCAL_USER_ID, Repo, User
+from finwatch.db import LOCAL_USER_ID, Filing, Repo, User
 from finwatch.demo import build_demo_db
 from finwatch.llm.router import FakeLLMClient
+from finwatch.metrics.catalog import STARTER_METRIC_LABELS, MetricId
 from finwatch.product import ProductService
 from finwatch.product.models import ResearchTrace
 from finwatch.product.research import (
@@ -395,6 +396,69 @@ def test_research_run_artifacts_are_owner_scoped_and_reusable():
     assert loaded.report == report
     assert loaded.trace == trace
     assert ProductService(repo, user_id="other").store.research_run(run_id) is None
+
+
+def test_financial_context_returns_every_computed_metric_requested_by_id():
+    """Rows are keyed by display label; looking them up by metric id always missed."""
+    service = _service()
+    company = service._company("MSFT")
+    assert company is not None
+    table = service.presentation.metrics("MSFT", as_of=date.today().isoformat())
+    computed = {row.metric for row in table.rows if row.state == "computed"}
+    assert computed
+
+    observations = CompanyResearchHarness(service, FakeLLMClient(responses=[]))._financial(
+        company, FinancialArgs(metric_ids=list(MetricId), risk_lenses=[])
+    )
+
+    by_metric = {row.metric_ids[0]: row for row in observations}
+    for metric_id in MetricId:
+        expected = "calculation" if STARTER_METRIC_LABELS[metric_id] in computed else "unavailable"
+        assert by_metric[metric_id.value].evidence_label == expected, metric_id
+    assert all(
+        row.evidence[0].reference_id.endswith(f":{row.metric_ids[0]}")
+        for row in observations if row.evidence_label == "calculation"
+    )
+
+
+def test_brief_drops_research_only_when_a_newer_filing_arrives():
+    """An old report used to headline the brief after a newer filing arrived."""
+    service = _service()
+    company = service._company("MSFT")
+    filing = service._latest_supported(company)
+    run_id = uuid.uuid4().hex
+    service.store.begin_research_run(
+        company, run_id=run_id, input_hash="a" * 64, now="2026-08-03T10:00:00+00:00"
+    )
+    assert service.before_you_buy("MSFT").deep_research.run_id == run_id  # in progress
+
+    report, _ = CompanyResearchHarness(service, FakeLLMClient(responses=[])).compile(
+        company, filing, ResearchDraft(summary="Verified evidence was insufficient."), {}
+    )
+    service.store.set_research_running(run_id)
+    service.store.finish_research_run(
+        run_id, status="partial", report_json=report.model_dump_json(),
+        trace_json=ResearchTrace(
+            obligation_transitions=report.obligations, tool_budget_used=0,
+            turn_budget_used=1, repair_used=False, model="fake/model",
+            prompt_version="Company_research.v2",
+            compiler_version="company_research_compiler.v2",
+            terminal_reason="turn_budget_exhausted",
+        ).model_dump_json(),
+        now="2026-08-03T10:00:01+00:00",
+    )
+    # A re-sync that stores identical metrics again changes nothing the report describes.
+    service.repo.insert_computations(service.repo.latest_computations("MSFT"))
+    assert service.before_you_buy("MSFT").deep_research.run_id == run_id
+
+    service.repo.upsert_filing(
+        Filing(
+            accession_number="0000950170-26-000999", cik=company.cik, form_type="8-K",
+            filed_at="2026-08-08",
+            primary_doc_url="https://www.sec.gov/Archives/edgar/data/789019/x.htm",
+        )
+    )
+    assert service.before_you_buy("MSFT").deep_research is None
 
 
 def _corrupt(repo, ticker, mutate) -> None:

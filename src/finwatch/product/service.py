@@ -19,6 +19,7 @@ from finwatch.product.models import (
     EvidenceRef,
     ManagementPromise,
     PeerComparison,
+    ResearchRun,
     RiskRadarResult,
     StockImpactSnapshot,
     Thesis,
@@ -848,9 +849,22 @@ class ProductService:
                 if (peer := self.repo.get_company(cik)) is not None
             ],
             certificate_urls=certificates,
-            deep_research=self.store.latest_research_run(company),
+            deep_research=self._current_research(company),
             disclaimer=DISCLAIMER,
         )
+
+    def _current_research(self, company: Company) -> ResearchRun | None:
+        """The latest research run, unless a newer filing has arrived since its report.
+
+        An older report describes a filing the brief no longer leads with, so it must
+        not read as the current analysis. Runs without a report (queued, running or
+        failed) carry no findings, so only their status is shown.
+        """
+        run = self.store.latest_research_run(company)
+        latest = self._latest_supported(company)
+        if run and run.report and latest and run.report.as_of < latest.filed_at[:10]:
+            return None
+        return run
 
     def list_events(self) -> list[AttentionEvent]:
         return self.store.list_events()
