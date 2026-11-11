@@ -160,6 +160,39 @@ def _coverage_sentence(
     return f"Coverage is incomplete: {'; '.join(parts)}."
 
 
+def validated_metric(row: Computation) -> MetricResult | None:
+    """Return a persisted metric only while its envelope proves provenance.
+
+    The one check every consumer uses: the metric table, risk lenses, and research.
+    A metric withheld here must be unavailable everywhere.
+    """
+    try:
+        metric = MetricResult.model_validate_json(row.result_json)
+    except Exception:  # noqa: BLE001 - corrupt persisted metrics are withheld
+        return None
+    if (
+        metric.metric != row.tool
+        or metric.status.value != row.status
+        or metric.formula_version != row.formula_version
+        or metric.as_of != row.as_of
+    ):
+        return None
+    if metric.status.value == "computed" and (
+        not metric.inputs_used
+        or any(
+            source.value is None
+            or not source.taxonomy
+            or not source.tag
+            or not source.unit_ref
+            or not source.accession_number
+            or not (source.instant or source.period_end)
+            for source in metric.inputs_used
+        )
+    ):
+        return None
+    return metric
+
+
 class PresentationService:
     def __init__(self, repo: Repo, *, user_id: str = LOCAL_USER_ID) -> None:
         self.repo = repo
@@ -179,34 +212,6 @@ class PresentationService:
         filings.sort(key=lambda row: (row.filed_at, row.accession_number), reverse=True)
         return filings
 
-    def _validated_metric(self, row: Computation) -> MetricResult | None:
-        """Return a persisted metric only while its envelope proves provenance."""
-        try:
-            metric = MetricResult.model_validate_json(row.result_json)
-        except Exception:  # noqa: BLE001 - corrupt persisted metrics are withheld
-            return None
-        if (
-            metric.metric != row.tool
-            or metric.status.value != row.status
-            or metric.formula_version != row.formula_version
-            or metric.as_of != row.as_of
-        ):
-            return None
-        if metric.status.value == "computed" and (
-            not metric.inputs_used
-            or any(
-                source.value is None
-                or not source.taxonomy
-                or not source.tag
-                or not source.unit_ref
-                or not source.accession_number
-                or not (source.instant or source.period_end)
-                for source in metric.inputs_used
-            )
-        ):
-            return None
-        return metric
-
     def _validated_metrics(
         self, computations: list[Computation]
     ) -> dict[str, tuple[Computation, MetricResult | None]]:
@@ -214,7 +219,7 @@ class PresentationService:
         for row in computations:
             if row.id is None or row.tool not in STARTER_METRICS:
                 continue
-            by_name[row.tool] = (row, self._validated_metric(row))
+            by_name[row.tool] = (row, validated_metric(row))
         return by_name
 
     def _metric_rows(
