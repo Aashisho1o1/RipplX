@@ -1,6 +1,7 @@
 import inspect
 import json
 import time
+from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -15,7 +16,7 @@ from finwatch.demo import (
     build_demo_db,
     publish_public_showcase,
 )
-from finwatch.ingest import EdgarClient
+from finwatch.ingest import EdgarClient, IngestService
 from finwatch.web.app import CompanyCreate, JobRequest, _compute_synced_metrics, create_app
 
 LOCAL_BROWSER_HEADERS = {"Origin": "http://testserver"}
@@ -92,6 +93,15 @@ def test_before_you_buy_sync_populates_filings_and_verified_numbers(
         ).read_text(encoding="utf-8")
     )
     monkeypatch.setenv("SEC_USER_AGENT", "Test User test@example.com")
+    # Pin every clock this flow reads. The submissions fixture ends 2024-11-01 and the
+    # companyfacts fixture in 2026, so the eight-quarter ingest window and the metric
+    # staleness limits would otherwise both slide past the fixtures as real time passes.
+    class FixedDate(date):
+        @classmethod
+        def today(cls):
+            return cls(2026, 8, 3)
+
+    monkeypatch.setattr(IngestService, "_as_of_date", lambda _self: FixedDate.today())
     monkeypatch.setattr(
         EdgarClient,
         "submissions",
@@ -103,6 +113,9 @@ def test_before_you_buy_sync_populates_filings_and_verified_numbers(
         lambda _self, _cik, force_refresh=True: companyfacts,
     )
     client, _ = _client(tmp_path)
+    # After app creation, so route signatures were built with the real date type.
+    monkeypatch.setattr("finwatch.web.app.date", FixedDate)
+    monkeypatch.setattr("finwatch.product.service.date", FixedDate)
 
     added = client.post("/api/companies", json={"ticker": "AAPL"})
     assert added.status_code == 201

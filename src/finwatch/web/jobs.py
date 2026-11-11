@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import logging
+import math
 import threading
+import time
 import uuid
+from collections import deque
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
@@ -17,6 +21,11 @@ JobKind = Literal["sync", "analysis", "research"]
 JobState = Literal["queued", "running", "completed", "partial", "failed"]
 DEFAULT_MAX_JOB_HISTORY = 100
 LOCAL_JOB_OWNER = "local"
+# Hosted signup is public and every analysis or research job spends the operator's
+# provider budget, so one account gets a small hourly allowance of model-backed jobs.
+MODEL_JOBS_PER_OWNER_PER_HOUR = 10
+
+logger = logging.getLogger("finwatch.jobs")
 
 _SAFE_ITEM_STATES = frozenset({"queued", "running", "completed", "skipped", "failed"})
 _SAFE_VERDICTS = frozenset({"PASS", "PASS_WITH_WARNINGS", "FAIL", "PARSED"})
@@ -99,6 +108,57 @@ class JobConflictError(RuntimeError):
     pass
 
 
+class JobRateLimiter:
+    """Per-owner sliding-window ceiling on model-spending job starts (one process)."""
+
+    def __init__(
+        self,
+        limit: int = MODEL_JOBS_PER_OWNER_PER_HOUR,
+        *,
+        window_seconds: float = 3600.0,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        if limit < 1 or window_seconds <= 0:
+            raise ValueError("limit and window_seconds must be positive")
+        self._limit = limit
+        self._window = window_seconds
+        self._clock = clock
+        self._lock = threading.Lock()
+        self._starts: dict[str, deque[float]] = {}
+
+    def _prune_locked(self, now: float) -> None:
+        cutoff = now - self._window
+        for owner_id, starts in list(self._starts.items()):
+            while starts and starts[0] <= cutoff:
+                starts.popleft()
+            if not starts:
+                del self._starts[owner_id]
+
+    def reserve(self, owner_id: str) -> int | None:
+        """Spend one start for ``owner_id``, or return the seconds until one is free.
+
+        The check and the spend share one critical section: concurrent requests from
+        the same account can never both pass on the last remaining start.
+        """
+        with self._lock:
+            now = self._clock()
+            self._prune_locked(now)
+            starts = self._starts.setdefault(owner_id, deque())
+            if len(starts) >= self._limit:
+                return max(1, math.ceil(starts[0] + self._window - now))
+            starts.append(now)
+            return None
+
+    def release(self, owner_id: str) -> None:
+        """Return the newest reservation: the job never started or spent no model call."""
+        with self._lock:
+            starts = self._starts.get(owner_id)
+            if starts:
+                starts.pop()
+                if not starts:
+                    del self._starts[owner_id]
+
+
 class JobRegistry:
     def __init__(self, *, max_jobs: int = DEFAULT_MAX_JOB_HISTORY) -> None:
         if max_jobs < 1:
@@ -152,8 +212,20 @@ class JobRegistry:
         try:
             partial = work(job_id, self)
             self.set_state(job_id, "partial" if partial else "completed")
-        except Exception:  # noqa: BLE001 - discard untrusted provider/exception text
+        except Exception as exc:  # noqa: BLE001 - discard untrusted provider/exception text
+            # Name the failure for the operator without its message: exception text can
+            # carry provider responses, filing content, or credentials.
+            logger.error(
+                "job %s kind=%s failed: %s",
+                job_id,
+                self._jobs[job_id].kind,
+                type(exc).__name__,
+            )
             self.fail(job_id)
+
+    def shutdown(self) -> None:
+        """Drop queued work at process shutdown; a running job finishes its attempt."""
+        self._executor.shutdown(wait=False, cancel_futures=True)
 
     def _safe_item(self, job_id: str, item: JobItem) -> JobItem:
         kind = self._jobs[job_id].kind

@@ -120,6 +120,7 @@ _ANALYTICS_EVENTS = {
     "thesis_saved",
     "alert_opened",
     "checkout_started",
+    "deep_research_started",
 }
 _ANALYTICS_PROPERTIES = {"surface", "state", "source", "outcome"}
 

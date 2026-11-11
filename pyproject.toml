@@ -19,7 +19,11 @@ dependencies = [
     # Phase 2: fast HTML section parsing for the P0 preprocessor.
     "selectolax>=0.3",
     # Phase 5: provider-agnostic LLM router for the P1/P2 stages.
-    "litellm>=1.40",
+    # Capped: releases from 1.100 add boto3 and other transitive packages this app never
+    # uses. pip-audit still reports one advisory against this range (GHSA-7hp6-4w63-5g45);
+    # it concerns the LiteLLM proxy server, which finwatch does not run. Raise the cap
+    # deliberately, after checking what a new release pulls in.
+    "litellm>=1.95.1,<1.96",
 ]
 
 [project.optional-dependencies]

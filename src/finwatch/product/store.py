@@ -16,6 +16,24 @@ from finwatch.product.models import (
 )
 
 
+def fail_orphaned_research_runs(conn, *, now: str) -> int:
+    """Fail research runs a previous process left queued or running.
+
+    Jobs live in process memory, so at startup nothing can still be executing one. An
+    orphan would otherwise match its input hash forever and be returned to the owner as
+    an in-flight run that never completes.
+    """
+    cursor = conn.execute(
+        """UPDATE research_runs
+              SET status = 'failed', artifact_json = NULL, trace_json = NULL,
+                  completed_at = ?
+            WHERE status IN ('queued', 'running')""",
+        (now,),
+    )
+    conn.commit()
+    return cursor.rowcount
+
+
 class ProductStore:
     def __init__(self, repo: Repo, user_id: str) -> None:
         self.repo = repo
