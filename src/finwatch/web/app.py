@@ -15,6 +15,7 @@ from typing import Any, Literal
 from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field
+from starlette.concurrency import run_in_threadpool
 from starlette.requests import Request
 
 from finwatch.config import Config
@@ -74,6 +75,47 @@ from finwatch.web.security import (
 logger = logging.getLogger("finwatch.web")
 
 REQUEST_BODY_LIMIT_BYTES = 1024 * 1024
+# Only these Stripe events can change billing state.
+_STRIPE_BILLING_EVENTS = frozenset(
+    {
+        "checkout.session.completed",
+        "customer.subscription.created",
+        "customer.subscription.updated",
+        "customer.subscription.deleted",
+        "customer.subscription.paused",
+        "customer.subscription.resumed",
+    }
+)
+# A customer's subscription that has not ended, most entitled first. When a customer
+# holds several, the account reflects the highest-ranked, then the newest.
+_STRIPE_LIVE_STATUS_RANK = {
+    "active": 0, "trialing": 1, "past_due": 2, "unpaid": 3, "incomplete": 4, "paused": 5,
+}
+
+
+def _current_subscription(subscriptions: list[dict]) -> dict | None:
+    live = [
+        row for row in subscriptions
+        if row.get("status") in _STRIPE_LIVE_STATUS_RANK and isinstance(row.get("id"), str)
+    ]
+    if not live:
+        return None
+    return min(
+        live,
+        key=lambda row: (
+            _STRIPE_LIVE_STATUS_RANK[row["status"]],
+            -(row.get("created") if isinstance(row.get("created"), int) else 0),
+        ),
+    )
+
+
+def _subscription_price(subscription: dict) -> str | None:
+    items = subscription.get("items")
+    rows = items.get("data") if isinstance(items, dict) else None
+    first = rows[0] if isinstance(rows, list) and rows else None
+    price = first.get("price") if isinstance(first, dict) else None
+    price_id = price.get("id") if isinstance(price, dict) else None
+    return price_id if isinstance(price_id, str) else None
 MAX_TRACKED_TICKERS = 25
 # Path/body parameter shapes (parameterized queries already prevent injection; these
 # reject malformed input early and keep GET/DELETE consistent with the POST models).
@@ -313,6 +355,8 @@ def create_app(
     app.state.jobs = JobRegistry()
     app.state.model_job_limiter = JobRateLimiter()
     app.state.company_add_lock = Lock()
+    # Serializes Stripe webhook deliveries: fetch-then-write must not interleave.
+    app.state.billing_lock = Lock()
     app.state.remote = remote
     posthog_key = os.environ.get("POSTHOG_PROJECT_KEY", "").strip()
     if posthog_key:
@@ -1247,7 +1291,6 @@ def create_app(
     @app.post("/api/webhooks/stripe", status_code=204)
     async def stripe_webhook(request: Request):
         from finwatch.product.providers import ProviderError, verify_stripe_signature
-        from finwatch.product.store import ProductStore
 
         secret = os.environ.get("STRIPE_WEBHOOK_SECRET", "").strip()
         if not secret:
@@ -1260,41 +1303,74 @@ def create_app(
         except ProviderError:
             raise ApiProblem(400, "invalid_webhook", "Webhook verification failed.") from None
         event_type = event.get("type")
-        obj = event.get("data", {}).get("object", {})
-        if not isinstance(obj, dict):
+        data = event.get("data")
+        obj = data.get("object") if isinstance(data, dict) else None
+        if event_type not in _STRIPE_BILLING_EVENTS or not isinstance(obj, dict):
+            # Every other signed event (invoices, payment intents, ...) carries its own
+            # status vocabulary and must never overwrite subscription state.
             return Response(status_code=204)
-        with repo_context() as repo:
-            user_id = obj.get("client_reference_id")
-            customer_id = obj.get("customer")
-            if not isinstance(user_id, str) and isinstance(customer_id, str):
-                row = repo.conn.execute(
+        await run_in_threadpool(apply_stripe_event, str(event_type), obj)
+        return Response(status_code=204)
+
+    def apply_stripe_event(event_type: str, obj: dict) -> None:
+        """Record the current subscription state of the customer an event concerns.
+
+        Stripe delivers events out of order and sometimes more than once, and a
+        customer can hold several subscriptions. The event therefore only names the
+        customer; the account's state comes from that customer's full subscription list
+        as Stripe holds it now. Deliveries are serialized so a slower fetch can never
+        overwrite a newer one. A failed fetch raises a 503, and Stripe retries.
+        """
+        from finwatch.product.providers import ProviderError, StripeClient
+        from finwatch.product.store import ProductStore
+
+        checkout = event_type == "checkout.session.completed"
+        if checkout and obj.get("mode") != "subscription":
+            return
+        customer_id = obj.get("customer")
+        if not isinstance(customer_id, str):
+            return
+        with app.state.billing_lock:
+            with repo_context() as repo:
+                linked = repo.conn.execute(
                     "SELECT user_id FROM billing_accounts WHERE stripe_customer_id = ?",
                     (customer_id,),
                 ).fetchone()
-                user_id = row["user_id"] if row else None
-            if not isinstance(user_id, str) or repo.get_user(user_id) is None:
-                return Response(status_code=204)
-            subscription_id = obj.get("subscription") or (
-                obj.get("id") if str(event_type).startswith("customer.subscription.") else None
-            )
-            raw_status = obj.get("status")
-            status = raw_status if raw_status in {
-                "active", "trialing", "past_due", "unpaid", "canceled", "incomplete"
-            } else "active" if event_type == "checkout.session.completed" else "free"
-            price = None
-            items = obj.get("items", {}).get("data", [])
-            if isinstance(items, list) and items and isinstance(items[0], dict):
-                price = items[0].get("price", {}).get("id")
-            ProductStore(repo, user_id).save_billing(
-                customer_id=customer_id if isinstance(customer_id, str) else None,
-                subscription_id=(
-                    subscription_id if isinstance(subscription_id, str) else None
-                ),
-                status=status,
-                price_id=price if isinstance(price, str) else None,
-                updated_at=datetime.now(UTC).isoformat(),
-            )
-        return Response(status_code=204)
+                linked_user = linked["user_id"] if linked else None
+                if checkout:
+                    # client_reference_id is the account id this server put on the session.
+                    user_id = obj.get("client_reference_id")
+                    if linked_user is not None and linked_user != user_id:
+                        logger.error("stripe customer is linked to a different account")
+                        return
+                else:
+                    # A subscription event can only update an account checkout linked; one
+                    # that arrives first is safe to skip, because checkout reads the same
+                    # full list.
+                    user_id = linked_user
+                if not isinstance(user_id, str) or repo.get_user(user_id) is None:
+                    return
+            stripe_secret = os.environ.get("STRIPE_SECRET_KEY", "").strip()
+            if not stripe_secret:
+                raise ApiProblem(503, "billing_unavailable", "Billing is not configured.")
+            try:
+                subscriptions = StripeClient(stripe_secret).customer_subscriptions(customer_id)
+            except ProviderError:
+                raise ApiProblem(
+                    503, "billing_provider_failed", "Billing state could not be refreshed."
+                ) from None
+            current = _current_subscription(subscriptions)
+            price = _subscription_price(current) if current else None
+            with repo_context() as repo:
+                ProductStore(repo, user_id).save_billing(
+                    customer_id=customer_id,
+                    # No live subscription means the free plan; the customer is kept so
+                    # the next checkout reuses it.
+                    subscription_id=current["id"] if current else None,
+                    status=current["status"] if current else "free",
+                    price_id=price,
+                    updated_at=datetime.now(UTC).isoformat(),
+                )
 
     @app.get("/api/settings")
     def get_settings(request: Request):

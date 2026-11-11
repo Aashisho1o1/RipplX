@@ -4,6 +4,9 @@ import { BrokerageConnect } from "../components/BrokerageConnect";
 import { useBootstrap } from "../context/BootstrapContext";
 import type { Bootstrap } from "../types";
 
+// Unpaid, incomplete and paused subscriptions still exist but do not include the plan.
+const PAID_STATUSES = new Set(["active", "trialing", "past_due"]);
+
 export function SettingsPage() {
   const { bootstrap, refresh } = useBootstrap();
   const [identity, setIdentity] = useState(bootstrap.sec_user_agent);
@@ -58,7 +61,7 @@ export function SettingsPage() {
 
       {hosted && <section className="surface settings-section"><div className="settings-heading"><span className="settings-index">02</span><div><h2>Subscription</h2><p>Founding plan status: {bootstrap.billing_status.replaceAll("_", " ")}.</p></div></div>{bootstrap.billing_configured ? <button type="button" className="button" disabled={billing} onClick={() => openBilling(bootstrap.billing_status === "free" ? "checkout" : "portal")}>{billing ? "Opening…" : bootstrap.billing_status === "free" ? "Start founding plan" : "Manage subscription"}</button> : <p className="helper">Billing is not configured by the server operator.</p>}</section>}
 
-      {hosted && <BrokerageConnect index="03" paid={bootstrap.billing_status !== "free"} />}
+      {hosted && <BrokerageConnect index="03" paid={PAID_STATUSES.has(bootstrap.billing_status)} />}
 
       <section className="surface settings-section"><div className="settings-heading"><span className="settings-index">{hosted ? "04" : "03"}</span><div><h2>Reading window</h2><p>Choose how much recent filing activity appears in your brief.</p></div></div><div className="field compact-field"><label htmlFor="period">Default period</label><select id="period" className="input" value={period} onChange={event => setPeriod(event.target.value)}>{["30d", "60d", "90d", "180d", "1y"].map(value => <option key={value}>{value}</option>)}</select></div>{hosted && <div className="field"><div className="divider-label">Signed in as {bootstrap.account_email}</div><button type="button" className="button" onClick={logout}>Sign out</button></div>}</section>
 

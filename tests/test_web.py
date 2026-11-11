@@ -674,3 +674,209 @@ def test_analyzing_a_published_filing_is_a_no_op_that_keeps_it_published(tmp_pat
     assert job["state"] == "completed"
     assert [item["reason"] for item in job["items"]] == ["newest_already_analyzed"]
     assert client.get(f"/api/filings/{accession}").json() == before
+
+
+def _stripe_client(tmp_path, monkeypatch, subscriptions):
+    """A local app with billing configured and Stripe's subscription list faked.
+
+    ``subscriptions`` maps a customer id to the list Stripe would return now.
+    """
+    import hashlib
+    import hmac
+
+    from finwatch.db import User
+    from finwatch.product.providers import ProviderError, StripeClient
+
+    monkeypatch.setenv("STRIPE_WEBHOOK_SECRET", "whsec_test")
+    monkeypatch.setenv("STRIPE_SECRET_KEY", "sk_test_operator")
+    fetched = []
+    client, db_path = _client(tmp_path)
+
+    def fake_list(_self, customer_id):
+        # Fetch and write must happen under the delivery lock.
+        assert client.app.state.billing_lock.locked()
+        fetched.append(customer_id)
+        if customer_id not in subscriptions:
+            raise ProviderError("Stripe request failed")
+        return subscriptions[customer_id]
+
+    monkeypatch.setattr(StripeClient, "customer_subscriptions", fake_list)
+    conn = init_db(str(db_path))
+    repo = Repo(conn)
+    for user_id in ("alice", "bob"):
+        repo.create_user(
+            User(
+                id=user_id, email=f"{user_id}@example.com",
+                created_at="2026-11-01T00:00:00+00:00",
+                last_login_at="2026-11-01T00:00:00+00:00",
+            )
+        )
+    conn.close()
+
+    def send(event_type, obj):
+        body = json.dumps({"type": event_type, "data": {"object": obj}}).encode()
+        timestamp = int(time.time())
+        signature = hmac.new(
+            b"whsec_test", f"{timestamp}.".encode() + body, hashlib.sha256
+        ).hexdigest()
+        return client.post(
+            "/api/webhooks/stripe",
+            content=body,
+            headers={"Stripe-Signature": f"t={timestamp},v1={signature}"},
+        )
+
+    def billing(user_id):
+        connection = init_db(str(db_path))
+        try:
+            row = connection.execute(
+                "SELECT * FROM billing_accounts WHERE user_id = ?", (user_id,)
+            ).fetchone()
+            return dict(row) if row else None
+        finally:
+            connection.close()
+
+    return send, billing, fetched
+
+
+def _subscription(sub_id, status, customer="cus_alice", price="price_founding", created=1):
+    return {
+        "id": sub_id, "customer": customer, "status": status, "created": created,
+        "items": {"data": [{"price": {"id": price}}]},
+    }
+
+
+def _checkout(user_id="alice", customer="cus_alice", subscription="sub_1"):
+    return {
+        "mode": "subscription", "client_reference_id": user_id,
+        "customer": customer, "subscription": subscription,
+    }
+
+
+def _state(row):
+    return (row["status"], row["subscription_id"]) if row else None
+
+
+def test_stripe_checkout_records_the_customers_current_subscription(tmp_path, monkeypatch):
+    stripe = {"cus_alice": [_subscription("sub_1", "trialing")]}
+    send, billing, fetched = _stripe_client(tmp_path, monkeypatch, stripe)
+
+    assert send("checkout.session.completed", _checkout()).status_code == 204
+
+    assert fetched == ["cus_alice"]
+    row = billing("alice")
+    assert (row["stripe_customer_id"], row["subscription_id"], row["status"]) == (
+        "cus_alice", "sub_1", "trialing"
+    )
+    assert row["price_id"] == "price_founding"
+
+
+def test_non_subscription_stripe_events_never_change_billing(tmp_path, monkeypatch):
+    """invoice.paid carries status "paid", which used to be stored as the free plan."""
+    stripe = {"cus_alice": [_subscription("sub_1", "active")]}
+    send, billing, fetched = _stripe_client(tmp_path, monkeypatch, stripe)
+    send("checkout.session.completed", _checkout())
+    fetched.clear()
+
+    for event_type, obj in (
+        ("invoice.paid", {"customer": "cus_alice", "subscription": "sub_1", "status": "paid"}),
+        ("payment_intent.succeeded", {"customer": "cus_alice", "status": "succeeded"}),
+        ("customer.updated", {"id": "cus_alice", "customer": "cus_alice"}),
+    ):
+        assert send(event_type, obj).status_code == 204
+
+    assert fetched == []
+    assert _state(billing("alice")) == ("active", "sub_1")
+
+
+def test_subscription_events_use_current_state_not_the_event_payload(tmp_path, monkeypatch):
+    """Stripe delivers out of order: an old "active" payload must not undo a cancellation."""
+    stripe = {"cus_alice": [_subscription("sub_1", "active")]}
+    send, billing, _fetched = _stripe_client(tmp_path, monkeypatch, stripe)
+    send("checkout.session.completed", _checkout())
+
+    stripe["cus_alice"] = [_subscription("sub_1", "past_due")]
+    send("customer.subscription.updated", _subscription("sub_1", "active"))
+    assert _state(billing("alice")) == ("past_due", "sub_1")
+
+    stripe["cus_alice"] = [_subscription("sub_1", "canceled")]
+    send("customer.subscription.deleted", _subscription("sub_1", "canceled"))
+    send("customer.subscription.updated", _subscription("sub_1", "active"))
+    row = billing("alice")
+    assert (row["status"], row["subscription_id"], row["price_id"]) == ("free", None, None)
+    # The customer stays linked, so a new checkout reuses it.
+    assert row["stripe_customer_id"] == "cus_alice"
+
+
+def test_a_late_checkout_for_an_ended_subscription_keeps_the_live_one(tmp_path, monkeypatch):
+    """A redelivered checkout for a cancelled subscription used to reset a newer one to free."""
+    stripe = {"cus_alice": [_subscription("sub_a", "active")]}
+    send, billing, _fetched = _stripe_client(tmp_path, monkeypatch, stripe)
+    send("checkout.session.completed", _checkout(subscription="sub_a"))
+    stripe["cus_alice"] = [_subscription("sub_a", "canceled")]
+    send("customer.subscription.deleted", _subscription("sub_a", "canceled"))
+    stripe["cus_alice"] = [
+        _subscription("sub_b", "active", created=2), _subscription("sub_a", "canceled"),
+    ]
+    send("checkout.session.completed", _checkout(subscription="sub_b"))
+
+    assert send("checkout.session.completed", _checkout(subscription="sub_a")).status_code == 204
+    assert _state(billing("alice")) == ("active", "sub_b")
+
+
+def test_an_ended_subscription_falls_back_to_another_live_one(tmp_path, monkeypatch):
+    """A subscription created outside the app must not be forgotten when the old one ends."""
+    stripe = {"cus_alice": [_subscription("sub_a", "active")]}
+    send, billing, _fetched = _stripe_client(tmp_path, monkeypatch, stripe)
+    send("checkout.session.completed", _checkout(subscription="sub_a"))
+    stripe["cus_alice"] = [
+        _subscription("sub_b", "active", created=2), _subscription("sub_a", "active"),
+    ]
+    send("customer.subscription.created", _subscription("sub_b", "active", created=2))
+
+    stripe["cus_alice"] = [
+        _subscription("sub_b", "active", created=2), _subscription("sub_a", "canceled"),
+    ]
+    send("customer.subscription.deleted", _subscription("sub_a", "canceled"))
+
+    assert _state(billing("alice")) == ("active", "sub_b")
+
+
+def test_the_most_entitled_live_subscription_wins(tmp_path, monkeypatch):
+    stripe = {"cus_alice": [
+        _subscription("sub_new_unpaid", "unpaid", created=3),
+        _subscription("sub_active", "active", created=1),
+        _subscription("sub_old", "canceled", created=0),
+    ]}
+    send, billing, _fetched = _stripe_client(tmp_path, monkeypatch, stripe)
+
+    send("checkout.session.completed", _checkout(subscription="sub_new_unpaid"))
+
+    assert _state(billing("alice")) == ("active", "sub_active")
+
+
+def test_stripe_events_cannot_move_a_customer_between_accounts(tmp_path, monkeypatch):
+    stripe = {
+        "cus_alice": [_subscription("sub_1", "active")],
+        "cus_x": [_subscription("sub_2", "active", customer="cus_x")],
+    }
+    send, billing, _fetched = _stripe_client(tmp_path, monkeypatch, stripe)
+    send("checkout.session.completed", _checkout())
+
+    assert send(
+        "checkout.session.completed", _checkout(user_id="bob", subscription="sub_2")
+    ).status_code == 204
+    assert billing("bob") is None
+    # A subscription event for a customer no account has linked is ignored too.
+    send("customer.subscription.created", _subscription("sub_2", "active", customer="cus_x"))
+    assert _state(billing("alice")) == ("active", "sub_1")
+
+
+def test_stripe_fetch_failure_returns_503_so_stripe_retries(tmp_path, monkeypatch):
+    send, billing, fetched = _stripe_client(tmp_path, monkeypatch, {})
+
+    response = send("checkout.session.completed", _checkout())
+
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "billing_provider_failed"
+    assert fetched == ["cus_alice"]
+    assert billing("alice") is None
