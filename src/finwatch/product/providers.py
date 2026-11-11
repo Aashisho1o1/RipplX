@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import re
 import time
 from urllib.parse import urljoin
 
@@ -13,6 +14,9 @@ import httpx
 
 class ProviderError(RuntimeError):
     """A redacted provider failure safe to map to a generic API response."""
+
+
+_STRIPE_CUSTOMER_ID = re.compile(r"cus_[A-Za-z0-9]{1,250}")
 
 
 class StripeClient:
@@ -38,6 +42,47 @@ class StripeClient:
         if not isinstance(payload, dict):
             raise ProviderError("Stripe response was invalid")
         return payload
+
+    def create_customer(self, *, email: str, user_id: str) -> str:
+        """Create the one Stripe customer an account's checkouts all share."""
+        payload = self._post(
+            "customers", {"email": email, "metadata[ripplx_user]": user_id}
+        )
+        customer_id = payload.get("id")
+        if not isinstance(customer_id, str) or not _STRIPE_CUSTOMER_ID.fullmatch(customer_id):
+            raise ProviderError("Stripe did not return a customer id")
+        return customer_id
+
+    def customer_subscriptions(self, customer_id: str) -> list[dict]:
+        """Every subscription of one customer, in any status, as Stripe holds them now.
+
+        Webhook events arrive out of order and may repeat, so billing state is derived
+        from this full current list rather than from any single event payload.
+        """
+        if not isinstance(customer_id, str) or not _STRIPE_CUSTOMER_ID.fullmatch(customer_id):
+            raise ProviderError("Stripe customer id is invalid")
+        try:
+            response = self._client.get(
+                urljoin(self.API, "subscriptions"),
+                headers={"Authorization": f"Bearer {self._key}"},
+                params={"customer": customer_id, "status": "all", "limit": "100"},
+            )
+            response.raise_for_status()
+            payload = response.json()
+        except (httpx.HTTPError, ValueError):
+            raise ProviderError("Stripe request failed") from None
+        rows = payload.get("data") if isinstance(payload, dict) else None
+        if (
+            not isinstance(rows, list)
+            or payload.get("has_more") is True
+            or any(
+                not isinstance(row, dict) or row.get("customer") != customer_id for row in rows
+            )
+        ):
+            # A partial or mismatched list could hide the live subscription; fail so the
+            # webhook returns 503 and Stripe retries, rather than store a wrong state.
+            raise ProviderError("Stripe response was invalid")
+        return rows
 
     def checkout(
         self,
