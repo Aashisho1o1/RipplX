@@ -311,7 +311,9 @@ normally produce no launch finding.
 
 `FactStore.from_companyfacts()` normalizes SEC companyfacts. Headline concepts use consolidated
 facts, align duration versus instant periods per accessor, respect units/decimals, and apply
-amendment supersession. Facts without a provable `filed <= as_of` date are excluded. Current annual
+amendment supersession. Monetary concepts must be reported in USD and share counts in shares; a
+concept reported only in another unit, or whose newest period is in another unit, is unavailable,
+because amounts are shown as dollars and formulas combine concepts without currency conversion. Facts without a provable `filed <= as_of` date are excluded. Current annual
 source legs must be no more than 550 days old; instant, share-count, and optional quarterly source
 legs must be no more than 200 days old. Future, stale, missing, or malformed source dates become
 explicit unavailable states rather than masquerading as current.

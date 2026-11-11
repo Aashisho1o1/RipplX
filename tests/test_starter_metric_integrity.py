@@ -74,8 +74,8 @@ def test_clean_newest_revenue_still_computes_growth():
     assert result.status == MetricStatus.COMPUTED
 
 
-def _instant(tag: str, value: float, end: str = "2024-12-31") -> Fact:
-    return Fact(taxonomy="us-gaap", tag=tag, unit="USD", value=value, end=end)
+def _instant(tag: str, value: float, end: str = "2024-12-31", unit: str = "USD") -> Fact:
+    return Fact(taxonomy="us-gaap", tag=tag, unit=unit, value=value, end=end)
 
 
 def _duration(tag: str, value: float, start: str, end: str) -> Fact:
@@ -241,8 +241,8 @@ def test_share_count_v2_rejects_future_source_and_malformed_as_of():
     current = as_of + timedelta(days=1)
     prior = current - timedelta(days=365)
     store = FactStore([
-        _instant("CommonStockSharesOutstanding", 110.0, current.isoformat()),
-        _instant("CommonStockSharesOutstanding", 100.0, prior.isoformat()),
+        _instant("CommonStockSharesOutstanding", 110.0, current.isoformat(), "shares"),
+        _instant("CommonStockSharesOutstanding", 100.0, prior.isoformat(), "shares"),
     ])
 
     future = share_count_change(store, GENERAL, AS_OF)
@@ -270,3 +270,62 @@ def test_malformed_annual_period_never_raises_or_computes():
     assert "annual revenue period dates are malformed" in " ".join(
         result.unavailable_missing
     )
+
+
+def _money_cf(units: dict[str, str]) -> dict:
+    """Companyfacts for the liquidity and leverage inputs, each tag in its given unit."""
+    values = {
+        "CashAndCashEquivalentsAtCarryingValue": 100, "LongTermDebtNoncurrent": 300,
+        "LongTermDebtCurrent": 50, "OperatingIncomeLoss": 100,
+        "DepreciationDepletionAndAmortization": 25,
+    }
+    facts = {}
+    for tag, value in values.items():
+        entry = {"end": "2025-12-31", "val": value, "filed": "2026-02-15",
+                 "accn": "0000000000-26-000001", "form": "10-K", "fy": 2025, "fp": "FY"}
+        if tag in ("OperatingIncomeLoss", "DepreciationDepletionAndAmortization"):
+            entry["start"] = "2025-01-01"
+        facts[tag] = {"units": {units.get(tag, "USD"): [entry]}}
+    return {"facts": {"us-gaap": facts}}
+
+
+def test_non_usd_money_is_unavailable_never_shown_as_dollars_or_mixed():
+    """A sole foreign unit was accepted: euros rendered as "$" and leverage divided
+    dollars of debt by euros of operating income."""
+    as_of = "2026-03-01"
+    usd = FactStore.from_companyfacts(_money_cf({}))
+    assert liquidity_basics(usd, GENERAL, as_of).status == MetricStatus.COMPUTED
+    assert simple_leverage(usd, GENERAL, as_of).status == MetricStatus.COMPUTED
+
+    all_eur = FactStore.from_companyfacts(_money_cf({
+        tag: "EUR" for tag in ("CashAndCashEquivalentsAtCarryingValue",
+                               "LongTermDebtNoncurrent", "LongTermDebtCurrent")
+    }))
+    assert liquidity_basics(all_eur, GENERAL, as_of).status == MetricStatus.UNAVAILABLE
+
+    eur_income = FactStore.from_companyfacts(_money_cf({
+        "OperatingIncomeLoss": "EUR", "DepreciationDepletionAndAmortization": "EUR",
+    }))
+    assert simple_leverage(eur_income, GENERAL, as_of).status == MetricStatus.UNAVAILABLE
+
+
+def test_a_switch_to_another_currency_never_leaves_older_usd_looking_current():
+    """Keeping only USD facts used to compute growth on FY2024 vs FY2023 beside a FY2025
+    10-K reported in euros, while the newest filing shows a decline."""
+    def annual(year, value, unit, filed):
+        return unit, {"start": f"{year}-01-01", "end": f"{year}-12-31", "val": value,
+                      "filed": filed, "accn": f"0000000000-{filed[2:4]}-000001",
+                      "form": "10-K", "fy": year, "fp": "FY"}
+    usd = [annual(2023, 1000e6, "USD", "2024-02-20"), annual(2024, 1200e6, "USD", "2025-02-20")]
+    switched = usd + [annual(2024, 1100e6, "EUR", "2026-02-20"),
+                      annual(2025, 1000e6, "EUR", "2026-02-20")]
+
+    def growth(rows):
+        units: dict[str, list] = {}
+        for unit, entry in rows:
+            units.setdefault(unit, []).append(entry)
+        store = FactStore.from_companyfacts({"facts": {"us-gaap": {"Revenues": {"units": units}}}})
+        return revenue_growth(store, GENERAL, "2026-03-01").status
+
+    assert growth(usd) == MetricStatus.COMPUTED
+    assert growth(switched) == MetricStatus.UNAVAILABLE

@@ -217,13 +217,6 @@ class FactStore:
                 out.append(("us-gaap", t))
         return out
 
-    def _facts_for(self, concept: str) -> list[ResolvedFact]:
-        for taxo, tag in self._tags_for(concept):
-            fs = self._by_tag.get((taxo, tag))
-            if fs:
-                return [ResolvedFact(concept=concept, fact=f) for f in fs]
-        return []
-
     # -- series accessors ---------------------------------------------------
     # Resolution is PER-ACCESSOR: each accessor scans the concept's priority tags and uses
     # the FIRST tag that yields facts of the requested period type. A primary tag carrying
@@ -281,22 +274,22 @@ class FactStore:
 
     def _series(self, concept: str, keep, n: int) -> list[ResolvedFact]:
         """Deduped (by period-end, newest first) series from the resolved tag whose facts
-        pass `keep`. Unit choice is deterministic: headline monetary concepts prefer USD,
-        share counts prefer shares, and a sole alternate unit is accepted. Multiple
-        non-preferred units are ambiguous and fail closed instead of depending on JSON order."""
+        pass `keep`. Monetary concepts must be reported in USD and share counts in shares;
+        a resolved tag without that unit fails closed. Amounts are presented as dollars and
+        formulas combine concepts without converting, so a sole foreign unit would show
+        euros as "$" and divide dollars by euros. A tag whose newest period is in another
+        unit (a filer that switched currency) also fails closed, so the older USD periods
+        are never presented as current."""
         for taxo, tag in self._resolution_order(concept, keep):
             eligible = [f for f in self._by_tag.get((taxo, tag), ()) if keep(f)]
             if not eligible:
                 continue
-            by_unit: dict[str, list[Fact]] = {}
-            for fact in eligible:
-                by_unit.setdefault(fact.unit, []).append(fact)
-            preferred = "shares" if concept == "shares_outstanding" else "USD"
-            if preferred in by_unit:
-                selected = by_unit[preferred]
-            elif len(by_unit) == 1:
-                selected = next(iter(by_unit.values()))
-            else:
+            unit = "shares" if concept == "shares_outstanding" else "USD"
+            selected = [f for f in eligible if f.unit == unit]
+            newest = max((f.end or "" for f in selected), default=None)
+            if newest is None or any(
+                f.unit != unit and (f.end or "") > newest for f in eligible
+            ):
                 return []
             rows = [ResolvedFact(concept=concept, fact=f) for f in selected]
             rows.sort(key=lambda r: r.fact.end or "", reverse=True)
