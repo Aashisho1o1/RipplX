@@ -15,7 +15,7 @@ from finwatch.core.types import DISCLAIMER
 from finwatch.db.repositories import Company, Filing, FilingSection
 from finwatch.llm.prompts import STAGE_COMPANY_RESEARCH, STAGE_COMPANY_RESEARCH_SKEPTIC, load_prompt
 from finwatch.llm.router import LLMClient, extract_json
-from finwatch.metrics.catalog import MetricId
+from finwatch.metrics.catalog import STARTER_METRIC_LABELS, MetricId
 from finwatch.preprocess.forms import base_form
 from finwatch.presentation.projection import load_filing_projection
 from finwatch.product.models import (
@@ -571,7 +571,8 @@ class CompanyResearchHarness:
         selected = {item.value for item in args.metric_ids}
         by_metric = {row.metric: row for row in metric_view.rows} if metric_view else {}
         for metric_id in selected:
-            row = by_metric.get(metric_id)
+            # Table rows are keyed by display label; the model asks by metric id.
+            row = by_metric.get(STARTER_METRIC_LABELS[metric_id])
             if row is None or row.state != "computed":
                 rows.append(
                     self._observation(
