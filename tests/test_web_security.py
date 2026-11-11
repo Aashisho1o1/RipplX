@@ -579,3 +579,139 @@ def test_public_sample_prefix_never_widens_private_access(tmp_path, monkeypatch)
     assert anon.post("/api/public/sample/brief").status_code in {403, 405}
     # And it grants nothing outside the sample namespace.
     assert anon.get("/api/public/sample/../bootstrap").status_code in {401, 404}
+
+
+def test_hosted_account_has_a_bounded_hourly_model_job_allowance(tmp_path, monkeypatch):
+    """Public signup must not be able to drain the operator's provider budget."""
+    from finwatch.web.jobs import MODEL_JOBS_PER_OWNER_PER_HOUR
+
+    monkeypatch.setenv("OPENAI_API_KEY", "operator-key")
+    app, sender = _remote_app(tmp_path, monkeypatch)
+    alice, _ = _login(app, sender, "alice@example.com")
+    bob, _ = _login(app, sender, "bob@example.com")
+    started = []
+
+    def fake_start(kind, work, *, owner_id):
+        started.append(owner_id)
+        return {
+            "id": "0" * 32, "kind": kind, "state": "queued",
+            "created_at": "now", "items": [], "error": None,
+        }
+
+    app.state.jobs.start = fake_start
+    for _ in range(MODEL_JOBS_PER_OWNER_PER_HOUR):
+        assert alice.post("/api/jobs/analyze", json={}, headers=_csrf(alice)).status_code == 202
+
+    refused = alice.post("/api/jobs/analyze", json={}, headers=_csrf(alice))
+    assert refused.status_code == 429
+    assert refused.json()["error"]["code"] == "job_rate_limited"
+    assert len(started) == MODEL_JOBS_PER_OWNER_PER_HOUR
+    # The allowance is per account: one user's spending never locks out another.
+    assert bob.post("/api/jobs/analyze", json={}, headers=_csrf(bob)).status_code == 202
+
+
+def test_model_job_allowance_is_not_spent_by_a_refused_start(tmp_path, monkeypatch):
+    from finwatch.web.jobs import JobConflictError
+
+    monkeypatch.setenv("OPENAI_API_KEY", "operator-key")
+    app, sender = _remote_app(tmp_path, monkeypatch)
+    client, _ = _login(app, sender)
+
+    def busy(kind, work, *, owner_id):
+        raise JobConflictError("Another background job is already running.")
+
+    app.state.jobs.start = busy
+    for _ in range(3):
+        assert client.post("/api/jobs/analyze", json={}, headers=_csrf(client)).status_code == 409
+    assert app.state.model_job_limiter._starts == {}
+
+
+def test_job_rate_limiter_window_slides():
+    from finwatch.web.jobs import JobRateLimiter
+
+    now = [0.0]
+    limiter = JobRateLimiter(2, window_seconds=60, clock=lambda: now[0])
+    limiter.record("u")
+    now[0] = 30.0
+    limiter.record("u")
+    assert limiter.retry_after("u") == 30
+    assert limiter.retry_after("other") is None
+    now[0] = 60.0
+    assert limiter.retry_after("u") is None
+
+
+@pytest.mark.parametrize(
+    ("model", "skeptic"),
+    [
+        ("anthropic/claude", ""),
+        ("openai/test", "anthropic/claude"),
+        ("openai/test", "openrouter/other"),
+        ("", "openai/test"),
+    ],
+)
+def test_unusable_model_configuration_fails_at_startup(tmp_path, monkeypatch, model, skeptic):
+    monkeypatch.setenv("FINWATCH_MODEL", model)
+    monkeypatch.setenv("FINWATCH_SKEPTIC_MODEL", skeptic)
+    with pytest.raises(RuntimeError, match="FINWATCH_(SKEPTIC_)?MODEL"):
+        create_app(db_path=str(tmp_path / "db.sqlite"), web_dist=tmp_path / "missing")
+
+
+def test_startup_fails_research_runs_orphaned_by_a_previous_process(tmp_path):
+    import sqlite3
+
+    db_path = tmp_path / "db.sqlite"
+    build_demo_db(str(db_path)).close()
+    conn = sqlite3.connect(db_path)
+    cik = conn.execute("SELECT cik FROM companies LIMIT 1").fetchone()[0]
+    for run_id, status in (("a" * 32, "queued"), ("b" * 32, "running"), ("c" * 32, "failed")):
+        conn.execute(
+            """INSERT INTO research_runs (id, user_id, cik, status, input_hash, created_at)
+               VALUES (?, 'local', ?, ?, ?, '2026-08-03T00:00:00+00:00')""",
+            (run_id, cik, status, run_id * 2),
+        )
+    conn.commit()
+    conn.close()
+
+    create_app(db_path=str(db_path), web_dist=tmp_path / "missing")
+
+    conn = sqlite3.connect(db_path)
+    rows = dict(conn.execute("SELECT id, status FROM research_runs").fetchall())
+    conn.close()
+    assert set(rows.values()) == {"failed"}
+
+
+def test_job_failure_is_logged_by_type_without_exception_text(caplog):
+    import logging
+    import time
+
+    from finwatch.web.jobs import JobRegistry
+
+    registry = JobRegistry()
+    sentinel = "sk-live-SENTINEL-in-job-exception"
+
+    def work(_job_id, _registry):
+        raise RuntimeError(sentinel)
+
+    with caplog.at_level(logging.ERROR, logger="finwatch.jobs"):
+        job = registry.start("analysis", work)
+        for _ in range(200):
+            if registry.get(job.id).state == "failed":
+                break
+            time.sleep(0.005)
+    assert registry.get(job.id).state == "failed"
+    assert "RuntimeError" in caplog.text
+    assert sentinel not in caplog.text
+
+
+def test_every_emitted_analytics_event_is_allowlisted():
+    """A non-allowlisted event raised inside the request and turned it into a 500."""
+    import re
+    from pathlib import Path
+
+    import finwatch.web.app as web_app
+    from finwatch.product.providers import _ANALYTICS_EVENTS
+
+    emitted = set(
+        re.findall(r'capture\(\s*principal,\s*"([a-z_]+)"', Path(web_app.__file__).read_text())
+    )
+    assert emitted and emitted <= _ANALYTICS_EVENTS

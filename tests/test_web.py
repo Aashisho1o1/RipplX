@@ -1,6 +1,7 @@
 import inspect
 import json
 import time
+from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -15,7 +16,7 @@ from finwatch.demo import (
     build_demo_db,
     publish_public_showcase,
 )
-from finwatch.ingest import EdgarClient
+from finwatch.ingest import EdgarClient, IngestService
 from finwatch.web.app import CompanyCreate, JobRequest, _compute_synced_metrics, create_app
 
 LOCAL_BROWSER_HEADERS = {"Origin": "http://testserver"}
@@ -92,6 +93,9 @@ def test_before_you_buy_sync_populates_filings_and_verified_numbers(
         ).read_text(encoding="utf-8")
     )
     monkeypatch.setenv("SEC_USER_AGENT", "Test User test@example.com")
+    # The fixture's newest filing is dated 2024-11-01. Pin the ingest clock so the
+    # eight-quarter backfill window cannot slide past the fixture as real time passes.
+    monkeypatch.setattr(IngestService, "_as_of_date", lambda _self: date(2025, 1, 15))
     monkeypatch.setattr(
         EdgarClient,
         "submissions",

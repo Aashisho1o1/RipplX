@@ -53,6 +53,28 @@ def production_model() -> str | None:
     return model or None
 
 
+def validate_model_configuration() -> None:
+    """Reject an unusable model configuration at startup instead of on first use.
+
+    An unset model is valid (analysis is simply unavailable). A malformed
+    ``FINWATCH_MODEL``, or a Skeptic on a different provider than the Generator, used
+    to surface only as a 500 on every settings read or as a failed job mid-run.
+    """
+    model = production_model()
+    skeptic = os.environ.get("FINWATCH_SKEPTIC_MODEL", "").strip()
+    if not skeptic:
+        return
+    if not skeptic.startswith(PRODUCTION_MODEL_PREFIXES):
+        raise RuntimeError(
+            "FINWATCH_SKEPTIC_MODEL must use one of these production providers: "
+            + ", ".join(PRODUCTION_MODEL_PREFIXES)
+        )
+    if model is None or skeptic.split("/", 1)[0] != model.split("/", 1)[0]:
+        raise RuntimeError(
+            "FINWATCH_SKEPTIC_MODEL requires FINWATCH_MODEL on the same provider."
+        )
+
+
 def provider_for_model(model: str | None) -> str | None:
     if model and model.startswith("openai/"):
         return "OpenAI"

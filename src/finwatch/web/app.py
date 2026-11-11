@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import uuid
-from contextlib import contextmanager
+from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
@@ -53,13 +54,14 @@ from finwatch.web.auth import (
     SessionCodec,
     VerifyCodeBody,
 )
-from finwatch.web.jobs import JobConflictError, JobItem, JobRegistry
+from finwatch.web.jobs import JobConflictError, JobItem, JobRateLimiter, JobRegistry
 from finwatch.web.runtime import (
     LOCAL_SESSION_ID,
     SETTING_USER_AGENT,
     environment_api_key,
     provider_for_model,
     resolve_settings,
+    validate_model_configuration,
 )
 from finwatch.web.security import (
     LOCAL_ALLOWED_HOSTS,
@@ -67,6 +69,8 @@ from finwatch.web.security import (
     remote_auth_secret,
     remote_email_config,
 )
+
+logger = logging.getLogger("finwatch.web")
 
 REQUEST_BODY_LIMIT_BYTES = 1024 * 1024
 MAX_TRACKED_TICKERS = 25
@@ -254,15 +258,25 @@ def create_app(
     configured_dist = os.environ.get("FINWATCH_WEB_DIST")
     default_dist = Path(__file__).resolve().parents[3] / "web" / "dist"
     dist = Path(web_dist if web_dist is not None else configured_dist or default_dist)
+    # Fail at boot, not on the first request, when the model configuration is unusable.
+    validate_model_configuration()
+
+    @asynccontextmanager
+    async def lifespan(app):
+        yield
+        app.state.jobs.shutdown()
+
     app = FastAPI(
         title="RipplX local API",
         version="0.1.0",
+        lifespan=lifespan,
         docs_url=None if remote else "/docs",
         redoc_url=None if remote else "/redoc",
         openapi_url=None if remote else "/openapi.json",
     )
     app.state.db_path = resolved_db
     app.state.jobs = JobRegistry()
+    app.state.model_job_limiter = JobRateLimiter()
     app.state.company_add_lock = Lock()
     app.state.remote = remote
     posthog_key = os.environ.get("POSTHOG_PROJECT_KEY", "").strip()
@@ -304,8 +318,17 @@ def create_app(
     # ``:memory:`` remains a test-only exception because each SQLite connection is
     # an independent ephemeral database.
     if resolved_db != ":memory:":
+        from finwatch.product.store import fail_orphaned_research_runs
+
         startup_connection = init_db(resolved_db)
-        startup_connection.close()
+        try:
+            # This process owns the only job worker, so any run still marked in flight
+            # was abandoned by a previous process and can never complete.
+            fail_orphaned_research_runs(
+                startup_connection, now=datetime.now(UTC).isoformat()
+            )
+        finally:
+            startup_connection.close()
 
     def operational_connection():
         # Test-only in-memory databases cannot survive the startup connection close.
@@ -483,8 +506,10 @@ def create_app(
         )
 
     @app.exception_handler(Exception)
-    async def unhandled_error_handler(_request, _exc: Exception):
+    async def unhandled_error_handler(request, exc: Exception):
         """Keep internal/provider exception text out of the public API contract."""
+        # Type and method only: the message and the path can carry private data.
+        logger.error("unhandled %s on %s request", type(exc).__name__, request.method)
         return JSONResponse(
             status_code=500,
             content={
@@ -521,8 +546,26 @@ def create_app(
 
     def capture(principal: RequestPrincipal, event: str, **properties: str) -> None:
         analytics = app.state.analytics
-        if analytics is not None:
+        if analytics is None:
+            return
+        try:
             analytics.capture(principal.user_id, event, properties)
+        except ValueError:
+            # Analytics stays outside the product path: an event missing from the
+            # allowlist is an operator-visible defect, never a failed user request.
+            logger.error("analytics event %s is not allowlisted", event)
+
+    def require_model_job_allowance(principal: RequestPrincipal) -> None:
+        """Bound how much operator model budget one hosted account can spend per hour."""
+        if not remote:
+            return
+        retry_after = app.state.model_job_limiter.retry_after(principal.user_id)
+        if retry_after is not None:
+            raise ApiProblem(
+                429,
+                "job_rate_limited",
+                "You have reached the hourly analysis limit. Try again later.",
+            )
 
     def settings_payload(
         repo: Repo,
@@ -906,6 +949,7 @@ def create_app(
             # A malformed terminal artifact projects as failed and must not poison reuse.
             if existing is not None and existing.status != "failed":
                 return existing
+            require_model_job_allowance(principal)
             run_id = uuid.uuid4().hex
             queued = service.store.begin_research_run(
                 company, run_id=run_id, input_hash=input_hash,
@@ -962,6 +1006,7 @@ def create_app(
             raise ApiProblem(
                 409, "job_conflict", "Another background job is already running."
             ) from exc
+        app.state.model_job_limiter.record(principal.user_id)
         capture(principal, "deep_research_started", surface="company", state="queued")
         return queued
 
@@ -1471,8 +1516,9 @@ def create_app(
             raise ApiProblem(
                 409, "model_not_configured", "Analysis is temporarily unavailable."
             )
+        require_model_job_allowance(principal)
         try:
-            return app.state.jobs.start(
+            job = app.state.jobs.start(
                 "analysis",
                 analysis_work(
                     principal.user_id,
@@ -1486,6 +1532,8 @@ def create_app(
             )
         except JobConflictError as exc:
             raise ApiProblem(409, "job_conflict", str(exc)) from exc
+        app.state.model_job_limiter.record(principal.user_id)
+        return job
 
     @app.get("/api/jobs/{job_id}")
     def get_job(

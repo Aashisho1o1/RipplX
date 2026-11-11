@@ -535,6 +535,14 @@ use a generic JSON contract. Decoded EDGAR responses
 are capped at 64 MiB before cache writes. There is no durable queue, multi-instance coordination,
 team/role model, or persistent session registry.
 
+Every analysis or company-research job spends the operator's provider budget, and hosted signup is
+public, so a hosted account may start at most ten model-backed jobs per hour. The allowance is
+per account, in process memory, and charged only for a job that actually started; local mode is
+exempt. Model configuration is validated when the app is created: a `FINWATCH_MODEL` outside the
+three prefixes, or a Skeptic on a different provider, stops startup instead of failing a later
+request. Startup also fails any research run a previous process left queued or running, because no
+job survives a restart. A failed job logs only its exception type, never the message.
+
 Sessions are stateless. Logout removes the browser cookie, but a copied signed cookie remains valid
 until its 30-day expiry or signing-secret rotation. This is an accepted prototype consequence of
 omitting a persistent session registry.
