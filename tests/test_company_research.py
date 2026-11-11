@@ -459,3 +459,52 @@ def test_brief_drops_research_only_when_a_newer_filing_arrives():
         )
     )
     assert service.before_you_buy("MSFT").deep_research is None
+
+
+def _corrupt(repo, ticker, mutate) -> None:
+    for row in repo.latest_computations(ticker):
+        if row.status == "computed":
+            repo.conn.execute(
+                "UPDATE computations SET result_json = ? WHERE id = ?",
+                (mutate(row.result_json), row.id),
+            )
+    repo.conn.commit()
+
+
+def _without_inputs(result_json: str) -> str:
+    payload = json.loads(result_json)
+    payload["inputs_used"] = []
+    return json.dumps(payload)
+
+
+def test_risk_lenses_never_use_a_metric_the_table_withholds():
+    """Risk used a weaker loader that skipped the source-input check."""
+    service = _service()
+    metric_lenses = {
+        "liquidity", "leverage", "cash_conversion", "operating_deterioration", "share_count"
+    }
+    assessed = {r.lens for r in service.risk_radar("MSFT") if r.status != "unavailable"}
+    assert assessed >= metric_lenses
+
+    _corrupt(service.repo, "MSFT", _without_inputs)
+
+    table = service.presentation.metrics("MSFT", as_of=date.today().isoformat())
+    assert {r.state for r in table.rows} == {"withheld"}
+    assert all(
+        r.status == "unavailable" for r in service.risk_radar("MSFT") if r.lens in metric_lenses
+    )
+
+
+def test_peer_research_never_calls_a_withheld_metric_verified():
+    """The peer path checked only the stored status column, not the metric itself."""
+    service = _service()
+    company = service._company("MSFT")
+    aapl = service.repo.get_company_by_ticker("AAPL")
+    profile = service.store.profile(company, now=service.now_fn())
+    service.store.save_profile(profile.model_copy(update={"peer_ciks": [aapl.cik]}))
+    harness = CompanyResearchHarness(service, FakeLLMClient(responses=[]))
+    assert any(o.evidence_label == "calculation" for o in harness._peers(company))
+
+    _corrupt(service.repo, "AAPL", lambda _json: "{not json")
+
+    assert all(o.evidence_label == "unavailable" for o in harness._peers(company))
