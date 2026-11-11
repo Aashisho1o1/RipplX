@@ -76,6 +76,9 @@ logger = logging.getLogger("finwatch.web")
 
 REQUEST_BODY_LIMIT_BYTES = 1024 * 1024
 # Only these Stripe events can change billing state.
+# A Stripe delivery waits at most this long for another to finish before answering 503
+# (Stripe retries), so a slow Stripe API cannot pile up server threads behind the lock.
+_BILLING_LOCK_TIMEOUT_SECONDS = 20.0
 _STRIPE_BILLING_EVENTS = frozenset(
     {
         "checkout.session.completed",
@@ -1244,24 +1247,43 @@ def create_app(
             user = repo.get_user(principal.user_id)
             if user is None or user.email.endswith(".invalid"):
                 raise ApiProblem(409, "email_required", "Sign in before starting checkout.")
-            store = ProductService(repo, user_id=principal.user_id).store
-            account = store.billing_account()
             base = str(request.base_url).rstrip("/")
-            try:
-                url = StripeClient(secret).checkout(
-                    user_id=principal.user_id,
-                    email=user.email,
-                    customer_id=account.get("stripe_customer_id") if account else None,
-                    price_id=price_id,
-                    success_url=f"{base}/research?subscription=active",
-                    cancel_url=f"{base}/settings",
-                )
-            except ProviderError:
-                raise ApiProblem(
-                    503, "billing_provider_failed", "Billing could not be started."
-                ) from None
-            capture(principal, "checkout_started", surface="settings", state="created")
-            return {"url": url}
+        stripe = StripeClient(secret)
+        try:
+            with billing_lock():
+                with repo_context() as repo:
+                    store = ProductService(repo, user_id=principal.user_id).store
+                    account = store.billing_account()
+                    customer_id = account.get("stripe_customer_id") if account else None
+                    if customer_id is None:
+                        # Create the customer before the first checkout so every checkout
+                        # for this account, including a second tab or a click made before
+                        # the first webhook lands, shares one customer. Otherwise Stripe
+                        # creates a customer per session and one subscription is orphaned.
+                        customer_id = stripe.create_customer(
+                            email=user.email, user_id=principal.user_id
+                        )
+                        store.save_billing(
+                            customer_id=customer_id,
+                            subscription_id=account.get("subscription_id") if account else None,
+                            status=account.get("status", "free") if account else "free",
+                            price_id=account.get("price_id") if account else None,
+                            updated_at=datetime.now(UTC).isoformat(),
+                        )
+            url = stripe.checkout(
+                user_id=principal.user_id,
+                email=user.email,
+                customer_id=customer_id,
+                price_id=price_id,
+                success_url=f"{base}/research?subscription=active",
+                cancel_url=f"{base}/settings",
+            )
+        except ProviderError:
+            raise ApiProblem(
+                503, "billing_provider_failed", "Billing could not be started."
+            ) from None
+        capture(principal, "checkout_started", surface="settings", state="created")
+        return {"url": url}
 
     @app.post("/api/billing/portal")
     def billing_portal(request: Request):
@@ -1312,6 +1334,17 @@ def create_app(
         await run_in_threadpool(apply_stripe_event, str(event_type), obj)
         return Response(status_code=204)
 
+    @contextmanager
+    def billing_lock():
+        if not app.state.billing_lock.acquire(timeout=_BILLING_LOCK_TIMEOUT_SECONDS):
+            raise ApiProblem(
+                503, "billing_busy", "Billing is busy. Please try again."
+            )
+        try:
+            yield
+        finally:
+            app.state.billing_lock.release()
+
     def apply_stripe_event(event_type: str, obj: dict) -> None:
         """Record the current subscription state of the customer an event concerns.
 
@@ -1330,7 +1363,7 @@ def create_app(
         customer_id = obj.get("customer")
         if not isinstance(customer_id, str):
             return
-        with app.state.billing_lock:
+        with billing_lock():
             with repo_context() as repo:
                 linked = repo.conn.execute(
                     "SELECT user_id FROM billing_accounts WHERE stripe_customer_id = ?",
@@ -1343,6 +1376,15 @@ def create_app(
                     if linked_user is not None and linked_user != user_id:
                         logger.error("stripe customer is linked to a different account")
                         return
+                    if linked_user is None and isinstance(user_id, str):
+                        own = ProductStore(repo, user_id).billing_account()
+                        if own is not None and own.get("stripe_customer_id") not in {
+                            None, customer_id,
+                        }:
+                            # Never move an account off the customer it already has; a
+                            # second customer means a payment the operator must resolve.
+                            logger.error("stripe checkout used a second customer for an account")
+                            return
                 else:
                     # A subscription event can only update an account checkout linked; one
                     # that arrives first is safe to skip, because checkout reads the same

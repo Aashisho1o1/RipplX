@@ -818,3 +818,96 @@ def test_every_emitted_analytics_event_is_allowlisted():
         re.findall(r'capture\(\s*principal,\s*"([a-z_]+)"', Path(web_app.__file__).read_text())
     )
     assert emitted and emitted <= _ANALYTICS_EVENTS
+
+
+def _billing_app(tmp_path, monkeypatch):
+    from finwatch.product.providers import StripeClient
+
+    monkeypatch.setenv("STRIPE_SECRET_KEY", "sk_test_operator")
+    monkeypatch.setenv("STRIPE_PRICE_ID", "price_founding")
+    calls = {"customers": [], "checkouts": []}
+
+    def create_customer(_self, *, email, user_id):
+        calls["customers"].append((email, user_id))
+        return f"cus_{len(calls['customers'])}"
+
+    def checkout(_self, **kwargs):
+        calls["checkouts"].append(kwargs)
+        return "https://checkout.stripe.com/c/pay_test"
+
+    monkeypatch.setattr(StripeClient, "create_customer", create_customer)
+    monkeypatch.setattr(StripeClient, "checkout", checkout)
+    app, sender = _remote_app(tmp_path, monkeypatch)
+    return app, sender, calls
+
+
+def test_every_checkout_for_an_account_shares_one_stripe_customer(tmp_path, monkeypatch):
+    """A second click before the first webhook landed used to create a second customer."""
+    app, sender, calls = _billing_app(tmp_path, monkeypatch)
+    client, _ = _login(app, sender)
+
+    for _ in range(3):
+        assert client.post("/api/billing/checkout", headers=_csrf(client)).status_code == 200
+
+    assert calls["customers"] == [("person@example.com", calls["customers"][0][1])]
+    assert {kwargs["customer_id"] for kwargs in calls["checkouts"]} == {"cus_1"}
+    # Linking the customer does not grant the plan.
+    assert client.get("/api/bootstrap").json()["billing_status"] == "free"
+
+
+def test_a_checkout_on_a_second_customer_never_moves_the_account(tmp_path, monkeypatch):
+    import hashlib
+    import hmac
+    import json
+    import time
+
+    from finwatch.product.providers import StripeClient
+
+    app, sender, _calls = _billing_app(tmp_path, monkeypatch)
+    client, _ = _login(app, sender)
+    client.post("/api/billing/checkout", headers=_csrf(client))
+    monkeypatch.setenv("STRIPE_WEBHOOK_SECRET", "whsec_test")
+    monkeypatch.setattr(
+        StripeClient,
+        "customer_subscriptions",
+        lambda _self, customer: [
+            {"id": "sub_x", "customer": customer, "status": "active", "created": 1}
+        ],
+    )
+    user_id = _calls["customers"][0][1]
+    body = json.dumps({
+        "type": "checkout.session.completed",
+        "data": {"object": {
+            "mode": "subscription", "client_reference_id": user_id,
+            "customer": "cus_other", "subscription": "sub_x",
+        }},
+    }).encode()
+    timestamp = int(time.time())
+    signature = hmac.new(b"whsec_test", f"{timestamp}.".encode() + body, hashlib.sha256)
+    webhook = TestClient(app, base_url="https://alpha.example")
+
+    response = webhook.post(
+        "/api/webhooks/stripe",
+        content=body,
+        headers={"Stripe-Signature": f"t={timestamp},v1={signature.hexdigest()}"},
+    )
+
+    assert response.status_code == 204
+    assert client.get("/api/bootstrap").json()["billing_status"] == "free"
+
+
+def test_a_stuck_billing_delivery_answers_503_instead_of_waiting(tmp_path, monkeypatch):
+    import threading
+
+    import finwatch.web.app as web_app
+
+    app, sender, _calls = _billing_app(tmp_path, monkeypatch)
+    client, _ = _login(app, sender)
+    monkeypatch.setattr(web_app, "_BILLING_LOCK_TIMEOUT_SECONDS", 0.05)
+    app.state.billing_lock = threading.Lock()
+    app.state.billing_lock.acquire()
+
+    response = client.post("/api/billing/checkout", headers=_csrf(client))
+
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "billing_busy"

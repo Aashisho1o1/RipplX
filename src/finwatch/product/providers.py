@@ -43,6 +43,16 @@ class StripeClient:
             raise ProviderError("Stripe response was invalid")
         return payload
 
+    def create_customer(self, *, email: str, user_id: str) -> str:
+        """Create the one Stripe customer an account's checkouts all share."""
+        payload = self._post(
+            "customers", {"email": email, "metadata[ripplx_user]": user_id}
+        )
+        customer_id = payload.get("id")
+        if not isinstance(customer_id, str) or not _STRIPE_CUSTOMER_ID.fullmatch(customer_id):
+            raise ProviderError("Stripe did not return a customer id")
+        return customer_id
+
     def customer_subscriptions(self, customer_id: str) -> list[dict]:
         """Every subscription of one customer, in any status, as Stripe holds them now.
 
