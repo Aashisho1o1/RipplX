@@ -10,6 +10,7 @@ from finwatch.core.types import DISCLAIMER
 from finwatch.db.repositories import Company, Computation, Filing, Repo
 from finwatch.metrics.envelope import MetricResult
 from finwatch.presentation import PresentationService
+from finwatch.presentation.service import validated_metric
 from finwatch.product.models import (
     AttentionEvent,
     BeforeYouBuyBrief,
@@ -35,23 +36,6 @@ _EVENT_TERMS = {
 
 def _now() -> str:
     return datetime.now(UTC).isoformat()
-
-
-def _metric(row: Computation | None) -> MetricResult | None:
-    if row is None:
-        return None
-    try:
-        result = MetricResult.model_validate_json(row.result_json)
-    except ValueError:
-        return None
-    if (
-        result.metric != row.tool
-        or result.status.value != row.status
-        or result.formula_version != row.formula_version
-        or result.as_of != row.as_of
-    ):
-        return None
-    return result
 
 
 def _metric_ref(name: str, row: Computation | None) -> list[EvidenceRef]:
@@ -115,7 +99,8 @@ class ProductService:
 
     def _metrics(self, company: Company) -> dict[str, tuple[Computation, MetricResult | None]]:
         return {
-            row.tool: (row, _metric(row)) for row in self.repo.latest_computations(company.ticker)
+            row.tool: (row, validated_metric(row))
+            for row in self.repo.latest_computations(company.ticker)
         }
 
     def _latest_supported(self, company: Company) -> Filing | None:

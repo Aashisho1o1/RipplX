@@ -18,6 +18,7 @@ from finwatch.llm.router import LLMClient, extract_json
 from finwatch.metrics.catalog import MetricId
 from finwatch.preprocess.forms import base_form
 from finwatch.presentation.projection import load_filing_projection
+from finwatch.presentation.service import validated_metric
 from finwatch.product.models import (
     CompanyResearchReport,
     EvidenceRef,
@@ -645,9 +646,11 @@ class CompanyResearchHarness:
         rows = []
         for peer in peers[:3]:
             metrics = self.service.repo.latest_computations(peer.ticker)
-            computed = [row for row in metrics if row.status == "computed" and row.id is not None][
-                :4
-            ]
+            computed = [
+                row
+                for row in metrics
+                if row.id is not None and (metric := validated_metric(row)) and metric.computed
+            ][:4]
             risks = [
                 row
                 for row in self.service.risk_radar(peer.ticker) or []
