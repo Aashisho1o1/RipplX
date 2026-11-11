@@ -73,7 +73,6 @@ def newest_filing_to_analyze(
     cik: str | None = None,
     *,
     form_type: str | None = None,
-    allow_reanalysis: bool = False,
 ) -> Filing | None:
     """Return the newest eligible per-issuer filing in scope.
 
@@ -81,8 +80,9 @@ def newest_filing_to_analyze(
     exhausted newest filing suppresses only that issuer; it never exposes the issuer's older
     history, but it also cannot starve another tracked issuer's eligible newest filing. A
     failed filing receives at most one full retry (two persisted pipeline attempts total,
-    counted from download). ``allow_reanalysis`` is reserved for an explicit per-company
-    user action; automated portfolio runs keep it false and never repay for terminal work.
+    counted from download). A terminal filing is never selected again: filings, sections,
+    stages, and publication status are shared by every account tracking the issuer, so a
+    rerun would replace a published result for all of them before its own verification.
     """
     selected_form = base_form(form_type) if form_type else None
     if selected_form is not None and selected_form not in ANALYZABLE_FORMS:
@@ -105,7 +105,7 @@ def newest_filing_to_analyze(
         if filing is None:
             return None
         if filing.status in _TERMINAL_STATUS:
-            return filing if allow_reanalysis else None
+            return None
         attempts = max(
             (
                 row.attempts
@@ -165,6 +165,11 @@ def process_filing(
     company = repo.get_company(filing.cik)
     if company is not None:
         ticker = company.ticker
+    current = repo.get_filing(filing.accession_number)
+    if current is not None and current.status in _TERMINAL_STATUS:
+        # Fail closed before any stage is written: a fresh attempt overwrites shared
+        # sections and status, and even a download failure would unpublish the result.
+        raise ValueError("refusing to reprocess a filing with a completed analysis")
     reporter = StageReporter(repo, filing.accession_number, now_fn=now_fn, callback=on_stage)
     reporter.running("download", {"form": base_form(filing.form_type)})
     if not filing.primary_doc_url:

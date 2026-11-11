@@ -16,6 +16,7 @@ from finwatch.llm.router import FakeLLMClient
 from finwatch.pipeline.run import (
     build_orchestrator,
     newest_filing_to_analyze,
+    process_filing,
     process_latest,
 )
 
@@ -108,16 +109,22 @@ def test_process_latest_runs_pipeline_persists_and_digest_renders():
     assert "Net sales increased 5% year over year" in md
 
 
-def test_explicit_reanalysis_can_select_a_terminal_filing():
+@pytest.mark.parametrize("status", ["verified", "analyzed"])
+def test_a_terminal_filing_is_never_selected_or_reprocessed(status):
+    """Filing state is shared across accounts: a rerun must not unpublish a result."""
     repo = Repo(init_db(":memory:"))
     _seed(repo)
-    repo.set_filing_status(ACCN, "verified", processed_at="t")
+    repo.set_filing_status(ACCN, status, processed_at="t")
 
     assert newest_filing_to_analyze(repo, CIK) is None
-    selected = newest_filing_to_analyze(repo, CIK, allow_reanalysis=True)
 
-    assert selected is not None
-    assert selected.accession_number == ACCN
+    def unreachable(_url):
+        raise AssertionError("a terminal filing must not be downloaded again")
+
+    with pytest.raises(ValueError, match="completed analysis"):
+        process_filing(None, repo, repo.get_filing(ACCN), fetch_html=unreachable)
+    assert repo.get_filing(ACCN).status == status
+    assert repo.list_filing_stages(ACCN) == []
 
 
 def test_server_anchors_evidence_and_ignores_model_supplied_offsets():
