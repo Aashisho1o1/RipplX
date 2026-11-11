@@ -184,8 +184,10 @@ tools, a finance Skeptic may add only finding-local objections, and the compiler
 
 - Automatic analysis considers the newest supported 10-K/10-Q/8-K in scope. A user may narrow a
   run to one of those three form families; amendments remain in their base-form family.
-- If that newest filing is already `verified` or terminally `analyzed`/withheld, the run is a no-op.
-  It never falls through to an older filing. When a requested run has nothing to do, it reports
+- If that newest filing is already `verified` or terminally `analyzed`/withheld, the run is a no-op
+  for every caller, including the per-company browser action: filing state is shared across
+  accounts, so the runner refuses to reprocess a completed analysis rather than replace a
+  published result. It never falls through to an older filing. When a requested run has nothing to do, it reports
   exactly one of three fixed reasons: no supported filing has been synced, no filing of the selected
   form family has been synced, or the newest supported filing has already been analyzed. Job items
   never carry caller-supplied display text.

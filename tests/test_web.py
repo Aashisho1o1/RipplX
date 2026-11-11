@@ -638,3 +638,39 @@ def test_add_resolves_issuer_identity_instead_of_trusting_a_stale_ticker_row(
         assert Repo(conn).list_tracked_ciks() == []
     finally:
         conn.close()
+
+
+def test_analyzing_a_published_filing_is_a_no_op_that_keeps_it_published(tmp_path, monkeypatch):
+    """Filing state is shared by every account tracking the issuer.
+
+    A per-company run used to re-select a verified filing, and a download failure on
+    that fresh attempt unpublished the result for everyone.
+    """
+    db_path = tmp_path / "finwatch.db"
+    build_demo_db(str(db_path)).close()
+    monkeypatch.setenv("SEC_USER_AGENT", "Test User test@example.com")
+    monkeypatch.setenv("FINWATCH_MODEL", "openai/test")
+    monkeypatch.setenv("OPENAI_API_KEY", "operator-key")
+
+    def unreachable(_self, _url, **_kwargs):
+        raise AssertionError("a published filing must not be downloaded again")
+
+    monkeypatch.setattr(EdgarClient, "fetch_primary_doc", unreachable)
+    client = TestClient(
+        create_app(db_path=str(db_path), web_dist=tmp_path / "missing-dist"),
+        headers=LOCAL_BROWSER_HEADERS,
+    )
+    accession = "0000950170-24-048288"
+    before = client.get(f"/api/filings/{accession}").json()
+    assert before["filing"]["outcome"] == "published"
+
+    job = client.post("/api/jobs/analyze", json={"ticker": "MSFT"}).json()
+    for _ in range(400):
+        job = client.get(f"/api/jobs/{job['id']}").json()
+        if job["state"] not in {"queued", "running"}:
+            break
+        time.sleep(0.005)
+
+    assert job["state"] == "completed"
+    assert [item["reason"] for item in job["items"]] == ["newest_already_analyzed"]
+    assert client.get(f"/api/filings/{accession}").json() == before

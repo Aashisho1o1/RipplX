@@ -1426,12 +1426,7 @@ def create_app(
             partial = False
             try:
                 if cik is not None:
-                    filing = newest_filing_to_analyze(
-                        repo,
-                        cik,
-                        form_type=form_type,
-                        allow_reanalysis=True,
-                    )
+                    filing = newest_filing_to_analyze(repo, cik, form_type=form_type)
                 else:
                     candidates = [
                         candidate
