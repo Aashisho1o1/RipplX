@@ -134,21 +134,29 @@ class JobRateLimiter:
             if not starts:
                 del self._starts[owner_id]
 
-    def retry_after(self, owner_id: str) -> int | None:
-        """Seconds until ``owner_id`` may start another job, or None when allowed."""
-        with self._lock:
-            now = self._clock()
-            self._prune_locked(now)
-            starts = self._starts.get(owner_id)
-            if starts is None or len(starts) < self._limit:
-                return None
-            return max(1, math.ceil(starts[0] + self._window - now))
+    def reserve(self, owner_id: str) -> int | None:
+        """Spend one start for ``owner_id``, or return the seconds until one is free.
 
-    def record(self, owner_id: str) -> None:
+        The check and the spend share one critical section: concurrent requests from
+        the same account can never both pass on the last remaining start.
+        """
         with self._lock:
             now = self._clock()
             self._prune_locked(now)
-            self._starts.setdefault(owner_id, deque()).append(now)
+            starts = self._starts.setdefault(owner_id, deque())
+            if len(starts) >= self._limit:
+                return max(1, math.ceil(starts[0] + self._window - now))
+            starts.append(now)
+            return None
+
+    def release(self, owner_id: str) -> None:
+        """Return the newest reservation: the job never started or spent no model call."""
+        with self._lock:
+            starts = self._starts.get(owner_id)
+            if starts:
+                starts.pop()
+                if not starts:
+                    del self._starts[owner_id]
 
 
 class JobRegistry:

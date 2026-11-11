@@ -19,7 +19,9 @@ dependencies = [
     # Phase 2: fast HTML section parsing for the P0 preprocessor.
     "selectolax>=0.3",
     # Phase 5: provider-agnostic LLM router for the P1/P2 stages.
-    "litellm>=1.40",
+    # Capped: later releases add transitive packages this app never uses. Raise the cap
+    # deliberately, after checking what a new release pulls in.
+    "litellm>=1.95.1,<1.96",
 ]
 
 [project.optional-dependencies]

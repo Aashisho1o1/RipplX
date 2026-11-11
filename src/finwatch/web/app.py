@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import traceback
 import uuid
 from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass
@@ -166,11 +167,43 @@ class RequestBodyLimitMiddleware:
 
 
 class ApiProblem(Exception):
-    def __init__(self, status: int, code: str, message: str) -> None:
+    def __init__(
+        self,
+        status: int,
+        code: str,
+        message: str,
+        *,
+        headers: dict[str, str] | None = None,
+    ) -> None:
         self.status = status
         self.code = code
         self.message = message
+        self.headers = headers
         super().__init__(message)
+
+
+class ExceptionTextFilter(logging.Filter):
+    """Keep exception messages out of the ASGI server's error log.
+
+    Starlette re-raises an unhandled exception after the generic 500 response so the
+    server can log it, and uvicorn logs the full traceback including the message, which
+    can carry provider responses, filing content, or credentials. The record keeps the
+    exception type and the stack frames and drops the message and any chained causes.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if record.exc_info and record.exc_info is not True:
+            exc_type, _exc, tb = record.exc_info
+            frames = "".join(traceback.format_tb(tb)) if tb is not None else ""
+            name = exc_type.__name__ if exc_type is not None else "Exception"
+            record.msg = f"{record.getMessage()}\n{frames}{name} (message withheld)"
+            record.args = ()
+            record.exc_info = None
+            record.exc_text = None
+        return True
+
+
+_EXCEPTION_TEXT_FILTER = ExceptionTextFilter()
 
 
 class CompanyCreate(BaseModel):
@@ -260,6 +293,8 @@ def create_app(
     dist = Path(web_dist if web_dist is not None else configured_dist or default_dist)
     # Fail at boot, not on the first request, when the model configuration is unusable.
     validate_model_configuration()
+    # addFilter is idempotent for the same object, so repeated app creation is safe.
+    logging.getLogger("uvicorn.error").addFilter(_EXCEPTION_TEXT_FILTER)
 
     @asynccontextmanager
     async def lifespan(app):
@@ -489,6 +524,7 @@ def create_app(
         return JSONResponse(
             status_code=exc.status,
             content={"error": {"code": exc.code, "message": exc.message}},
+            headers=exc.headers,
         )
 
     @app.exception_handler(RequestValidationError)
@@ -555,17 +591,26 @@ def create_app(
             # allowlist is an operator-visible defect, never a failed user request.
             logger.error("analytics event %s is not allowlisted", event)
 
-    def require_model_job_allowance(principal: RequestPrincipal) -> None:
-        """Bound how much operator model budget one hosted account can spend per hour."""
+    def reserve_model_job(principal: RequestPrincipal) -> None:
+        """Bound how much operator model budget one hosted account can spend per hour.
+
+        Reserves atomically; the caller releases the reservation when the job is
+        refused, and the job releases it when it finds nothing to analyze.
+        """
         if not remote:
             return
-        retry_after = app.state.model_job_limiter.retry_after(principal.user_id)
+        retry_after = app.state.model_job_limiter.reserve(principal.user_id)
         if retry_after is not None:
             raise ApiProblem(
                 429,
                 "job_rate_limited",
                 "You have reached the hourly analysis limit. Try again later.",
+                headers={"Retry-After": str(retry_after)},
             )
+
+    def release_model_job(user_id: str) -> None:
+        if remote:
+            app.state.model_job_limiter.release(user_id)
 
     def settings_payload(
         repo: Repo,
@@ -949,7 +994,7 @@ def create_app(
             # A malformed terminal artifact projects as failed and must not poison reuse.
             if existing is not None and existing.status != "failed":
                 return existing
-            require_model_job_allowance(principal)
+            reserve_model_job(principal)
             run_id = uuid.uuid4().hex
             queued = service.store.begin_research_run(
                 company, run_id=run_id, input_hash=input_hash,
@@ -999,6 +1044,7 @@ def create_app(
                 "research", work, owner_id=principal.user_id, job_id=run_id
             )
         except JobConflictError as exc:
+            release_model_job(principal.user_id)
             with repo_context() as repo:
                 ProductService(repo, user_id=principal.user_id).store.fail_research_run(
                     run_id, now=datetime.now(UTC).isoformat()
@@ -1006,7 +1052,6 @@ def create_app(
             raise ApiProblem(
                 409, "job_conflict", "Another background job is already running."
             ) from exc
-        app.state.model_job_limiter.record(principal.user_id)
         capture(principal, "deep_research_started", surface="company", state="queued")
         return queued
 
@@ -1423,6 +1468,8 @@ def create_app(
                         reason = "form_not_synced"
                     else:
                         reason = "newest_already_analyzed"
+                    # Nothing to analyze means no model call: give the allowance back.
+                    release_model_job(user_id)
                     registry.add_item(
                         job_id,
                         JobItem(
@@ -1516,9 +1563,9 @@ def create_app(
             raise ApiProblem(
                 409, "model_not_configured", "Analysis is temporarily unavailable."
             )
-        require_model_job_allowance(principal)
+        reserve_model_job(principal)
         try:
-            job = app.state.jobs.start(
+            return app.state.jobs.start(
                 "analysis",
                 analysis_work(
                     principal.user_id,
@@ -1531,9 +1578,8 @@ def create_app(
                 owner_id=principal.user_id,
             )
         except JobConflictError as exc:
+            release_model_job(principal.user_id)
             raise ApiProblem(409, "job_conflict", str(exc)) from exc
-        app.state.model_job_limiter.record(principal.user_id)
-        return job
 
     @app.get("/api/jobs/{job_id}")
     def get_job(
@@ -1635,12 +1681,14 @@ def create_app(
 
     @app.get(f"{PUBLIC_SAMPLE_PREFIX}companies/{{ticker}}/metrics")
     def public_sample_metrics(
-        ticker: str = PathParam(pattern=_TICKER_PATTERN),
-        as_of: str | None = None,
+        ticker: str = PathParam(pattern=_TICKER_PATTERN, max_length=15),
+        as_of: date | None = None,
     ):
+        # Same contract as the private metrics route: a parsed date, defaulting to today.
+        selected_date = as_of.isoformat() if as_of else date.today().isoformat()
         with repo_context(True) as repo:
             result = PresentationService(repo, user_id=PUBLIC_SHOWCASE_USER_ID).metrics(
-                ticker, as_of=as_of
+                ticker, as_of=selected_date
             )
             if result is None:
                 raise ApiProblem(404, "company_not_found", "Company not found.")

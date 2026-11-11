@@ -605,6 +605,7 @@ def test_hosted_account_has_a_bounded_hourly_model_job_allowance(tmp_path, monke
     refused = alice.post("/api/jobs/analyze", json={}, headers=_csrf(alice))
     assert refused.status_code == 429
     assert refused.json()["error"]["code"] == "job_rate_limited"
+    assert 1 <= int(refused.headers["Retry-After"]) <= 3600
     assert len(started) == MODEL_JOBS_PER_OWNER_PER_HOUR
     # The allowance is per account: one user's spending never locks out another.
     assert bob.post("/api/jobs/analyze", json={}, headers=_csrf(bob)).status_code == 202
@@ -626,18 +627,120 @@ def test_model_job_allowance_is_not_spent_by_a_refused_start(tmp_path, monkeypat
     assert app.state.model_job_limiter._starts == {}
 
 
-def test_job_rate_limiter_window_slides():
+def test_job_rate_limiter_window_slides_and_release_returns_a_start():
     from finwatch.web.jobs import JobRateLimiter
 
     now = [0.0]
     limiter = JobRateLimiter(2, window_seconds=60, clock=lambda: now[0])
-    limiter.record("u")
+    assert limiter.reserve("u") is None
     now[0] = 30.0
-    limiter.record("u")
-    assert limiter.retry_after("u") == 30
-    assert limiter.retry_after("other") is None
+    assert limiter.reserve("u") is None
+    assert limiter.reserve("u") == 30
+    assert limiter.reserve("other") is None
+    limiter.release("u")
+    assert limiter.reserve("u") is None
     now[0] = 60.0
-    assert limiter.retry_after("u") is None
+    assert limiter.reserve("u") is None  # the first start left the window
+    assert limiter.reserve("u") == 30
+
+
+def test_job_rate_limiter_admission_is_atomic_under_concurrency():
+    """Check-then-record let two concurrent requests both take the last start."""
+    import threading
+
+    from finwatch.web.jobs import JobRateLimiter
+
+    limiter = JobRateLimiter(1)
+    barrier = threading.Barrier(16)
+    admitted = []
+
+    def attempt():
+        barrier.wait()
+        admitted.append(limiter.reserve("u") is None)
+
+    threads = [threading.Thread(target=attempt) for _ in range(16)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert admitted.count(True) == 1
+
+
+def test_analysis_with_nothing_to_analyze_returns_its_allowance(tmp_path, monkeypatch):
+    import time
+
+    monkeypatch.setenv("OPENAI_API_KEY", "operator-key")
+    app, sender = _remote_app(tmp_path, monkeypatch)
+    client, _ = _login(app, sender)
+
+    started = client.post("/api/jobs/analyze", json={}, headers=_csrf(client))
+    assert started.status_code == 202
+    job = started.json()
+    for _ in range(400):
+        job = client.get(f"/api/jobs/{job['id']}").json()
+        if job["state"] not in {"queued", "running"}:
+            break
+        time.sleep(0.005)
+
+    assert job["state"] == "completed"
+    assert [item["reason"] for item in job["items"]] == ["no_filings_synced"]
+    assert app.state.model_job_limiter._starts == {}
+
+
+def test_public_sample_metrics_default_and_validate_the_date(tmp_path):
+    app = create_app(db_path=str(tmp_path / "db.sqlite"), web_dist=tmp_path / "missing")
+    client = TestClient(app)
+
+    assert client.get("/api/public/sample/companies/MSFT/metrics").status_code == 200
+    dated = client.get("/api/public/sample/companies/MSFT/metrics?as_of=2024-08-05")
+    assert dated.status_code == 200
+    assert client.get("/api/public/sample/companies/MSFT/metrics?as_of=zzz").status_code == 422
+
+
+def test_asgi_server_log_withholds_unhandled_exception_text(tmp_path, monkeypatch, caplog):
+    """Starlette re-raises after the generic 500 and uvicorn logs the traceback."""
+    import logging
+    import threading
+    import time
+    import urllib.error
+    import urllib.request
+
+    import uvicorn
+
+    from finwatch.presentation import PresentationService
+
+    sentinel = "sk-live-SENTINEL-in-unhandled-exception"
+
+    def explode(_self):
+        raise RuntimeError(sentinel)
+
+    monkeypatch.setattr(PresentationService, "companies", explode)
+    app = create_app(db_path=str(tmp_path / "db.sqlite"), web_dist=tmp_path / "missing")
+    server = uvicorn.Server(
+        uvicorn.Config(app, host="127.0.0.1", port=0, log_config=None, access_log=False)
+    )
+    thread = threading.Thread(target=server.run, daemon=True)
+    with caplog.at_level(logging.ERROR):
+        thread.start()
+        try:
+            for _ in range(400):
+                if server.started:
+                    break
+                time.sleep(0.01)
+            port = server.servers[0].sockets[0].getsockname()[1]
+            with pytest.raises(urllib.error.HTTPError) as raised:
+                urllib.request.urlopen(f"http://127.0.0.1:{port}/api/companies", timeout=5)
+            body = raised.value.read().decode()
+        finally:
+            server.should_exit = True
+            thread.join(timeout=5)
+
+    assert raised.value.code == 500
+    assert sentinel not in body
+    server_records = [r for r in caplog.records if r.name == "uvicorn.error"]
+    assert any("RuntimeError (message withheld)" in r.getMessage() for r in server_records)
+    assert sentinel not in caplog.text
+    assert all(r.exc_info is None for r in server_records)
 
 
 @pytest.mark.parametrize(

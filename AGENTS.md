@@ -537,11 +537,14 @@ team/role model, or persistent session registry.
 
 Every analysis or company-research job spends the operator's provider budget, and hosted signup is
 public, so a hosted account may start at most ten model-backed jobs per hour. The allowance is
-per account, in process memory, and charged only for a job that actually started; local mode is
+per account, in process memory, reserved atomically at admission, and returned when the start is
+refused or the job finds nothing to analyze; a refusal carries `Retry-After`. Local mode is
 exempt. Model configuration is validated when the app is created: a `FINWATCH_MODEL` outside the
 three prefixes, or a Skeptic on a different provider, stops startup instead of failing a later
 request. Startup also fails any research run a previous process left queued or running, because no
-job survives a restart. A failed job logs only its exception type, never the message.
+job survives a restart. A failed job logs only its exception type, and a filter on the ASGI
+server's error log keeps the type and stack frames of an unhandled exception but withholds its
+message.
 
 Sessions are stateless. Logout removes the browser cookie, but a copied signed cookie remains valid
 until its 30-day expiry or signing-secret rotation. This is an accepted prototype consequence of
