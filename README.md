@@ -1,4 +1,4 @@
-# finwatch
+# RipplX
 
 **Evidence-backed company research and filing monitoring for self-directed investors.**
 
@@ -14,7 +14,8 @@ evidence, and financial metrics remain deterministic.
 > "I own 12 stocks. I do not read every 8-K, 10-Q, and 10-K. I want to know when something
 > actually important changed."
 
-finwatch is an educational research tool, not an investment adviser. It never tells a user to
+RipplX is an educational research tool, not an investment adviser. The Python package and CLI
+are named `finwatch`. It never tells a user to
 buy, sell, hold, trim, or accumulate a security.
 
 ## Launch scope
@@ -43,8 +44,8 @@ The current repository contains a lean commercial loop:
 7. Show verified filing changes first. An optional deeper pass may add a clearly labelled possible
    driver and financial effect; those interpretations remain model-generated and conditional, while
    every source quotation and displayed calculation retains deterministic provenance.
-8. Let users save up to five watch conditions and compare user-editable SIC-derived peer
-   candidates. Filing commitments remain optional supporting context.
+8. Let users save up to five watch conditions and compare up to six user-editable SIC-derived
+   peer candidates. Filing commitments remain optional supporting context.
 
 Numbers may appear only in deterministic metric rows sourced from SEC XBRL or inside exact SEC
 quotations. Structured direction claims are compiled against current-minus-prior metric deltas and
@@ -170,10 +171,16 @@ Do not commit `.env`; it is ignored by Git. The demo needs none of these values.
 
 ### Browser workflow
 
-1. Add one or more tickers under **Tracked tickers**.
-2. Run **Sync filings** to index SEC filings and ingest companyfacts.
-3. Run **Analyze a filing**, choose Latest, 10-K, 10-Q, or 8-K, and start the run. Each request
-   processes at most one newest filing in that scope.
+The app has four sections: **Today**, **Research**, **Companies**, and **Alerts**. Signed-out
+hosted visitors land on the read-only showcase.
+
+1. On **Research**, enter a ticker and choose **Research company**. RipplX syncs the company's SEC
+   data and opens its stock decision brief.
+2. On the company page, use **Sync filings** to refresh SEC data and **Analyze filing** to run the
+   newest Latest filing, Quarterly report (10-Q), Annual report (10-K), or Current event (8-K).
+   Each request processes at most one newest filing in that scope.
+3. Follow companies under **Companies** (**Add ticker**). **Today** summarizes what needs attention
+   across them, and **Alerts** keeps the monitoring history.
 4. Read the findings and click the SEC evidence links. A routine filing may correctly produce no
    findings.
 
@@ -201,8 +208,11 @@ RESEND_API_KEY=re_your_resend_key
 FINWATCH_EMAIL_FROM=RipplX <login@your-verified-domain.example>
 ```
 
-On Railway, set the same six values in the service Variables tab, mount a persistent volume at
-`/data`, and set `FINWATCH_ALLOWED_HOSTS` to the exact Railway/custom-domain hostname. Set the
+On Railway, set the same values in the service Variables tab, mount a persistent volume at
+`/data`, and set `FINWATCH_ALLOWED_HOSTS` to the exact Railway/custom-domain hostname plus
+`healthcheck.railway.app` (Railway's health probe sends that `Host` header; use `/healthz` as the
+healthcheck path). Also set `RAILWAY_RUN_UID=0`: Railway mounts volumes as root, so the image's
+non-root user cannot otherwise write SQLite to `/data`. Set the
 provider key matching `FINWATCH_MODEL` (`ZAI_API_KEY`, `OPENAI_API_KEY`, or `OPENROUTER_API_KEY`) so
 hosted onboarding never demands a key from a participant; that key stays in process environment
 memory and is never returned by the API.
@@ -238,6 +248,8 @@ Required remote controls:
   is a single-node store. Stop the instance before a raw filesystem copy/snapshot of `/data`, test
   restores, and apply the host's encryption and access controls.
 - Each workspace is capped at 25 tracked tickers. The process still runs one job globally at a time.
+- Each hosted account may start at most ten model-backed jobs (analysis or company research) per
+  hour, because public signup otherwise lets one account spend the operator's provider budget.
 - `GET /healthz` is intentionally public and returns only service health. Interactive API docs
   are disabled in remote mode.
 - Sessions are stateless. Logout removes this browser's cookie, but a
@@ -266,6 +278,7 @@ uv run finwatch init
 uv run finwatch add AAPL
 uv run finwatch ingest
 uv run finwatch analyze AAPL
+uv run finwatch process --ticker AAPL
 uv run finwatch digest
 uv run finwatch monitor
 uv run finwatch monitor --weekly
