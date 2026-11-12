@@ -2,7 +2,10 @@
 
 **Evidence-backed company research and filing monitoring for self-directed investors.**
 
-**[Try the live site →](https://ripplx-production-748214fe.up.railway.app)**
+[![Live demo](https://img.shields.io/badge/Live_demo-no_sign--up-2ea44f?style=for-the-badge)](https://ripplx-production-748214fe.up.railway.app/today?demo=1)
+[![Open the app](https://img.shields.io/badge/Open_the_app-ripplx-0969da?style=for-the-badge)](https://ripplx-production-748214fe.up.railway.app)
+
+**[See the live demo →](https://ripplx-production-748214fe.up.railway.app/today?demo=1)** — real SEC filings run through the production pipeline, no account needed. [Sign up](https://ripplx-production-748214fe.up.railway.app/signin) to monitor your own companies.
 
 Research a company before buying, monitor it automatically, detect downside, receive a weekly
 brief, and compare similar companies. Every published filing finding remains tied to exact SEC
